@@ -171,4 +171,4 @@ function check(a, b, c, d) { // 分派：插件形态（a 含 checks 数组）�
   return rulesCheck(a, b);
 }
 
-module.exports = { check, listRulesets, getRuleset, registerPack, resetRegistry, validatePack, normalizeLevel, render };
+module.exports = { check, listRulesets, getRuleset, registerPack, resetRegistry, validatePack, normalizeLevel, render, toRng };
