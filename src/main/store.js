@@ -471,7 +471,7 @@ class DataStore {
       if (idx < 0) return { ok: false, error: '未找到该条目' };
       const before = arr[idx];
       arr.splice(idx, 1);
-      d.audit.unshift({ t: new Date().toISOString(), op, kind, name: before[nf], at: (changed && changed.at) || '界面' });
+      d.audit.unshift({ t: new Date().toISOString(), op, kind, name: before[nf], at: (item && item.at) || '界面' });
     }
     if (op === 'create' || op === 'update') {
       d.audit.unshift({ t: new Date().toISOString(), op, kind, name: changed[nf], at: (changed && changed.at) || '界面' });
