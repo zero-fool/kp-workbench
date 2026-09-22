@@ -1,7 +1,9 @@
 'use strict';
 /* rules 判定模型：检定分档。内置三套规则（通用/CoC 7th/DnD 5e）是 3 个 JSON 数据包（Task 6 落地），
  * 与未来插件同格式；判定分档通过 calc 受限表达式求值（env: R/raw/skill/L/fields）。
- * 固定导出名：check(ctx, {expr, skill, level}) → {roll, level, detail}
+ * 固定导出名：check(ctx, {expr, skill, level}) → {roll, level, detail}（M1 形态，保持不变）；
+ * 插件形态：check(plugin, skill, env, rng) → {ok, roll, level, text} 或 {ok:false, error:{path,code,msg}}，
+ * 按首个参数是否含 checks 数组自动分派；render(tpl, vars) → 字符串插值（未知占位符原样保留）。
  */
 const fs = require('fs');
 const path = require('path');
@@ -87,7 +89,7 @@ function firstDie(detail) {
   return kept.length ? kept[0] : g.groups[0].rolled[0].v;
 }
 
-function check(ctx, opts) {
+function rulesCheck(ctx, opts) {
   const o = opts || {};
   const exprSrc = o.expr || '1d100';
   const ast = parseExpr(exprSrc);
@@ -123,4 +125,49 @@ function check(ctx, opts) {
   return { roll: rolled.total, level: grade, detail: rolled.detail };
 }
 
-module.exports = { check, listRulesets, getRuleset, registerPack, resetRegistry, validatePack, normalizeLevel };
+function render(tpl, vars) {
+  return String(tpl).replace(/\{(\w+)\}/g, (m, k) => (vars[k] != null ? String(vars[k]) : m));
+}
+
+function toRng(rng) { // 兼容纯函数随机源：{int} 形态与函数形态归一
+  if (rng && typeof rng === 'object' && typeof rng.int === 'function') return rng;
+  const f = typeof rng === 'function' ? rng : Math.random;
+  return { int: (min, max) => min + Math.floor(f() * (max - min + 1)) };
+}
+
+function pluginCheck(plugin, skill, env = {}, rng = Math.random) {
+  if (!plugin || !Array.isArray(plugin.checks))
+    return { ok: false, error: { path: '$.checks', code: 'NO_PLUGIN', msg: '$.checks 当前没有活动规则插件' } };
+  const idx = plugin.checks.findIndex(c => c.name === skill);
+  if (idx < 0)
+    return { ok: false, error: { path: '$.checks', code: 'SKILL_NOT_FOUND', msg: '$.checks 检定「' + skill + '」不在当前规则插件' } };
+  const p = '$.checks[' + idx + ']';
+  const c = plugin.checks[idx];
+  const R = toRng(rng);
+  let roll;
+  try { roll = rollExpr(parseExpr(c.expr), R); }
+  catch (e) { return { ok: false, error: { path: p + '.expr', code: 'RUNTIME_LIMIT', msg: p + '.expr ' + (e.message || String(e)) } }; }
+  const total = typeof roll === 'number' ? roll : roll.total;
+  const vars = Object.assign({}, env, { R: total, roll: total });
+  let level = null;
+  for (const cc of (c.calc || [])) {
+    try {
+      const res = evalCalc(cc.expr, Object.assign({}, vars, { rng: R }));
+      if (res.ok && res.value != null && res.value !== '') { level = String(res.value); break; }
+    } catch (e) { return { ok: false, error: { path: p + '.calc', code: 'RUNTIME_LIMIT', msg: p + '.calc ' + (e.message || String(e)) } }; }
+  }
+  if (level == null)
+    return { ok: false, error: { path: p + '.calc', code: 'NO_LEVEL', msg: p + '.calc 未产出等级' } };
+  if (!c.levels.includes(level))
+    return { ok: false, error: { path: p + '.levels', code: 'LEVEL_NOT_ALLOWED', msg: p + '.levels 结果「' + level + '」不在 6 档等级内' } };
+  const tpl = (plugin.templates && plugin.templates.checkResult)
+    || '{name} 做出「{skill}」检定：掷出 {roll} → {level}';
+  return { ok: true, roll: total, level, text: render(tpl, Object.assign({}, vars, { skill: c.name, name: env.name || '', level })) };
+}
+
+function check(a, b, c, d) { // 分派：插件形态（a 含 checks 数组）与 M1 形态（a 为会话 ctx）
+  if (a && Array.isArray(a.checks)) return pluginCheck(a, b, c, d);
+  return rulesCheck(a, b);
+}
+
+module.exports = { check, listRulesets, getRuleset, registerPack, resetRegistry, validatePack, normalizeLevel, render };
