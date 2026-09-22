@@ -4,7 +4,9 @@ const net = require('node:net');
 const { acceptKey, encodeFrame, decodeFrame } = require('./frame');
 
 class WsServer {
-  constructor() { this.conns = new Set(); this._onConnection = null; }
+  constructor(opts = {}) {
+    this.conns = new Set(); this._onConnection = null; this.verify = opts.verify || null;
+  }
   onConnection(fn) { this._onConnection = fn; }
   listen(port, host = '127.0.0.1') {
     return new Promise((resolve) => {
@@ -20,9 +22,21 @@ class WsServer {
       if (idx < 0) return;
       sock.removeListener('data', onData);
       const head = buf.subarray(0, idx).toString();
+      const lines = head.split('\r\n');
+      const requestLine = lines[0] || '';
+      const path = /^GET\s+(\S+)/.exec(requestLine)?.[1] || '';
       const key = /sec-websocket-key:\s*(.+)/i.exec(head)?.[1]?.trim();
+      const headers = {};
+      for (let i = 1; i < lines.length; i++) {
+        const m = /^([^:]+):\s*(.*)$/.exec(lines[i]);
+        if (m) headers[m[1].toLowerCase()] = m[2].trim();
+      }
       if (!key || !/upgrade:\s*websocket/i.test(head)) {
         sock.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+        return;
+      }
+      if (this.verify && !this.verify({ path, headers })) {
+        sock.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
         return;
       }
       sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n' +
