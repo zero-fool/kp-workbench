@@ -2,7 +2,8 @@
 /* calc 受限表达式求值器：数值/字符串/布尔、四则与比较、and/or/not、if、函数白名单、
  * 局部变量（name = expr; ...; 末值即结果）、字段引用（env.fields 与 env 顶层键）、骰式调用 roll('3d6')。
  * 沙箱：无 IO、无全局访问、无自定义函数；执行步数 ≤10000、深度 ≤32、单次骰式 ≤100 骰 1000 面。
- * 固定导出名：evalCalc(src, env) 返回 {ok, value} 或 {ok:false, error}；常量 LIMITS。
+ * 固定导出名：evalCalc(src, env) 返回 {ok, value} 或 {ok:false, error}；常量 LIMITS；
+ * parseCalcAst(src) → 语法树（供插件校验器静态审计，语法错误抛 CalcError）。
  */
 const { parseExpr, rollExpr, DICE_LIMITS } = require('../expr');
 
@@ -293,4 +294,4 @@ function callFn(node, ctx) {
   }
 }
 
-module.exports = { evalCalc, LIMITS };
+module.exports = { evalCalc, LIMITS, parseCalcAst: parseCalc };
