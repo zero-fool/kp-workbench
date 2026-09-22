@@ -7,5 +7,8 @@ require('./ra');
 require('./rd');
 require('./st');
 require('./help');
+require('./jrrp');
+require('./sign');
+require('./drew');
 
-module.exports = { core: ['r', 'rh', 'ra', 'rd', 'st', 'help'] };
+module.exports = { core: ['r', 'rh', 'ra', 'rd', 'st', 'help'], fun: ['jrrp', 'sign', 'drew'] };

@@ -32,5 +32,8 @@ class Rng {
     if (!Array.isArray(arr) || arr.length === 0) throw new RangeError('Rng.pick 需要非空数组');
     return arr[this.int(0, arr.length - 1)];
   }
+  float() {
+    return this._next();
+  }
 }
 module.exports = { Rng };

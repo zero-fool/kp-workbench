@@ -9,6 +9,8 @@ const { getCommand } = require('./registry');
 const { parseCommand } = require('./parser');
 const { createStateStore } = require('./state');
 const { createOfflineAi } = require('../ports');
+const { createReplyRenderer } = require('../reply');
+const { DEFAULT_PERSONA, DEFAULT_TEMPLATES } = require('../reply/defaults');
 
 let uidSeq = 0;
 function uid() { uidSeq++; return 'm' + Date.now().toString(36) + '-' + uidSeq.toString(36); }
@@ -48,7 +50,8 @@ function makeContext(msg, session, brain) {
     perm: { role: msg.user.role, level: msg.user.role === 'gm' ? 3 : 1 },
     data: { workspace: brain.workspace, cards: session.cards, state: session },
     rng,
-    ai: brain.ai
+    ai: brain.ai,
+    render: brain.renderer.render.bind(brain.renderer)
   };
 }
 
@@ -59,7 +62,9 @@ class CommandBrain {
     this.sessions = o.sessions || createStateStore({ store: this.store });
     this.workspace = o.workspace || null;
     this.ai = o.ai || createOfflineAi();
+    this.renderer = o.renderer || createReplyRenderer({ persona: DEFAULT_PERSONA, templates: DEFAULT_TEMPLATES });
   }
+  known(name) { return !!getCommand(name); }
   handle(messageIn) {
     const parsed = parseCommand(messageIn.text, { prefix: '.', fullwidth: true });
     if (!parsed) return [];

@@ -14,6 +14,7 @@ function newSession(id) {
     cards: {},       // 人物名 -> { name, fields: {}, updatedAt }
     bind: null,      // 当前绑定人物卡名
     logs: [],        // 投骰记录：{id,t,expr,seed,detail,total,rule,hidden}
+    users: {},       // 签到/情趣：{ id -> { days, favor, lastDate } }
     settings: { prefix: '.', fullwidth: true },
     rngSeed: 'session:' + id,
     rngCounter: 0
