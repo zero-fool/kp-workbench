@@ -675,6 +675,7 @@
     else if (view === 'maps') renderMaps();
     else if (view === 'dice') renderDice();
     else if (view === 'dicehost') renderDiceHost();
+    else if (view === 'dicework') renderDiceWork();
     else if (view === 'stats') renderStats();
   }
 
@@ -7047,6 +7048,167 @@
       const text = await diceAiChat([{ role: 'user', content: pr }]);
       outEl.innerHTML = `<div class="aianswer"><div class="ainote">${renderInline(typeof text === 'string' ? text : JSON.stringify(text || ''))}</div></div>`;
     } catch (e) { outEl.innerHTML = '<div class="dnote err">解释失败：' + esc(e.message || e) + '</div>'; }
+  }
+
+  /* ---------- 骰娘工作台界面（分区 2 连接中心 / 3 指令日志 / 4 文案 / 6 测试通道） ---------- */
+  const _dw = { simMsgs: [], logPanel: null, replyPack: null, filter: '' };
+  function dwApi() { return (window.api && window.api.dice) ? window.api.dice : null; }
+  function dwNetCfg() {
+    if (!S.settings.diceNet) S.settings.diceNet = { onebot11: { host: '127.0.0.1', port: 6700 }, qqofficial: {}, sim: {} };
+    return S.settings.diceNet;
+  }
+  async function refreshConnCenter() {
+    const CC = window.DiceUIConnCenter || {};
+    const cfg = dwNetCfg();
+    const el = document.getElementById('dice-conn-center'); if (!el) return;
+    el.innerHTML = (CC.renderChannelWizard || (() => ''))(cfg);
+    if (dwApi()) {
+      try {
+        const list = await dwApi().diceNet.list();
+        for (const item of list || []) {
+          const h = el.querySelector(`[data-channel="${item.id}"] h4`);
+          if (h) h.insertAdjacentHTML('beforeend', ' ' + ((CC.renderStatusLight || (() => ''))(item.status)));
+        }
+      } catch (_) {}
+    }
+    el.querySelectorAll('button[data-act]').forEach((btn) => {
+      btn.onclick = async () => {
+        const card = btn.closest('[data-channel]'); if (!card) return;
+        const ch = card.getAttribute('data-channel');
+        const act = btn.getAttribute('data-act');
+        const api = dwApi();
+        if (!api) { toast('当前环境未暴露骰娘接口', ''); return; }
+        try {
+          await (act === 'start' ? api.diceNet.start(ch) : api.diceNet.stop(ch));
+          toast((act === 'start' ? '已启动 ' : '已停止 ') + ch + ' 通道', 'ok');
+        } catch (e) { toast('操作失败：' + ((e && e.message) || e), 'err'); }
+        refreshConnCenter();
+      };
+    });
+  }
+  async function refreshCmdLog() {
+    const api = dwApi(); if (!api) return;
+    const CL = window.DiceUIConnLog || {};
+    const root = document.getElementById('dice-cmd-log'); if (!root) return;
+    if (!_dw.logPanel) _dw.logPanel = (CL.createLogPanel || (() => ({ load() { }, append() { }, rows: () => [] })))({ root });
+    try {
+      const list = (await api.log.query({ sessionId: _dw.filter || '', limit: 200 })) || [];
+      _dw.logPanel.load(list);
+      const sum = (CL.logSummary || ((l) => ({ total: l.length, sessions: 0 })))(list);
+      const meta = document.getElementById('dwLogMeta'); if (meta) meta.textContent = `共 ${sum.total} 条 · ${sum.sessions} 个会话`;
+    } catch (_) {}
+  }
+  async function refreshReplyEditor() {
+    const api = dwApi();
+    const RE = window.DiceUIReplyEditor || {};
+    const el = document.getElementById('dice-reply-editor'); if (!el) return;
+    if (!api) { el.innerHTML = '<div class="dice-empty">当前环境未暴露文案接口</div>'; return; }
+    try {
+      _dw.replyPack = (await api.reply.load()) || { persona: {}, templates: {} };
+      el.innerHTML = `<div class="dice-reply-form">${((RE.buildForm || (() => ''))(_dw.replyPack))}</div>`;
+    } catch (_) { el.innerHTML = '<div class="dice-empty">文案加载失败</div>'; }
+  }
+  function collectReplyPack() {
+    const RE = window.DiceUIReplyEditor || {};
+    const pack = _dw.replyPack || { persona: {}, templates: {} };
+    const el = document.getElementById('dice-reply-editor'); if (!el) return pack;
+    el.querySelectorAll('[data-field]').forEach((inp) => {
+      const f = inp.getAttribute('data-field');
+      try { _dw.replyPack = ((RE.applyEdit || ((p) => p))(pack, f, inp.value)); } catch (_) {}
+    });
+    return _dw.replyPack;
+  }
+  async function saveReply() {
+    const api = dwApi(); if (!api) return;
+    try {
+      const pack = collectReplyPack();
+      ((window.DiceUIReplyEditor || {}).validatePack || (() => true))(pack);
+      await api.reply.save(pack);
+      toast('文案已保存并即时生效（下一条测试指令即用新文案）', 'ok');
+    } catch (e) { toast('保存失败：' + ((e && e.message) || e), 'err'); }
+  }
+  async function exportReply() {
+    const api = dwApi(); if (!api) return;
+    try {
+      const pack = collectReplyPack();
+      const text = `# 骰娘文案与人设导出\n\n## persona\n\n${JSON.stringify((pack && pack.persona) || {}, null, 2)}\n\n## templates\n\n${JSON.stringify((pack && pack.templates) || {}, null, 2)}`;
+      const r = await window.api.saveText('骰娘文案_' + new Date().toISOString().slice(0, 10) + '.md', text);
+      toast(r !== false ? '文案已导出' : '已取消导出', r !== false ? 'ok' : '');
+    } catch (e) { toast('导出失败：' + ((e && e.message) || e), 'err'); }
+  }
+  async function exportCmdLog() {
+    const api = dwApi(); if (!api) return;
+    try {
+      const text = await api.log.export();
+      const r = await window.api.saveText('骰娘指令记录_' + new Date().toISOString().slice(0, 10) + '.txt', text || '（暂无记录）');
+      toast(r !== false ? '指令日志已导出' : '已取消导出', r !== false ? 'ok' : '');
+    } catch (e) { toast('导出失败：' + ((e && e.message) || e), 'err'); }
+  }
+  function drawSimChat() {
+    const SC = window.DiceUISimChat || {};
+    const el = document.getElementById('dice-sim-chat'); if (!el) return;
+    el.innerHTML = ((SC.buildTranscript || (() => ''))(_dw.simMsgs));
+    el.scrollTop = el.scrollHeight;
+  }
+  function bindSimChat() {
+    const api = dwApi();
+    const input = document.getElementById('dice-sim-input');
+    const send = document.getElementById('dice-sim-send');
+    const SC = window.DiceUISimChat || {};
+    const can = SC.canSend || (() => true);
+    const doSend = async () => {
+      if (!input || !can(input.value)) return;
+      const text = String(input.value || '').trim();
+      input.value = '';
+      _dw.simMsgs.push({ who: 'user', text });
+      drawSimChat();
+      if (!api) { toast('当前环境未暴露测试通道', ''); return; }
+      try {
+        const reply = await api.sim.send({ text, userId: S.userId || 'sim-user', userName: S.userName || '模拟玩家' });
+        _dw.simMsgs.push({ who: 'bot', text: String(reply || '').trim() || '（无回显）' });
+      } catch (e) { _dw.simMsgs.push({ who: 'bot', text: '错误：' + ((e && e.message) || e) }); }
+      drawSimChat();
+      refreshCmdLog();
+    };
+    if (send) send.onclick = doSend;
+    if (input) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doSend(); } });
+  }
+  function renderDiceWork() {
+    const html = `<div class="page-title"><h2>骰娘工作台</h2>
+      <span class="hint">连接中心 · 指令日志 · 文案与人设 · 测试通道，端到端指令联调主战场</span></div>
+      <div class="dhgrid" style="grid-template-columns:1fr 1fr">
+        <div class="dh-card"><div class="dh-head"><b>🔌 连接中心（分区 2）</b><span class="grow"></span><button class="ghost mini" id="dwRefreshNet">🔄 刷新</button></div>
+          <div id="dice-conn-center" class="dice-conn-center"></div>
+          <div class="dh-note">每个通道一张卡片：填好参数点「启动/停止」，状态灯实时反映运行/停止/重连。</div></div>
+        <div class="dh-card"><div class="dh-head"><b>🧾 指令日志（分区 3）</b><span class="grow"></span><span id="dwLogMeta" class="hint">…</span>
+          <button class="ghost mini" id="dwExportLog">⬇ 导出</button><button class="ghost mini" id="dwRefreshLog">🔄 刷新</button></div>
+          <div id="dice-cmd-log" class="dice-cmd-log"></div>
+          <div class="dh-note">与测试通道同源：下一条指令即在此记录，可筛选会话并导出为文本。</div></div>
+      </div>
+      <div class="dhgrid" style="grid-template-columns:1fr 1fr;margin-top:14px">
+        <div class="dh-card"><div class="dh-head"><b>💬 文案与人设（分区 4）</b><span class="grow"></span>
+          <button class="ghost mini" id="dwExportReply">⬇ 导出</button><button class="ghost mini" id="dwSaveReply">💾 保存</button></div>
+          <div id="dice-reply-editor" class="dice-reply-editor"></div>
+          <div class="dh-note">直接编辑人设名/风格/前缀与各指令文案，保存后即时生效，测试通道下一条指令即用新文案。</div></div>
+        <div class="dh-card"><div class="dh-head"><b>🧪 测试通道聊天窗（分区 6）</b><span class="grow"></span></div>
+          <div id="dice-sim-chat" class="dice-chat"></div>
+          <div class="dice-chat-input"><input id="dice-sim-input" placeholder="输入指令，如 .jrrp / .sign / .drew / .r1d20 / .admin list"><button id="dice-sim-send">发送</button></div>
+          <div class="dh-note">不经真实 QQ：在本应用内模拟玩家身份，构造消息进中枢，回显气泡并写入指令日志。</div></div>
+      </div>`;
+    const el = q('content'); el.innerHTML = html;
+    _dw.simMsgs = []; _dw.logPanel = null;
+    if (!dwApi()) { toast('当前环境未暴露骰娘工作台接口', 'err'); return; }
+    refreshConnCenter();
+    refreshCmdLog();
+    refreshReplyEditor();
+    drawSimChat();
+    bindSimChat();
+    const on = (id, cb) => { const b = document.getElementById(id); if (b) b.onclick = cb; };
+    on('dwRefreshNet', refreshConnCenter);
+    on('dwRefreshLog', refreshCmdLog);
+    on('dwExportLog', exportCmdLog);
+    on('dwSaveReply', saveReply);
+    on('dwExportReply', exportReply);
   }
 
   /* =============== 界面舒适度优化（2.8.0）：A1/A2/B1/B2 =============== */

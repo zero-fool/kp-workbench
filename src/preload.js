@@ -199,6 +199,33 @@ contextBridge.exposeInMainWorld('api', {
     /* 引擎状态事件（state/status），不含引擎内部心跳 */
     onEvent: (cb) => { ipcRenderer.on('dice:event', (_e, v) => cb(v)); },
     /* 群里 .kp 写入工作台数据后触发，供界面刷新 */
-    onDataChanged: (cb) => { ipcRenderer.on('dice:dataChanged', (_e, v) => cb(v)); }
+    onDataChanged: (cb) => { ipcRenderer.on('dice:dataChanged', (_e, v) => cb(v)); },
+    /* 骰娘 state / 文案 / 事件表持久化：走主进程 StorePort（DataStore 落盘） */
+    state: {
+      load: (key) => ipcRenderer.invoke('diceState:load', key),
+      save: (key, value) => ipcRenderer.invoke('diceState:save', key, value),
+      backup: () => ipcRenderer.invoke('diceState:backup')
+    },
+    /* 骰娘工作台（分区 2/3/4/6）：
+     * diceNet = 连接中心（三通道启停/状态）、log = 指令日志、reply = 文案与人设、sim = 测试通道聊天窗。
+     * 主进程统一由 diceWorkbench 运行时驱动，IPC channel 见 src/main/main.js 对应 dice*: 段。 */
+    diceNet: {
+      list: () => ipcRenderer.invoke('diceNet:list'),
+      start: (id) => ipcRenderer.invoke('diceNet:start', id),
+      stop: (id) => ipcRenderer.invoke('diceNet:stop', id),
+      status: (id) => ipcRenderer.invoke('diceNet:status', id)
+    },
+    log: {
+      query: (o) => ipcRenderer.invoke('diceLog:query', o),
+      export: () => ipcRenderer.invoke('diceLog:export')
+    },
+    reply: {
+      load: () => ipcRenderer.invoke('diceReply:load'),
+      save: (p) => ipcRenderer.invoke('diceReply:save', p),
+      import: (t) => ipcRenderer.invoke('diceReply:import', t)
+    },
+    sim: {
+      send: (o) => ipcRenderer.invoke('diceSim:send', o)
+    }
   }
 });

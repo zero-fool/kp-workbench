@@ -1,0 +1,1124 @@
+'use strict';
+const { app, BrowserWindow, ipcMain, shell, dialog, safeStorage } = require('electron');
+const fs = require('fs');
+const path = require('path');
+const dhttp = require('http');
+const dhttps = require('https');
+let autoUpdater = null;
+try { autoUpdater = require('electron-updater').autoUpdater; } catch (_) { autoUpdater = null; }
+
+/* 数据目录策略（关键：升级/重装不丢数据）：
+ * 便携版(自解压)：保留 EXE 旁 data/（数据随包即走）。
+ * 绿色版(解压即用文件夹)：exe 旁提供 data/，同样随包即走（绿色软件语义）。
+ * 安装版(isPackaged)：数据存放在系统用户目录 app.getPath('userData') 下的 data/，
+ *   独立于安装位置。NSIS 原地升级/重装都不会触碰它，真正做到“覆盖升级不重新填写”。
+ * 开发态：仓库内 data/。 */
+function resolveDataDir() {
+  if (process.env.PORTABLE_EXECUTABLE_DIR) return path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'data');
+  if (app.isPackaged) {
+    const beside = path.join(path.dirname(process.execPath), 'data');
+    try { if (fs.existsSync(beside) && fs.statSync(beside).isDirectory()) return beside; } catch (_) {}
+    return path.join(app.getPath('userData'), 'data');
+  }
+  return path.join(__dirname, '..', '..', 'data');
+}
+
+/* ---- 数据迁移：安装版首次运行，自动把旧位置(EXE 旁 data/)的数据搬到用户目录 ----
+ * 覆盖安装到同一目录时，旧版曾把数据放在安装目录 data/，此处自动接管，避免“重装后内容丢失”。 */
+function copyDirRec(from, to) {
+  let n = 0;
+  fs.mkdirSync(to, { recursive: true });
+  for (const e of fs.readdirSync(from)) {
+    const s = path.join(from, e), t = path.join(to, e);
+    if (fs.statSync(s).isDirectory()) n += copyDirRec(s, t); else { fs.copyFileSync(s, t); n++; }
+  }
+  return n;
+}
+function dirContentCount(d) { try { return fs.readdirSync(d).length; } catch (_) { return 0; } }
+function autoMigrateLegacyData(target) {
+  if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_DIR) return false;
+  if (dirContentCount(target) > 0) return false; // 用户目录已有数据，不迁移
+  const candidates = [path.join(path.dirname(process.execPath), 'data')];
+  for (const src of candidates) {
+    if (!fs.existsSync(src) || dirContentCount(src) === 0) continue;
+    if (path.resolve(src) === path.resolve(target)) continue;
+    try { return copyDirRec(src, target) > 0; } catch (_) {}
+  }
+  return false;
+}
+
+const { DataStore } = require('./store');
+const ai = require('./ai');
+const exporter = require('./exporter');
+const { DiceHost } = require('./dice');
+const { createMainStorePort } = require('./dice-state-store');
+
+let win = null;
+const dataDir = resolveDataDir();
+autoMigrateLegacyData(dataDir);
+const store = new DataStore(dataDir);
+let doc = store.load();
+if (!doc.fields) doc.fields = ai.defaultFields();
+if (!doc.settings.activeProfileId && doc.profiles.length) doc.settings.activeProfileId = doc.profiles[0].id;
+/* 卡片模板：首次启动/升级时把内置规则书模板(coc/dnd)注入 settings.templates，用户自建模板保留 */
+if (!Array.isArray(doc.settings.templates)) doc.settings.templates = [];
+{
+  const have = new Set(doc.settings.templates.map(t => t && t.id));
+  for (const b of ai.BUILTIN_TEMPLATES) {
+    if (!have.has(b.id)) { doc.settings.templates.unshift(JSON.parse(JSON.stringify(b))); have.add(b.id); }
+  }
+}
+store.save(doc);
+
+/* 内置引擎目录：打包时随 resources/dice-next 一同发布（与 app.asar 平级），
+ * 打开软件即可自动释放使用，无需再"手动定位引擎"。开发态指向仓库 resources/dice-next。 */
+const diceBundledDir = app.isPackaged
+  ? path.join(process.resourcesPath, 'dice-next')
+  : path.join(app.getAppPath(), 'resources', 'dice-next');
+
+/* 骰娘（DiceNext）引擎托管实例：把「连 QQ 的骰娘」内嵌进应用，数据接口直通当前档案。
+ * 通过 ctx 回调双向打通：getDoc/saveDoc 直连工作台数据，onExternalWrite 在群里 .kp 写入后
+ * 通知渲染层刷新，notify 向渲染层广播引擎状态。 */
+const dice = new DiceHost({
+  dataDir,
+  bundledDir: diceBundledDir,
+  getDoc: () => doc,
+  saveDoc: () => { try { store.save(doc); } catch (_) {} },
+  onExternalWrite: (action) => {
+    try { if (win && win.webContents) win.webContents.send('dice:dataChanged', { action }); } catch (_) {}
+  },
+  getArchiveName: () => worldName(),
+  notify: (evt, payload) => {
+    try { if (win && win.webContents) win.webContents.send('dice:event', { evt, payload }); } catch (_) {}
+  }
+});
+dice.loadPersist();
+dice.startStatusTimer();
+
+/* ---- 崩溃会话心跳（B2）：运行中每 30s 落一个「在线标记」；正常退出(will-quit)会清除它，
+ * 崩溃/被杀进程则保留，下次启动据此提示「上次可能未正常退出，此前数据已保留」。 */
+const _sessionFile = () => path.join(dataDir, 'last-session.json');
+function _touchSession() { try { fs.writeFileSync(_sessionFile(), JSON.stringify({ at: Date.now(), v: app.getVersion() }), 'utf8'); } catch (_) {} }
+function _clearSession() { try { fs.unlinkSync(_sessionFile()); } catch (_) {} }
+setInterval(_touchSession, 30000);
+app.on('will-quit', _clearSession);
+_touchSession();
+
+/* 最近成功导入/上传的文本文件登记表，供 AI 工具 read_uploaded_file 读取正文（仅登记带文本工作副本的） */
+const recentUploads = [];
+
+function currentProfile() {
+  if (!doc.profiles || !doc.profiles.length) return null;
+  const id = doc.settings && doc.settings.activeProfileId;
+  return doc.profiles.find(p => p.id === id) || doc.profiles[0];
+}
+
+function worldName() {
+  return (doc.settings && doc.settings.appName) || '残火纪';
+}
+
+/* 把当前档案的「背景 / 规则」实体整理成一段供 AI 参考的背景文本 */
+function buildLoreText() {
+  const lore = (doc.entities && doc.entities.lore) || [];
+  const rules = (doc.entities && doc.entities.rules) || [];
+  const loreParts = [];
+  for (const l of lore) {
+    const t = [l.name, l.category, l.summary, l.content, l.origin].filter(Boolean).join(' · ');
+    if (t) loreParts.push('· ' + t);
+  }
+  const ruleParts = [];
+  for (const r of rules) {
+    const t = [r.name, r.scope, r.summary, r.detail, r.source].filter(Boolean).join(' · ');
+    if (t) ruleParts.push('· ' + t);
+  }
+  let out = '【世界观背景】\n' + (loreParts.slice(0, 10).join('\n') || '（暂无背景资料）');
+  if (ruleParts.length) out += '\n\n【规则要点】\n' + ruleParts.slice(0, 15).join('\n');
+  return String(out).slice(0, 6000);
+}
+function memoryText() {
+  const m = doc.settings && Array.isArray(doc.settings.memory) ? doc.settings.memory : [];
+  return m.map(x => x.text).filter(Boolean).join('\n').slice(0, 4000);
+}
+function userPrefsText() {
+  const p = doc.settings && Array.isArray(doc.settings.userPrefs) ? doc.settings.userPrefs : [];
+  const base = p.map(x => x.text).filter(Boolean).join('\n').slice(0, 3000);
+  /* B2 叙事风格贴合：档案设置里的「叙事风格」作为最高优先级偏好注入上下文 */
+  const narr = doc.settings && doc.settings.narrStyle ? ('为本次团设定了叙事风格，请始终贴合它来写作与润色：' + String(doc.settings.narrStyle).slice(0, 800)) : '';
+  return [narr, base].filter(Boolean).join('\n').slice(0, 3400);
+}
+function aiOpFlags() {
+  const a = (doc.settings && doc.settings.ai) || {};
+  return {
+    usePersona: a.usePersona !== false,
+    useLoreRef: a.useLoreRef !== false,
+    allowTools: !!a.allowTools,
+    longMemory: !!a.longMemory,
+    useUserPrefs: a.useUserPrefs !== false
+  };
+}
+/* 生成带「任务类型 / 显示名」标记的 cfg，用于用量记录与按类型取消 */
+function aiCfg(group, label) {
+  const c = currentCfg();
+  c.group = group || 'misc';
+  c.label = label || 'AI';
+  return c;
+}
+const AI_GROUP_LABEL = Object.freeze({ chat: '对话', cards: '资料生成', scenario: '剧本分幕', map: '地图生成', tpl: '模板生成', sys: '连接/审查' });
+
+/* ---- API Key 安全：用系统级 safeStorage 加密后落盘，绝不存明文 ---- */
+const ENC_PREFIX = '__enc__:';
+function encKey(plain) {
+  try {
+    if (safeStorage.isEncryptionAvailable()) return ENC_PREFIX + safeStorage.encryptString(String(plain || '')).toString('base64');
+  } catch (_) {}
+  return null; // 系统不支持时返回 null，由调用方决定降级策略
+}
+function decKey(v) {
+  if (typeof v !== 'string' || !v) return '';
+  if (v.indexOf(ENC_PREFIX) === 0) {
+    try {
+      if (safeStorage.isEncryptionAvailable()) return safeStorage.decryptString(Buffer.from(v.slice(ENC_PREFIX.length), 'base64'));
+    } catch (_) { return ''; }
+  }
+  return v;
+}
+/* 把 settings.ai.apiKey 加密落盘（已加密则跳过），返回是否成功加密 */
+function hardenAiKeyIfNeeded() {
+  const a = doc.settings && doc.settings.ai;
+  if (!a || !a.apiKey) return false;
+  if (String(a.apiKey).indexOf(ENC_PREFIX) === 0) return true;
+  a.apiKey = encKey(a.apiKey) || a.apiKey; // 系统不支持加密时保留原值（极端无 keyring 环境）
+  a.encrypted = a.apiKey.indexOf(ENC_PREFIX) === 0;
+  return true;
+}
+function decryptSettingsClone() {
+  const st = JSON.parse(JSON.stringify(doc.settings || {}));
+  if (st.ai && st.ai.apiKey) st.ai.apiKey = decKey(st.ai.apiKey);
+  return st;
+}
+
+function currentCfg() {
+  const flag = (name, def) => { const s = doc.settings && doc.settings.ai; return (s && s[name] !== undefined) ? s[name] : def; };
+  function mk(a) { return { baseUrl: a.baseUrl, apiKey: decKey(a.apiKey), model: a.model, temperature: a.temperature, timeoutMs: a.timeoutMs, maxTokens: a.maxTokens, moderate: flag('moderate', true), modRules: (Array.isArray(a.modRules) && a.modRules.length) ? a.modRules : ai.defaultModRules() }; }
+  const a = doc.settings && doc.settings.ai;
+  if (a && a.baseUrl && a.apiKey && a.model) return mk(a);
+  // 兼容旧版：角色卡上仍带有连接信息
+  const p = currentProfile();
+  if (p && p.baseUrl && p.apiKey && p.model) return mk(p);
+  throw new Error('尚未配置 AI 连接（请到「AI 配置」填写接口地址 / 密钥 / 模型）');
+}
+
+function registerIpc() {
+  ipcMain.handle('store:getAll', () => {
+    let sessionRecovered = false;
+    try { sessionRecovered = fs.existsSync(_sessionFile()); _clearSession(); } catch (_) {}
+    const out = {
+      data: doc,
+      fields: ai.effectiveFields(doc),
+      settings: decryptSettingsClone(),
+      profiles: doc.profiles || [],
+      activeProfile: currentProfile() || null,
+      memory: (doc.settings && Array.isArray(doc.settings.memory) ? doc.settings.memory : []),
+      templates: (doc.settings && Array.isArray(doc.settings.templates)) ? doc.settings.templates : [],
+      meta: store.meta(),
+      sessionRecovered
+    };
+    if (store._recoveredFrom) { out.recovered = store._recoveredFrom; store._recoveredFrom = null; } // 一次性透传「读档自愈」提示
+    return out;
+  });
+  ipcMain.handle('store:save', (e, d) => {
+    if (d && d.__patch) {
+      /* 差量补丁：只合并「有值字段」，未携带的实体分片/关系网沿用主进程 doc，避免重复写盘 */
+      const p = d;
+      if (p.entities) { doc.entities = doc.entities || {}; for (const k in p.entities) doc.entities[k] = p.entities[k]; }
+      if (p.relations) doc.relations = p.relations;
+      if (p.fields !== undefined) doc.fields = p.fields;
+      if (p.profiles !== undefined) doc.profiles = p.profiles;
+      if (p.settings !== undefined) {
+        const ns = p.settings;
+        doc.settings = doc.settings || {};
+        const inKey = ns.ai && ns.ai.apiKey;
+        if (ns.ai) { const kk = decKey(inKey); ns.ai.apiKey = encKey(kk) || kk; ns.ai.encrypted = ns.ai.apiKey.indexOf(ENC_PREFIX) === 0; }
+        doc.settings = ns;
+      }
+      if (p.audit !== undefined) doc.audit = p.audit;
+      if (p.rawText !== undefined) doc.rawText = p.rawText;
+      if (p.rawSuggested !== undefined) doc.rawSuggested = p.rawSuggested;
+      if (p.rawScript !== undefined) doc.rawScript = p.rawScript;
+      if (p.scriptProg !== undefined) doc.scriptProg = p.scriptProg;
+      if (p.maps !== undefined) doc.maps = p.maps;
+    } else if (d && d.entities) {
+      doc = d;
+      // 回写前重新加密 API Key，保证落盘无明文
+      const inKey = d.settings && d.settings.ai && d.settings.ai.apiKey;
+      if (d.settings && d.settings.ai) {
+        const k = decKey(inKey);
+        d.settings.ai.apiKey = encKey(k) || k;
+        d.settings.ai.encrypted = d.settings.ai.apiKey.indexOf(ENC_PREFIX) === 0;
+      }
+    }
+    try {
+      store.save(doc);
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err), meta: store.meta() };
+    }
+    const werr = store.lastWriteError();
+    return { ok: !!werr && !werr.ok ? false : true, error: (werr && !werr.ok) ? werr.error : null, meta: store.meta() };
+  });
+  ipcMain.handle('store:backup', () => store.backup());
+  ipcMain.handle('store:openFolder', () => {
+    shell.openPath(store.folder);
+    return { ok: true };
+  });
+  /* 一键迁移：从用户选定的旧版 data 文件夹（如绿色版 data）把数据并入当前数据目录。
+   * 用于“绿色版 → 安装版”第一次切换时无缝搬移，避免重填。 */
+  ipcMain.handle('store:importLegacyData', async () => {
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择旧版数据文件夹（通常名为 data，内含 kp-data.json）',
+      properties: ['openDirectory']
+    });
+    if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+    const src = r.filePaths[0];
+    if (path.resolve(src) === path.resolve(store.folder)) return { ok: false, error: '所选即当前数据目录，无需导入' };
+    if (dirContentCount(src) === 0) return { ok: false, error: '所选文件夹为空，不是有效的数据目录' };
+    try {
+      const n = copyDirRec(src, store.folder);
+      doc = store.load(); // 重新加载合并后的数据
+      if (!doc.fields) doc.fields = ai.defaultFields();
+      return { ok: true, copied: n, target: store.folder };
+    } catch (e) {
+      return { ok: false, error: '导入失败：' + ((e && e.message) || e) };
+    }
+  });
+  ipcMain.handle('store:dataInfo', () => ({
+    folder: store.folder,
+    portable: !!process.env.PORTABLE_EXECUTABLE_DIR && app.isPackaged
+  }));
+  ipcMain.handle('ai:chat', async (e, messages) => {
+    const opts = Object.assign(aiOpFlags(), { loreText: buildLoreText(), memoryText: memoryText(), userPrefsText: userPrefsText(), toolContext: { entities: doc.entities || {}, uploads: recentUploads.slice(-20), relations: doc.relations || { nodes: [], edges: [] } } });
+    const reply = await ai.chat(currentProfile(), messages || [], ai.effectiveFields(doc), aiCfg('chat', 'AI 对话'), worldName(), opts);
+    return reply;
+  });
+  ipcMain.handle('ai:parse', async (e, text, opts) => {
+    opts = opts || {};
+    const existing = doc.entities || {};
+    return ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 解析拆分'), existing, { settings: doc.settings, strict: opts.strict !== false, excludePC: opts.excludePC === true });
+  });
+  /* C1/C3：一键剧情要点总结 → 长期记忆条目 */
+  ipcMain.handle('ai:plotSummary', async (e, content, memoryText) => {
+    try {
+      return await ai.plotSummary(aiCfg('chat', 'AI 提炼剧情要点'), String(content || ''), String(memoryText || ''));
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  /* C2：会话/日志 → NPC 与剧情点建议（预览确认后写入工作台） */
+  ipcMain.handle('ai:suggestStory', async (e, content) => {
+    try {
+      return await ai.suggestStory(aiCfg('chat', 'AI 分析剧情建议'), String(content || ''), doc.entities || {});
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  /* 原始文本「带团建议」：保留原文，用标记在关键句子后插入带团建议/方案 */
+  ipcMain.handle('ai:suggestText', async (e, args) => {
+    try {
+      args = args || {};
+      const text = String(args.text || '');
+      if (!text.trim()) return { ok: false, error: '原始文本为空，请先导入或粘贴内容' };
+      const reply = await ai.suggestScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('chat', 'AI 带团建议'), doc.settings, { usePersona: ((doc.settings && doc.settings.ai && doc.settings.ai.usePersona) !== false) });
+      return { ok: true, text: reply };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  ipcMain.handle('ai:genContent', async (e, args) => {
+    args = args || {};
+    return ai.generateContent(args.kind, args.tip, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 生成资料内容'), doc.settings);
+  });
+  /* 团本分幕（剧本式）分析：尊重原剧情，把整篇团本拆成一幕幕可上演的剧本（人物/地点/剧情/线索等） */
+  ipcMain.handle('ai:breakdownScenario', async (e, args) => {
+    try {
+      args = args || {};
+      const text = String(args.text || '');
+      if (!text.trim()) return { ok: false, error: '文本为空，请先在「原始文本」导入或粘贴团本内容' };
+      const scenes = await ai.breakdownScenario(aiCfg('scenario', 'AI 剧本分幕'), text, doc.settings);
+      return { ok: true, scenes };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  /* 地图要素生成：AI 依据文字描述设计地图要素（底图由前端上传，AI 不看图） */
+  ipcMain.handle('ai:genBoard', async (e, args) => {
+    try {
+      args = args || {};
+      const board = await ai.generateBoard(aiCfg('map', 'AI 设计地图'), String(args.text || ''), args);
+      return { ok: true, board };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  ipcMain.handle('ai:genEntity', async (e, args) => {
+    try {
+      args = args || {};
+      return { ok: true, entity: await ai.generateEntity(args.kind, args.tip, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 生成资料卡'), doc.settings, args.ctx) };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  /* 依据所选模板批量生成资料卡：AI 从上下文/对话中提取全部合适条目（可多条），
+   * 返回 entities 数组；界面用勾选框让使用者挑选保留/丢弃。 */
+  ipcMain.handle('ai:genCards', async (e, args) => {
+    try {
+      args = args || {};
+      const entities = await ai.generateEntities(args.kind, args.tip, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 提取资料卡'), doc.settings, args.ctx, args.tpl || '');
+      return { ok: true, entities };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  /* 让 AI 依据导入的规则书/设定资料归纳出一套人物卡模板 */
+  ipcMain.handle('ai:genTemplateForRules', async (e, rulesText) => {
+    try {
+      const template = await ai.genTemplateFromRules(aiCfg('tpl', 'AI 生成卡片模板'), String(rulesText || ''));
+      return { ok: true, template };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  ipcMain.handle('ai:promptDefaults', () => ai.DEFAULT_PROMPTS);
+  ipcMain.handle('ai:relationsSuggest', async (e, payload) => {
+    try {
+      payload = payload || {};
+      const rel = await ai.suggestRelations(payload.entities || (doc.entities || {}), payload.relations || (doc.relations || { nodes: [], edges: [] }), aiCfg('chat', 'AI 补全关系'));
+      return { ok: true, relations: rel };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  ipcMain.handle('ai:test', async () => {
+    // 全局 AI 配置已就绪即可连通测试（不再强制要求已配置「AI 设定」角色卡）
+    const cfg = aiCfg('sys', 'AI 连通性测试');
+    const res = await ai.chat(currentProfile(), [{ role: 'user', content: '用一句话回复你好' }], ai.effectiveFields(doc), cfg, worldName());
+    return res;
+  });
+  ipcMain.handle('modRuleDefaults', () => {
+    return { ok: true, rules: ai.defaultModRules() };
+  });
+  ipcMain.handle('ai:polish', async (e, args) => {
+    const [text, title] = args;
+    const p = currentProfile();
+    const prompt = `下面是一段跑团记录，请你润色整理成一篇通顺生动的小文章，保留原有内容，补全背景感，让它读起来更流畅。原记录标题：${title || '跑团记录'}\n\n${text}`;
+    const res = await ai.chat(p, [{ role: 'user', content: prompt }], ai.effectiveFields(doc), aiCfg('cards', 'AI 润色'), worldName());
+    return res;
+  });
+  /* B1 批量润色：依序润色多条日志，支持注入「叙事风格」偏好，避免多次往返 */
+  ipcMain.handle('ai:polishBatch', async (e, args) => {
+    try {
+      args = args || {};
+      const items = Array.isArray(args.items) ? args.items.slice(0, 50) : [];
+      const style = String(args.style || '').trim();
+      const out = [];
+      for (const it of items) {
+        const text = String(it.text || '').trim();
+        const key = String(it.key || '');
+        if (!text) { out.push({ key, ok: false, error: '文本为空' }); continue; }
+        const title = String(it.title || '跑团记录');
+        const prompt = `下面是一段跑团记录，请你润色整理成一篇通顺生动的小文章，保留原有内容、补全背景感，让它读起来更流畅。${style ? '\n叙事风格要求：' + style : ''}\n\n原记录（标题：${title}）：\n${text}`;
+        const res = await ai.chat(currentProfile(), [{ role: 'user', content: prompt }], ai.effectiveFields(doc), aiCfg('cards', 'AI 批量润色'), worldName());
+        out.push({ key, ok: true, text: (res && res.content) || '' });
+      }
+      return { ok: true, items: out };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  /* B3 AI 编写剧本全文：结合全档案上下文，生成一幕幕完整的团本并可作为 lore 并入 */
+  ipcMain.handle('ai:writeScript', async (e, args) => {
+    try {
+      args = args || {};
+      const kind = String(args.kind || 'lore');
+      const entName = String(args.entName || '').trim();
+      const ctx = String(args.ctx || '（暂无资料，可自由发挥）').slice(0, 6000);
+      const style = String(args.style || '').trim();
+      const prompt = '依据下面的现有背景/人物/地区资料，为这个 TRPG 团写出一篇完整、可直接开演的剧本全文。'
+        + '要求：结构清晰，分幕写出（序幕+若干幕+结局），含每个场景的时间/地点/出场与关键剧情/线索/事件，人物对白可适当穿插；'
+        + '结局给足信息以便 KP 落地，但给 KP 留临场发挥空间。'
+        + (style ? '\n叙事风格要求：' + style : '')
+        + '\n\n现有资料：\n' + ctx;
+      const res = await ai.chat(currentProfile(), [{ role: 'user', content: prompt }], ai.effectiveFields(doc), aiCfg('cards', 'AI 编写剧本全文'), worldName());
+      const text = (res && res.content) || '';
+      if (!text) return { ok: false, error: 'AI 未返回内容' };
+      const item = { name: entName || (worldName() + ' · 剧本全文'), content: text, source: 'AI 生成', createdAt: new Date().toISOString() };
+      /* 走 store 统一 crud（自动生成 id / 写审计 / 落盘），避免绕过一致性 */
+      const r = store.crud(kind, 'create', item);
+      doc = store.load(); // 让内存 doc 与落盘看齐
+      return { ok: true, entity: r.changed || item, count: (doc.entities && doc.entities[kind] || []).length, kind };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  ipcMain.handle('file:open', async () => {
+    if (!win) return { ok: false };
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择文件',
+      properties: ['openFile']
+    });
+    if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false, canceled: true };
+    const fp = r.filePaths[0];
+    const imgRe = /\.(png|jpe?g|gif|webp|bmp|svg|ico|tif{1,2})$|^image\//i;
+    if (imgRe.test(fp)) {
+      return { ok: false, image: true, name: path.basename(fp), error: '当前工作台 AI 不具备图片识别（识图）功能，请使用文字类文件。' };
+    }
+    try {
+      const st = fs.statSync(fp);
+      if (!st.isFile()) return { ok: false, error: '所选项不是文件' };
+      if (st.size === 0) return { ok: false, error: '文件为空(0 字节)' };
+      if (st.size > IMPORT_MAX) return { ok: false, error: '文件过大(>1GB)，已超出单文件上限。' };
+      const kind = detectImportKind(fp);
+      if (kind === 'other') return { ok: false, error: '暂不支持该格式，请选择文本/PDF/Word/Excel/CSV 等文字类文件。' };
+      const { text } = await extractText(fp, kind, st.size);
+      return { ok: true, path: fp, name: path.basename(fp), content: String(text || '') };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  });
+  /* 解析人物卡 Excel（.xlsx/.xls/.csv）为行数据，供骰娘定向判定 */
+  ipcMain.handle('file:readSheet', async (e, buf) => {
+    try {
+      if (!buf || !buf.byteLength) return { ok: false, error: '未读取到文件内容' };
+      const XLSX = require('xlsx');
+      const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      if (!ws) return { ok: false, error: '表格为空' };
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      const mapped = rows
+        .map((r, i) => {
+          const cols = {};
+          let name = '';
+          for (const k of Object.keys(r)) {
+            const v = String(r[k] == null ? '' : r[k]);
+            cols[k] = v;
+            if (!name && /(名|name|角色|人物|玩家|char)/i.test(k)) name = v;
+          }
+          if (!name) name = ('人物卡' + (i + 1));
+          return { name, cols };
+        })
+        .filter(r => Object.keys(r.cols).length > 0);
+      const headers = Object.keys(mapped[0] ? mapped[0].cols : []);
+      return { ok: true, rows: mapped, headers };
+    } catch (e) {
+      return { ok: false, error: '解析失败：' + String(e && e.message || e) };
+    }
+  });
+  /* ==================== 大文件多格式导入 ==================== */
+  const IMPORT_MAX = 1073741824;          // 单文件上限 1GB（覆盖“至少 500MB”）
+  const WORK_CAP = 120 * 1024 * 1024;     // 文本工作副本最大读取量 120MB
+  const PREVIEW_CAP = 40000;               // 返回给界面预览的字符数
+  const XL_ROW_CAP = 20000;                // Excel 工作表最大读取行(防止超大表拖慢)
+
+  function extOf(fp) { const m = /\.([a-z0-9]+)$/i.exec(String(fp || '')); return m ? m[1].toLowerCase() : ''; }
+  /* 安全白名单：仅允许读取「当前数据目录 uploads/ 内」的文件（导入/上传生成的工作副本）。
+   * AI 端点 file:getFullText / file:analyzeImport / file:splitImport 直接按渲染层传入的路径读盘，
+   * 若不校验会形成路径穿越，可读取任意磁盘文件（含其它档案 kp-*.json、系统文件）。
+   * 所有合法读取路径都由 importFile/saveUpload 写入 uploads/ 之下，故此处做前缀校验即封闭。 */
+  function ensureUploadPath(p) {
+    const raw = String(p || '');
+    if (!raw) return false;
+    const target = path.resolve(raw);
+    const base = path.resolve(path.join(store.folder, 'uploads'));
+    if (target === base) return false;
+    const rel = path.relative(base, target);
+    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  }
+  function detectImportKind(fp) {
+    const e = extOf(fp);
+    if (/^(txt|md|markdown|log)$/.test(e)) return 'text';
+    if (/^(json|yaml|yml|xml|html|htm)$/.test(e)) return 'text';
+    if (/^csv$/.test(e)) return 'csv';
+    if (/^(xlsx|xls)$/.test(e)) return 'xlsx';
+    if (/^pdf$/.test(e)) return 'pdf';
+    if (/^docx$/.test(e)) return 'docx';
+    return 'other';
+  }
+  function stripHtml(s) { return String(s || '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&amp;/gi, '&').replace(/\s+\n/g, '\n'); }
+  function safeName(n) { return String(n || 'file').replace(/[\\/:*?"<>|]/g, '_'); }
+  function streamCopy(src, dest) {
+    return new Promise((res, rej) => {
+      const rs = fs.createReadStream(src); const ws = fs.createWriteStream(dest);
+      rs.on('error', rej); ws.on('error', rej); ws.on('finish', res); rs.pipe(ws);
+    });
+  }
+  /* ---- 零依赖 PDF 文本抽取（支持 FlateDecode 压缩流，提取 Tj/TJ 文本） ---- */
+  const zlib = require('zlib');
+  /* 编码探测与解码：
+   * - decodeText(buf)        ：解析任意文本文件（识别 BOM / UTF-8 / UTF-16 / GBK），解决“GBK 进去出来全是乱码”。
+   * - decodeByteStr(s)       ：把 PDF 抽取的“字节→latin1”字符串重新判定为 UTF-8/GBK，解决 PDF 中文乱码。
+   * 底层统一用系统 ICU 的 TextDecoder，Electron/Node 完整支持 gbk 与 utf-8 严格校验。 */
+  function newTD(e, fatal) { try { return new TextDecoder(e, fatal ? { fatal: true } : undefined); } catch (_) { return null; } }
+  const _utf8  = newTD('utf-8', true);
+  const _gbk   = newTD('gbk', false);
+  function decodeText(buf) {
+    try {
+      const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+      if (b.length >= 3 && b[0] === 0xEF && b[1] === 0xBB && b[2] === 0xBF) return b.subarray(3).toString('utf8'); // UTF-8 BOM
+      if (b.length >= 2 && b[0] === 0xFF && b[1] === 0xFE) return b.subarray(2).toString('utf16le');            // UTF-16LE BOM
+      if (b.length >= 2 && b[0] === 0xFE && b[1] === 0xFF) {                                                      // UTF-16BE BOM
+        const t = Buffer.allocUnsafe(b.length - 2);
+        for (let i = 2; i + 1 < b.length; i += 2) { t[i - 2] = b[i + 1]; t[i - 1] = b[i]; }
+        return t.toString('utf16le');
+      }
+      if (_utf8) { try { return _utf8.decode(b); } catch (_) {} } // 严格 UTF-8：无效字节则判为非 UTF-8
+      if (_gbk) { const g = _gbk.decode(b); if (!g.includes('\uFFFD')) return g; return b.toString('utf8'); }
+      if (_gbk) return _gbk.decode(b);
+      return b.toString('utf8').replace(/^\uFEFF/, '');
+    } catch (_) { return String(buf || ''); }
+  }
+  function decodeByteStr(s) {
+    if (!s || !/[^\x00-\x7F]/.test(s)) return s; // 纯 ASCII，原样返回
+    try {
+      const buf = Buffer.from(s, 'latin1');       // 把 PDF 抽取的字节序列还原出来
+      if (_utf8) { try { return _utf8.decode(buf); } catch (_) {} }
+      if (_gbk) { const g = _gbk.decode(buf); if (!g.includes('\uFFFD')) return g; }
+    } catch (_) {}
+    return s; // 判定不出再回退为原字符
+  }
+  function pdfLatin1(u8a, a, b) { return Buffer.from(u8a.subarray(a, b)).toString('latin1'); }
+  function pdfIndexOf(u8a, str, from) { return pdfLatin1(u8a, 0, u8a.length).indexOf(str, from); }
+  function pdfLastIndex(u8a, str, before) { return pdfLatin1(u8a, 0, u8a.length).lastIndexOf(str, before); }
+  function pdfUnesc(s) { return String(s || '').replace(/\\([()\\])/g, '$1').replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t'); }
+  function pdfContentText(s) {
+    s = s.replace(/%[^\n]*/g, ' ');
+    const out = [];
+    const re = /\((?:\\[()\\]|[^()\\])*\)\s+[Tj'"]|\[(?:\((?:\\[()\\]|[^()\\])*\)|-?\d+(?:\.\d+)?)*\]\s*TJ|<([0-9a-fA-F\s]*)>\s*Tj/gs;
+    let m;
+    while ((m = re.exec(s)) !== null) {
+      const tok = m[0];
+      if (tok[0] === '[') { let lm, line = ''; const lit = /\(((?:\\[()\\]|[^()\\])*)\)/g; while ((lm = lit.exec(tok)) !== null) line += pdfUnesc(lm[1]); out.push(line); }
+      else if (tok[0] === '<') { const hex = (tok.match(/<([0-9a-fA-F\s]*)>/ ) || [])[1].replace(/\s/g, ''); let b = ''; for (let k = 0; k + 1 < hex.length; k += 2) b += String.fromCharCode(parseInt(hex.slice(k, k + 2), 16)); out.push(b); }
+      else out.push(pdfUnesc((tok.match(/\(((?:\\[()\\]|[^()\\])*)\)/) || [])[1] || ''));
+    }
+    return out.join('');
+  }
+  /* pdfjs-dist 惰性加载（主解析，支持 CMap/ToUnicode，正确还原中文等编码） */
+  function pdfjsLib() {
+    if (pdfjsLib._lib !== undefined) return pdfjsLib._lib;
+    let lib = null;
+    try {
+      const pdfjs = require('pdfjs-dist/legacy/build/pdf.js');
+      try { pdfjs.GlobalWorkerOptions.workerSrc = require('pdfjs-dist/build/pdf.worker.js'); } catch (_) {}
+      lib = pdfjs;
+    } catch (_) { lib = null; }
+    pdfjsLib._lib = lib;
+    return lib;
+  }
+  async function extractPdfWithPdfjs(fp) {
+    const pdfjs = pdfjsLib();
+    if (!pdfjs) return null;
+    const doc = await pdfjs.getDocument({
+      data: new Uint8Array(fs.readFileSync(fp)),
+      disableFontFace: true, useSystemFonts: true, isEvalSupported: false, verbosity: 0
+    }).promise;
+    const parts = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const tc = await page.getTextContent();
+      const line = (tc.items || []).map(it => it.str || '').join('');
+      if (line) parts.push(line);
+      if (page.cleanup) { try { page.cleanup(); } catch (_) {} }
+    }
+    try { await doc.destroy(); } catch (_) {}
+    return parts.join('\n').trim();
+  }
+  /* 零依赖浅抽取（作为 pdfjs 失败的兜底） */
+  function extractPdfLegacy(fp) {
+    const bytes = Uint8Array.from(fs.readFileSync(fp));
+    const parts = []; let i = 0;
+    while (i < bytes.length - 7) {
+      const si = pdfIndexOf(bytes, 'stream', i); if (si < 0) break;
+      const dictStart = pdfLastIndex(bytes, '<<', si); const dict = dictStart >= 0 ? pdfLatin1(bytes, dictStart, si) : '';
+      let ds = si + 6;
+      if (bytes[ds] === 13 && bytes[ds + 1] === 10) ds += 2; else if (bytes[ds] === 10 || bytes[ds] === 13) ds += 1;
+      const ei = pdfIndexOf(bytes, 'endstream', ds); if (ei < 0) break;
+      let seg = bytes.subarray(ds, ei);
+      if (/FlateDecode|\/Fl/i.test(dict)) { try { seg = Uint8Array.from(zlib.inflateSync(Buffer.from(seg))); } catch (_) {} }
+      const raw = pdfContentText(pdfLatin1(seg, 0, seg.length));
+      const txt = decodeByteStr(raw); if (txt) parts.push(txt);
+      i = ei + 9;
+    }
+    return parts.join('\n');
+  }
+  async function extractPdfText(fp) {
+    try {
+      const robust = await extractPdfWithPdfjs(fp);
+      if (robust && /\S/.test(robust)) return robust;
+    } catch (_) {}
+    return extractPdfLegacy(fp);
+  }
+  // 把任意文本文件按帧抽取为正文(用于公众号/文档类)；返回 {text, truncated}
+  async function extractText(fp, kind, size) {
+    if (kind === 'text' || kind === 'csv') {
+      const readLen = Math.min(size, WORK_CAP);
+      const fd = fs.openSync(fp, 'r'); const buf = Buffer.alloc(readLen);
+      let n = 0; try { n = fs.readSync(fd, buf, 0, readLen, 0); } finally { fs.closeSync(fd); }
+      let raw = decodeText(buf.subarray(0, n));
+      const e = extOf(fp);
+      if (/^(html|htm|xml)$/.test(e)) raw = stripHtml(raw);
+      return { text: raw, truncated: size > WORK_CAP };
+    }
+    if (kind === 'xlsx') {
+      const XLSX = require('xlsx');
+      const wb = XLSX.readFile(fp); const out = [];
+      (wb.SheetNames || []).slice(0, 20).forEach(sn => {
+        const ws = wb.Sheets[sn]; if (!ws) return;
+        out.push('=== 工作表：' + sn + ' ===');
+        const rows = XLSX.utils.sheet_to_json(ws, { defval: '' }).slice(0, XL_ROW_CAP);
+        rows.forEach(r => out.push(Object.values(r).join('\t')));
+      });
+      return { text: out.join('\n'), truncated: false };
+    }
+    if (kind === 'pdf') {
+      const text = await extractPdfText(fp);
+      return { text: text || '', truncated: false };
+    }
+    if (kind === 'docx') {
+      const mammoth = require('mammoth');
+      const r = await mammoth.extractRawText({ path: fp });
+      return { text: String(r.value || ''), truncated: false };
+    }
+    return { text: '', truncated: false };
+  }
+  /* 统一入口：可选传入文件路径(来自界面 file input 的 f.path)，否则弹选择框 */
+  ipcMain.handle('file:importFile', async (e, userPath) => {
+    let fp = String(userPath || '');
+    if (!fp) {
+      if (!win) return { ok: false, error: '窗口未就绪' };
+      const r = await dialog.showOpenDialog(win, {
+        title: '选择要导入的文件(支持文本/JSON/CSV/Excel/PDF/DOCX 等)',
+        properties: ['openFile'],
+        filters: [{ name: '支持的文件', extensions: ['txt', 'md', 'markdown', 'log', 'json', 'yaml', 'yml', 'xml', 'html', 'htm', 'csv', 'xlsx', 'xls', 'pdf', 'docx'] }]
+      });
+      if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false, canceled: true };
+      fp = r.filePaths[0];
+    }
+    try {
+      const st = fs.statSync(fp);
+      if (!st.isFile()) return { ok: false, error: '所选项不是文件' };
+      if (st.size === 0) return { ok: false, error: '文件为空(0 字节)' };
+      if (st.size > IMPORT_MAX) return { ok: false, error: '文件过大(>1GB)，已超出单文件上限。' };
+      const name = path.basename(fp);
+      const kind = detectImportKind(fp);
+      if (kind === 'other') return { ok: false, error: '暂不支持该格式：' + name + '。支持 txt/md/log/json/csv/xlsx/pdf/docx 等文本与文档格式。' };
+      const { text, truncated } = await extractText(fp, kind, st.size);
+      // 原样留存原件，文本工作副本另存(便于大文件后续分块 AI 分析)
+      const base = path.join(store.folder, 'uploads', 'imports');
+      fs.mkdirSync(base, { recursive: true });
+      const tag = new Date().getTime();
+      const origSaved = path.join(base, tag + '_' + safeName(name));
+      await streamCopy(fp, origSaved);
+      let textPath = null;
+      if (text && text.length) {
+        textPath = path.join(base, tag + '_' + safeName(name) + '.' + kind + '.txt');
+        fs.writeFileSync(textPath, text, 'utf8');
+      }
+      if (textPath) recentUploads.push({ name, textPath }); // 供 AI 工具 read_uploaded_file 按名读取
+      const preview = text.slice(0, PREVIEW_CAP);
+      const lines = preview.split('\n').length;
+      return {
+        ok: true, name, type: kind, ext: extOf(fp), size: st.size, chars: text.length,
+        preview, textPath, origPath: origSaved, huge: st.size > 200 * 1024 || text.length > 300 * 1024, truncated, lines
+      };
+    } catch (e) {
+      return { ok: false, error: '解析失败：' + String((e && e.message) || e) };
+    }
+  });
+  /* 把导入文本（工作副本或预览）交给 AI 拆分为 7 类结构化实体；strict=false 才允许补充 */
+  ipcMain.handle('file:splitImport', async (e, args) => {
+    args = args || {};
+    let text = String((args && args.preview) || '');
+    if (args.path && ensureUploadPath(args.path) && fs.existsSync(args.path)) text = String(fs.readFileSync(args.path, 'utf8') || '').slice(0, 120000);
+    const existing = doc.entities || {};
+    return ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 拆分导入资料'), existing, { settings: doc.settings, strict: args.strict !== false, excludePC: args.excludePC === true });
+  });
+  /* 大文件的分块 AI 分析整理：流式分帧，逐段交给 AI 汇总为结构提纲 */
+  ipcMain.handle('file:analyzeImport', async (e, { path: p, title }) => {
+    try {
+      if (!p || !ensureUploadPath(p) || !fs.existsSync(p)) return { ok: false, error: '找不到已抽取的导入文本，请重新导入。' };
+      const maxChunk = 12000, overlap = 500;
+      const chunks = [];
+      const ALL = fs.readFileSync(p, 'utf8'); // 工作副本已封顶(WORK_CAP)
+      let i = 0;
+      while (i < ALL.length) { let j = Math.min(i + maxChunk, ALL.length); chunks.push(ALL.slice(i, j)); i = j - overlap; if (i < 0) i = 0; if (chunks.length > 200) break; }
+      const profile = currentProfile(); const fields = ai.effectiveFields(doc); const cfg = aiCfg('cards', 'AI 分析导入资料'); const wn = worldName();
+      const digTpl = ai.effectivePrompts(doc.settings).digest;
+      let digest = '';
+      for (let k = 0; k < chunks.length; k++) {
+        const head = k === 0 ? ('这是导入资料《' + (title || '导入内容') + '》的第 1 段。') : ('这是同一份资料的第 ' + (k + 1) + ' / ' + chunks.length + ' 段(前面已有摘要)。');
+        let prompt;
+        if (digest) prompt = head + '\n请把「已有摘要」与「新片段」合并为一份更完整的结构化中文提纲(涵盖：核心设定/规则要点/人物角色/地点/通关或剧情关键点)。保留全部未重复的关键信息，按条目列出，控制在 800 字内。\n【已有摘要】\n' + digest.slice(-9000) + '\n【新片段】\n' + chunks[k];
+        else prompt = head + '\n' + ai.renderPrompt(digTpl, { fragment: chunks[k] }, true);
+        const res = await ai.chat(profile, [{ role: 'user', content: prompt }], fields, cfg, wn);
+        digest = String((res && res.content) || '').trim() || digest;
+      }
+      return { ok: true, digest, chunks: chunks.length };
+    } catch (e) {
+      return { ok: false, error: 'AI 分析失败：' + String((e && e.message) || e) };
+    }
+  });
+  ipcMain.handle('store:writeNewFile', async (e, content) => {
+    if (!win) return { ok: false };
+    const r = await dialog.showSaveDialog(win, {
+      title: '导出文本文件',
+      defaultPath: '新建文件.txt',
+      filters: [{ name: '文本文件', extensions: ['txt'] }]
+    });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    try { fs.writeFileSync(r.filePath, String(content == null ? '' : content), 'utf8'); return { ok: true, path: r.filePath }; }
+    catch (err) { return { ok: false, error: String(err) }; }
+  });
+  ipcMain.handle('store:saveUpload', async (e, name, content) => {
+    const up = path.join(store.folder, 'uploads');
+    try {
+      fs.mkdirSync(up, { recursive: true });
+      const safe = String(name || 'upload.txt').replace(/[\\/:*?"<>|]/g, '_');
+      const dest = path.join(up, new Date().getTime() + '_' + safe);
+      fs.writeFileSync(dest, String(content == null ? '' : content), 'utf8');
+      // 登记为 AI 可读文件：让 read_uploaded_file 工具能按名读取完整正文（供长文本分段读取）
+      recentUploads.push({ name: safe, textPath: dest });
+      return { ok: true, name: safe, path: dest };
+    } catch (err) { return { ok: false, error: String(err) }; }
+  });
+  /* 读取完整抽取文本副本（用于原始文本视图显示全文，不受预览截断影响） */
+  ipcMain.handle('file:getFullText', async (e, textPath) => {
+    try {
+      if (!textPath || !ensureUploadPath(textPath) || !fs.existsSync(textPath)) return { ok: false, error: '找不到抽取文本副本' };
+      const text = fs.readFileSync(textPath, 'utf8');
+      return { ok: true, text };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  ipcMain.handle('store:saveText', async (e, filename, content) => {
+    if (!win) return { ok: false };
+    const r = await dialog.showSaveDialog(win, { title: '导出文本', defaultPath: filename, filters: [{ name: '文本文件', extensions: ['txt'] }] });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    try {
+      fs.writeFileSync(r.filePath, content, 'utf8');
+      return { ok: true, path: r.filePath };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  });
+  ipcMain.handle('store:saveMarkdown', async (e, filename, content) => {
+    if (!win) return { ok: false };
+    const r = await dialog.showSaveDialog(win, { title: '导出 Markdown', defaultPath: filename, filters: [{ name: 'Markdown', extensions: ['md'] }] });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    try {
+      fs.writeFileSync(r.filePath, content, 'utf8');
+      return { ok: true, path: r.filePath };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  });
+  /* 导出地图图片：接收 dataURL(base64 PNG)，经保存对话框落盘 */
+  ipcMain.handle('store:saveImage', async (e, filename, dataUrl) => {
+    if (!win) return { ok: false };
+    const r = await dialog.showSaveDialog(win, { title: '导出地图图片', defaultPath: filename, filters: [{ name: 'PNG 图片', extensions: ['png'] }] });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    try {
+      const base64 = String(dataUrl || '').replace(/^data:image\/[^;]+;base64,/, '');
+      fs.writeFileSync(r.filePath, Buffer.from(base64, 'base64'));
+      return { ok: true, path: r.filePath };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  });
+  /* ---- 文档导出：docx / xlsx / pdf（用渲染进程传来的数据生成，返回 Buffer 供下载） ---- */
+  let exportPdfWin = null;
+  ipcMain.handle('store:exportDoc', async (e, payload) => {
+    try {
+      const format = String(payload && payload.format || '');
+      if (format === 'docx') {
+        const buf = exporter.buildDocx((payload.title || '导出'), (payload.count || 0), payload.rows);
+        return { ok: true, ext: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buf };
+      }
+      if (format === 'xlsx') {
+        const buf = exporter.buildXlsx(payload.cols || [], payload.grid || []);
+        return { ok: true, ext: 'xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buf };
+      }
+      if (format === 'pdf') {
+        if (!exportPdfWin || exportPdfWin.isDestroyed()) {
+          exportPdfWin = new BrowserWindow({ show: false, webPreferences: { offscreen: true, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
+          exportPdfWin.on('closed', () => { exportPdfWin = null; });
+        }
+        const html = String(payload && payload.html || '');
+        await exportPdfWin.loadURL('data:text/html;charset=utf-8;base64,' + Buffer.from(html, 'utf8').toString('base64'));
+        // 等待少量渲染后再打印，避免首帧空白
+        await new Promise(r => setTimeout(r, 200));
+        const buf = await exportPdfWin.webContents.printToPDF({ printBackground: true, pageSize: 'A4', margins: { top: 0.6, bottom: 0.6, left: 0.6, right: 0.6 } });
+        return { ok: true, ext: 'pdf', mime: 'application/pdf', buf };
+      }
+      return { ok: false, error: '不支持的导出格式：' + format };
+    } catch (err) {
+      return { ok: false, error: String(err && err.message || err) };
+    }
+  });
+  /* ---- 数据多开：多档案 ---- */
+  ipcMain.handle('archive:list', () => store.listArchives());
+  ipcMain.handle('archive:create', (e, name) => {
+    const r = store.createArchive(String(name || '').trim());
+    if (!r.ok) return r;
+    return { ok: true, name: r.name, archives: store.listArchives() };
+  });
+  ipcMain.handle('archive:switch', (e, name) => {
+    if (name && name !== store.name) {
+      store.switchTo(String(name)); doc = store.load();
+      recentUploads.length = 0; // 切换档案即作废上一档案的导入登记，避免 AI 工具误读其它档案的文本副本
+    }
+    return { ok: true, archive: store.name, data: doc, meta: store.meta() };
+  });
+  ipcMain.handle('archive:duplicate', (e, name) => {
+    const r = store.duplicateArchive(String(name));
+    if (!r.ok) return r;
+    return { ok: true, name: r.name, archives: store.listArchives() };
+  });
+  ipcMain.handle('archive:delete', (e, name) => {
+    const r = store.deleteArchive(String(name));
+    if (!r.ok) return r;
+    if (name === store.name) { store.switchTo('main'); doc = store.load(); }
+    return { ok: true, archives: store.listArchives() };
+  });
+  /* ---- 备份与版本快照：列表与回滚 ---- */
+  ipcMain.handle('backup:list', () => store.listBackups());
+  ipcMain.handle('backup:restore', (e, file) => {
+    const r = store.restore(String(file));
+    if (!r.ok) return r;
+    doc = store.load();
+    return { ok: true, data: doc, meta: store.meta() };
+  });
+  ipcMain.handle('snapshot:list', () => store.listSnapshots());
+  ipcMain.handle('snapshot:restore', (e, file) => {
+    const r = store.restoreSnapshot(String(file));
+    if (!r.ok) return r;
+    doc = store.load();
+    return { ok: true, data: doc, meta: store.meta() };
+  });
+  /* ---- 无边框窗口控制 ---- */
+  ipcMain.handle('win:minimize', () => { if (win) win.minimize(); return { ok: true }; });
+  ipcMain.handle('win:toggleMax', () => {
+    if (!win) return { ok: true, maximized: false };
+    if (win.isMaximized()) win.unmaximize(); else win.maximize();
+    return { ok: true, maximized: win.isMaximized() };
+  });
+  ipcMain.handle('win:isMax', () => ({ maximized: !!(win && win.isMaximized()) }));
+  ipcMain.handle('win:close', () => { try { store.backup(); } catch (_) {} if (win) win.close(); return { ok: true }; });
+
+  /* ---- 自动更新（electron-updater）----
+   * 更新源地址在打包时由 package.json 的 publish.url 写入应用（安装版有效，便携版忽略）。
+   * 版本比较基于 package.json 的 version 字段与更新源 latest.yml / 版本号。 */
+  if (autoUpdater) {
+    autoUpdater.autoDownload = true; // 检查到新版本后立即后台下载，下载完成自动重装（覆盖安装，不丢用户目录数据）
+    autoUpdater.on('error', (e) => {
+      try { if (win) win.webContents.send('updater:state', { state: 'err', error: String(e && e.message || e) }); } catch (_) {}
+    });
+    autoUpdater.on('update-available', () => {
+      try { if (win) win.webContents.send('updater:state', { state: 'available' }); } catch (_) {}
+    });
+    autoUpdater.on('download-progress', (p) => {
+      try { if (win) win.webContents.send('updater:state', { state: 'progress', percent: p.percent }); } catch (_) {}
+    });
+    autoUpdater.on('update-downloaded', () => {
+      try { if (win) win.webContents.send('updater:state', { state: 'downloaded' }); } catch (_) {}
+      try { autoUpdater.quitAndInstall(false, true); } catch (_) {}
+    });
+  }
+  ipcMain.handle('updater:check', async () => {
+    if (!autoUpdater) return { ok: false, error: '当前构建未启用自动更新（未配置更新源）。' };
+    if (process.env.PORTABLE_EXECUTABLE_DIR) return { ok: false, error: '绿色版暂不支持自更新，请从更新源下载新版。' };
+    try {
+      const r = await autoUpdater.checkForUpdates();
+      return { ok: true, update: !!(r && r.updateInfo), version: r && r.updateInfo && r.updateInfo.version };
+    } catch (e) {
+      return { ok: false, error: '检查更新失败：' + String(e && e.message || e) };
+    }
+  });
+
+  /* ---- AI 用量可见与按类型取消 ---- */
+  ipcMain.handle('ai:usage', () => ai.usageLog());
+  ipcMain.handle('ai:usageReset', (e, bucketMs) => { ai.resetUsage(bucketMs); return ai.usageLog(); });
+  ipcMain.on('ai:cancel', (e, payload) => {
+    const group = (payload && payload.group) || null;
+    const n = ai.cancelGroup(group);
+    try { if (win && win.webContents) win.webContents.send('ai:cancelled', { group, hit: n }); } catch (_) {}
+  });
+
+  /* ---- AI 数据一致性审查 ---- */
+  ipcMain.handle('ai:audit', async () => {
+    const cfg = aiCfg('sys', 'AI 数据审查');
+    const r = await ai.auditData(cfg, doc, worldName());
+    return r.content;
+  });
+
+  /* ---- 骰娘（引擎托管）---- 状态 / 启动 / 停止 / 重启 / 定位内核 / 数据接口 */
+  ipcMain.handle('dice:status', () => dice.snapshot());
+  ipcMain.handle('dice:ensure', async () => {
+    const r = dice.ensureEngine();
+    if (r.ok) await dice.ensureDataHttp();
+    return Object.assign({ result: r }, dice.snapshot());
+  });
+  ipcMain.handle('dice:start', async () => {
+    const r = dice.start();
+    await dice.ensureDataHttp();
+    return Object.assign({ result: r }, dice.snapshot());
+  });
+  ipcMain.handle('dice:stop', () => { const r = dice.stop(); return Object.assign({ result: r }, dice.snapshot()); });
+  ipcMain.handle('dice:restart', async () => { const r = dice.restart(); await dice.ensureDataHttp(); return Object.assign({ result: r }, dice.snapshot()); });
+  ipcMain.handle('dice:pickSource', async () => {
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择骰娘内核目录（应包含内核主程序）',
+      properties: ['openDirectory']
+    });
+    const dir = !r.canceled && r.filePaths && r.filePaths[0];
+    if (!dir) return { ok: false, canceled: true, source: dice.sourceDir };
+    const s = dice.setSourceDir(dir);
+    return Object.assign({ result: s }, dice.snapshot());
+  });
+  ipcMain.handle('dice:setSource', (e, dir) => { const s = dice.setSourceDir(String(dir || '')); return Object.assign({ result: s }, dice.snapshot()); });
+  ipcMain.handle('dice:openWebui', () => { if (dice.webuiPort) shell.openExternal('http://127.0.0.1:' + dice.webuiPort + '/'); return { ok: true }; });
+  /* 桥插件：查询/重新装入 .kp 数据接口插件（start 时随配置自动装入，这里供手动重装/刷新状态） */
+  ipcMain.handle('dice:bridge', () => {
+    const r = dice.installBridgePlugin();
+    return Object.assign({ result: r }, dice.snapshot());
+  });
+  /* QQ 接入：读取已保存登录配置 / 保存官方或个人账号接入配置 */
+  ipcMain.handle('dice:qqGet', () => dice.qqLogin);
+  ipcMain.handle('dice:qqSave', (e, mode, fields) => {
+    const r = dice.setQQLogin(String(mode || 'personal'), fields || {});
+    return Object.assign({ result: r }, dice.snapshot());
+  });
+  /* QQ 接入（原生 /sd-api，不经 webview）：在线探测 / 连接列表 / 添加 / 二维码 / 启停 / 删除 */
+  ipcMain.handle('dice:qqApiOnline', async () => ({ ok: true, online: await dice.engineOnline() }));
+  ipcMain.handle('dice:qqList', async () => dice.qqList());
+  ipcMain.handle('dice:qqAddOfficial', async (e, f) => dice.qqAddOfficial(f || {}));
+  ipcMain.handle('dice:qqAddPersonal', async (e, f) => dice.qqAddPersonal(f || {}));
+  ipcMain.handle('dice:qqQrcode', async (e, id) => dice.qqQrcode(String(id || '')));
+  ipcMain.handle('dice:qqSetEnable', async (e, id, en) => dice.qqSetEnable(String(id || ''), !!en));
+  ipcMain.handle('dice:qqDel', async (e, id) => dice.qqDel(String(id || '')));
+
+  /* ---- 骰娘独立 AI 端口：OpenAI 兼容 /chat/completions；由渲染层传入配置与消息 ---- */
+  ipcMain.handle('dice:aiChat', async (e, cfg, messages) => {
+    const base = String((cfg && cfg.base) || '').trim().replace(/\/+$/, '');
+    if (!base) return { ok: false, error: '未配置 AI 端口地址', reply: '' };
+    const reqLib = base.startsWith('https:') ? dhttps : dhttp;
+    const u = new URL(base + '/chat/completions');
+    const body = JSON.stringify({ model: (cfg && cfg.model) || 'gpt-3.5-turbo', messages: Array.isArray(messages) ? messages : [] });
+    const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) };
+    if (cfg && cfg.key) headers['Authorization'] = 'Bearer ' + cfg.key;
+    return new Promise((resolve) => {
+      const r = reqLib.request({
+        hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80),
+        path: u.pathname + u.search, method: 'POST', headers, timeout: 90000
+      }, (res) => {
+        let d = '';
+        res.on('data', (c) => { d += c; });
+        res.on('end', () => {
+          try { const j = JSON.parse(d); const rp = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || ''; resolve({ ok: true, reply: rp, code: res.statusCode, model: (cfg && cfg.model) || '' }); }
+          catch (_) { resolve({ ok: false, error: '响应解析失败', reply: '', code: res.statusCode }); }
+        });
+      });
+      r.on('timeout', () => { try { r.destroy(); } catch (_) {} resolve({ ok: false, error: '请求超时', reply: '' }); });
+      r.on('error', (err) => resolve({ ok: false, error: String((err && err.message) || '网络错误'), reply: '' }));
+      r.write(body); r.end();
+    });
+  });
+
+  /* ---- 骰娘 state / 文案 / 事件表持久化（StorePort 经 DataStore 落盘）---- */
+  const diceStorePort = createMainStorePort(store);
+  ipcMain.handle('diceState:load', (e, key) => diceStorePort.load(key));
+  ipcMain.handle('diceState:save', (e, key, value) => diceStorePort.save(key, value));
+  ipcMain.handle('diceState:backup', () => diceStorePort.backup());
+
+  /* ---- 骰娘工作台运行时（分区 2/3/4/6）----
+   * 装配 hub + 三通道适配器 + state/log/文案持久化；改名引用：registerIpc 起用 diceWorkbench。 */
+  const { createDiceRuntime } = require('./dice-runtime');
+  const diceWorkbench = createDiceRuntime({ store: diceStorePort, cfg: { onebot11: {}, qqofficial: {}, sim: {} } });
+  global.diceNetAdapters = diceWorkbench.adapters; // 兼容既有 before-quit 回收逻辑
+
+  // 连接中心（分区 2）
+  ipcMain.handle('diceNet:list', () => diceWorkbench.netList());
+  ipcMain.handle('diceNet:start', async (e, id) => diceWorkbench.netStart(id));
+  ipcMain.handle('diceNet:stop', async (e, id) => diceWorkbench.netStop(id));
+  ipcMain.handle('diceNet:status', (e, id) => diceWorkbench.status(id));
+  // 指令日志（分区 3）
+  ipcMain.handle('diceLog:query', (e, opts) => diceWorkbench.logQuery(opts || {}));
+  ipcMain.handle('diceLog:export', () => diceWorkbench.logExport());
+  // 文案与人设（分区 4）
+  ipcMain.handle('diceReply:load', () => diceWorkbench.replyLoad());
+  ipcMain.handle('diceReply:save', (e, pack) => diceWorkbench.replySave(pack));
+  ipcMain.handle('diceReply:import', (e, text) => diceWorkbench.replyImport(text));
+  ipcMain.handle('diceReply:reload', () => diceWorkbench.replyLoad());
+  // 测试通道聊天窗（分区 6）
+  ipcMain.handle('diceSim:send', (e, o) => diceWorkbench.simSend(o || {}));
+  // 退出前回收（与 before-quit 里 global.diceNetAdapters 一致，此处仅挂一次）
+  global.__diceWorkbenchDispose = () => diceWorkbench.dispose();
+}
+
+function createWindow() {
+  win = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    minWidth: 1000,
+    minHeight: 680,
+    title: 'KP 跑团工作台',
+    frame: false,                      // 无边框（自绘标题栏：拖动区 + 最小化/最大化/关闭）
+    backgroundColor: '#171109',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      webviewTag: true
+    }
+  });
+  win.setMenuBarVisibility(false);
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  win.on('maximize', () => { try { win.webContents.send('win:maximized', true); } catch (_) {} });
+  win.on('unmaximize', () => { try { win.webContents.send('win:maximized', false); } catch (_) {} });
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+}
+
+app.whenReady().then(() => {
+  registerIpc();
+  // 启动时对已有明文 API Key 做一次加密迁移
+  if (hardenAiKeyIfNeeded()) store.save(doc);
+  createWindow();
+  // 打开软件即可直接使用骰娘：自动拉起内置引擎（无需手动定位/启动）。
+  // 已释放过引擎或已在运行时跳过；失败仅置状态，不阻塞主界面。
+  setTimeout(() => {
+    try { if (dice.state !== 'running' && dice.state !== 'starting') dice.start(); } catch (_) {}
+  }, 1500);
+  // 自动备份：按用户配置的间隔（默认 30 分钟）+ 退出前各一次。
+  // 用分钟级轮询实现，方便用户在设置里改间隔后即时生效。
+  setInterval(() => {
+    try {
+      const mins = store.autoBackupMinutes();
+      const elapsed = Date.now() - store.lastBackupAt();
+      if (elapsed >= mins * 60 * 1000) store.backup();
+    } catch (_) {}
+  }, 60 * 1000);
+  // 启动即记录一次基准时间，避免刚打开就触发备份
+  try { store._lastBackup = Date.now(); } catch (_) {}
+  app.on('before-quit', () => {
+    try { store.backup(); } catch (_) {}
+    try { dice.dispose(); } catch (_) {}
+    // 三通道（OneBot 11 / QQ 官方 / 模拟器）优雅回收；Task 13 装配后 global.diceNetAdapters 有值
+    if (global.diceNetAdapters && Array.isArray(global.diceNetAdapters)) {
+      for (const ad of global.diceNetAdapters) { try { if (ad && typeof ad.stop === 'function') ad.stop(); } catch (_) {} }
+    }
+  });
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+});
+
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
