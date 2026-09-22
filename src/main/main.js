@@ -52,6 +52,8 @@ const ai = require('./ai');
 const exporter = require('./exporter');
 const { DiceHost } = require('./dice');
 const { createMainStorePort } = require('./dice-state-store');
+const { createPluginHost } = require('../dice-core/plugin/host');
+const { validatePlugin } = require('../dice-core/plugin/validate');
 
 let win = null;
 const dataDir = resolveDataDir();
@@ -957,6 +959,42 @@ function registerIpc() {
     const cfg = aiCfg('sys', 'AI 数据审查');
     const r = await ai.auditData(cfg, doc, worldName());
     return r.content;
+  });
+
+  /* ---- 插件工坊（分区 5）：PluginHost 主进程单例（存储：<userData>/dice-plugins） ---- */
+  const pluginHost = createPluginHost({ dir: path.join(app.getPath('userData'), 'dice-plugins') });
+  pluginHost.loadAll();
+  const pluginRow = (p) => {
+    let prevVersion = null;
+    const prev = path.join(pluginHost.dir, p.id + '.prev.json');
+    if (!p.builtin && fs.existsSync(prev)) {
+      try { prevVersion = JSON.parse(fs.readFileSync(prev, 'utf8')).manifest.version; } catch (_) {}
+    }
+    return { id: p.id, name: p.name, version: p.version, enabled: p.enabled !== false, builtin: !!p.builtin, prevVersion };
+  };
+  ipcMain.handle('diceCore:pluginsList', () => ({ ok: true, items: pluginHost.list().map(pluginRow) }));
+  ipcMain.handle('diceCore:pluginsGet', (e, id) => {
+    const p = pluginHost.get(String(id || ''));
+    return p ? { ok: true, pkg: p } : { ok: false, error: 'NOT_FOUND: ' + id };
+  });
+  ipcMain.handle('diceCore:pluginsToggle', (e, id, enabled) => {
+    const r = enabled ? pluginHost.enable(String(id || '')) : pluginHost.disable(String(id || ''));
+    return { ok: r.ok, error: r.error || null, id };
+  });
+  ipcMain.handle('diceCore:pluginsSaveJson', (e, id, jsonText) => {
+    let pkg;
+    try { pkg = JSON.parse(String(jsonText || '')); }
+    catch (err) { return { ok: false, errors: ['JSON 解析失败：' + err.message] }; }
+    const v = validatePlugin(pkg);
+    if (!v.ok) return { ok: false, errors: v.errors.map(x => x.msg) };
+    const r = pluginHost.install(pkg);              // 同 id 覆盖自动备份 <id>.prev.json
+    return r.ok ? { ok: true, id: r.id, version: r.version } : { ok: false, errors: [r.error] };
+  });
+  ipcMain.handle('diceCore:pluginsRollback', (e, id) => pluginHost.rollback(String(id || '')));
+  ipcMain.handle('diceCore:pluginsExport', (e, id) => {
+    const p = pluginHost.get(String(id || ''));
+    if (!p) return { ok: false, error: 'NOT_FOUND: ' + id };
+    return { ok: true, id: p.manifest.id, json: JSON.stringify(p, null, 2) };
   });
 
   /* ---- 骰娘（引擎托管）---- 状态 / 启动 / 停止 / 重启 / 定位内核 / 数据接口 */

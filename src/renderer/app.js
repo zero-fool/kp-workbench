@@ -6346,7 +6346,7 @@
   }
 
   /* ========== 骰娘 · 连 QQ（引擎托管） ========== */
-  const _diceHost = { refreshing: false, timer: null, status: null, lastEvent: 0, mode: null, conns: null, qrImg: '', qrTip: '', qrConnId: null, qrHintAt: 0 };
+  const _diceHost = { refreshing: false, timer: null, status: null, lastEvent: 0, mode: null, conns: null, qrImg: '', qrTip: '', qrConnId: null, qrHintAt: 0, plugins: [] };
   const DH_STATE = {
     stopped: ['stopped', '已停止', 'dim'],
     starting: ['starting', '启动中…', 'run'],
@@ -7175,7 +7175,7 @@
   }
   function renderDiceWork() {
     const html = `<div class="page-title"><h2>骰娘工作台</h2>
-      <span class="hint">连接中心 · 指令日志 · 文案与人设 · 测试通道，端到端指令联调主战场</span></div>
+      <span class="hint">连接中心 · 指令日志 · 文案与人设 · 插件工坊 · 测试通道，端到端指令联调主战场</span></div>
       <div class="dhgrid" style="grid-template-columns:1fr 1fr">
         <div class="dh-card"><div class="dh-head"><b>🔌 连接中心（分区 2）</b><span class="grow"></span><button class="ghost mini" id="dwRefreshNet">🔄 刷新</button></div>
           <div id="dice-conn-center" class="dice-conn-center"></div>
@@ -7190,17 +7190,23 @@
           <button class="ghost mini" id="dwExportReply">⬇ 导出</button><button class="ghost mini" id="dwSaveReply">💾 保存</button></div>
           <div id="dice-reply-editor" class="dice-reply-editor"></div>
           <div class="dh-note">直接编辑人设名/风格/前缀与各指令文案，保存后即时生效，测试通道下一条指令即用新文案。</div></div>
-        <div class="dh-card"><div class="dh-head"><b>🧪 测试通道聊天窗（分区 6）</b><span class="grow"></span></div>
-          <div id="dice-sim-chat" class="dice-chat"></div>
-          <div class="dice-chat-input"><input id="dice-sim-input" placeholder="输入指令，如 .jrrp / .sign / .drew / .r1d20 / .admin list"><button id="dice-sim-send">发送</button></div>
-          <div class="dh-note">不经真实 QQ：在本应用内模拟玩家身份，构造消息进中枢，回显气泡并写入指令日志。</div></div>
-      </div>`;
+        <div class="dh-card"><div class="dh-head"><b>🧩 插件工坊（分区 5）</b><span class="grow"></span><span id="dwPlgMeta" class="hint">…</span>
+          <button class="ghost mini" id="dwRefreshPlg">🔄 刷新</button></div>
+          <div id="dice-zone-workshop" class="dice-zone-workshop"></div>
+          <div class="dh-note">内置三套规则与用户插件统一管理：启停即时生效、编辑保存过校验器、回滚一键还原、导出分享。</div></div>
+      </div>
+      <div class="dh-card" style="margin-top:14px"><div class="dh-head"><b>🧪 测试通道聊天窗（分区 6）</b><span class="grow"></span></div>
+        <div id="dice-sim-chat" class="dice-chat"></div>
+        <div class="dice-chat-input"><input id="dice-sim-input" placeholder="输入指令，如 .jrrp / .sign / .drew / .r1d20 / .admin list"><button id="dice-sim-send">发送</button></div>
+        <div class="dh-note">不经真实 QQ：在本应用内模拟玩家身份，构造消息进中枢，回显气泡并写入指令日志。</div></div>
+    `;
     const el = q('content'); el.innerHTML = html;
     _dw.simMsgs = []; _dw.logPanel = null;
     if (!dwApi()) { toast('当前环境未暴露骰娘工作台接口', 'err'); return; }
     refreshConnCenter();
     refreshCmdLog();
     refreshReplyEditor();
+    dhRenderWorkshop();
     drawSimChat();
     bindSimChat();
     const on = (id, cb) => { const b = document.getElementById(id); if (b) b.onclick = cb; };
@@ -7209,6 +7215,66 @@
     on('dwExportLog', exportCmdLog);
     on('dwSaveReply', saveReply);
     on('dwExportReply', exportReply);
+    on('dwRefreshPlg', dhRenderWorkshop);
+  }
+
+  /* ---------- 骰娘工作台：分区 5 插件工坊 ---------- */
+  async function dhRenderWorkshop() {
+    const box = q('dice-zone-workshop');
+    if (!box) return;
+    const api = window.diceCore && window.diceCore.plugins;
+    if (!api) { box.innerHTML = '<div class="hint">插件工坊接口未就绪（diceCore.plugins）</div>'; return; }
+    const r = await api.list();
+    if (!r || !r.ok) { box.innerHTML = '<div class="hint">插件列表读取失败：' + ((r && r.error) || '未知') + '</div>'; return; }
+    _diceHost.plugins = r.items;
+    box.innerHTML = DiceUI.pluginListHTML(r.items);
+    const meta = q('dwPlgMeta');
+    if (meta) meta.textContent = '共 ' + r.items.length + ' 个 · ' + r.items.filter(x => x.enabled).length + ' 启用';
+    bindWorkshop(box);
+  }
+  function bindWorkshop(box) {
+    box.querySelectorAll('[data-act]').forEach(btn => {
+      btn.onclick = () => workshopAct(btn.dataset.act, btn.dataset.plg, btn);
+    });
+  }
+  async function workshopAct(act, id, btn) {
+    const api = window.diceCore && window.diceCore.plugins;
+    if (!api) return;
+    const box = q('dice-zone-workshop');
+    if (!box) return;
+    if (act === 'toggle') {
+      const r = await api.toggle(id, !!btn.checked);
+      if (!r || !r.ok) toast('启停失败：' + ((r && r.error) || '未知'), 'err');
+      else toast(btn.checked ? '已启用「' + id + '」' : '已停用「' + id + '」', 'ok');
+    } else if (act === 'edit') {
+      const r = await api.get(id);
+      if (r && r.ok) { box.innerHTML = DiceUI.pluginEditorHTML(r.pkg); bindWorkshop(box); return; }
+      toast('读取插件失败：' + ((r && r.error) || '未知'), 'err');
+    } else if (act === 'save-edit') {
+      const ta = box.querySelector('.plg-editor-text');
+      const r = await api.saveJson(id, ta ? ta.value : '');
+      if (!r || !r.ok) {
+        box.innerHTML = '<div class="plg-editor"><div class="plg-editor-bar">保存失败：' +
+          ((r && (r.errors || [r.error])) || ['未知']).join('；') +
+          '</div><button class="btn sm" data-act="cancel-edit" data-plg="' + esc(id) + '">返回列表</button></div>';
+        bindWorkshop(box);
+        return;
+      }
+      toast('已保存：' + r.id + '@' + r.version + '（旧版已备份，可回滚）', 'ok');
+    } else if (act === 'rollback') {
+      const cur = (_diceHost.plugins || []).find(p => p.id === id);
+      const label = cur && DiceUI.pluginRollbackLabel(cur);
+      if (!label) { dhRenderWorkshop(); return; }
+      if (!(await appConfirm('回滚插件', label))) { dhRenderWorkshop(); return; }
+      const r = await api.rollback(id);
+      if (!r || !r.ok) toast('回滚失败：' + ((r && r.error) || '未知'), 'err');
+      else toast('已回滚到上一版本', 'ok');
+    } else if (act === 'export') {
+      const r = await api.export(id);
+      if (r && r.ok) { const s = await window.api.saveText(r.id + '.json', r.json); if (!s || !s.ok) toast('导出失败', 'err'); else toast('已导出 ' + r.id + '.json', 'ok'); }
+      else toast('导出失败：' + ((r && r.error) || '未知'), 'err');
+    }
+    dhRenderWorkshop();
   }
 
   /* =============== 界面舒适度优化（2.8.0）：A1/A2/B1/B2 =============== */

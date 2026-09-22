@@ -1052,3 +1052,21 @@ button.ghost.small-secondary{opacity:.85}
 .dice-bubble-bot{align-self:flex-start;background:var(--card2);color:var(--ink);border-radius:10px 10px 10px 2px;padding:6px 10px;max-width:85%;word-break:break-word}
 .dice-bubble p{margin:0;font-size:13px;white-space:pre-wrap}
 .dice-empty{color:var(--ink-faint);font-size:12px;padding:14px;text-align:center}
+
+/* 分区 5 插件工坊 */
+.dice-zone-workshop{min-height:60px}
+.plg-list{display:flex;flex-direction:column;gap:10px}
+.plg-row{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px}
+.plg-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.plg-head b{color:var(--ink)}
+.plg-head i{color:var(--ink-faint);font-style:normal;font-size:12px}
+.plg-tag{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--panel2);color:var(--ink-soft)}
+.plg-tag.plg-builtin{background:var(--accent);color:var(--bg)}
+.plg-toggle{margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--ink-soft);font-size:13px}
+.plg-warn{margin-top:6px;color:var(--warn);font-size:12px}
+.plg-editor{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:10px}
+.plg-editor-bar{color:var(--ink-soft);margin-bottom:8px}
+.plg-editor-text{width:100%;min-height:280px;background:var(--bg2);color:var(--ink);border:1px solid var(--line);border-radius:8px;font:12px/1.5 var(--font);padding:8px;resize:vertical}
+.plg-editor-actions{margin-top:8px;display:flex;gap:8px}
+.btn.sm{padding:3px 10px;font-size:12px}
+.btn.sm.primary{background:var(--accent);color:var(--bg)}

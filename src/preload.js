@@ -13,6 +13,15 @@ const diceCore = {
   makeRng(seed) {
     const r = new diceCoreExpr.Rng(seed);
     return { int: (a, b) => r.int(a, b), pick: (arr) => r.pick(arr) };
+  },
+  /* 插件工坊（分区 5）：列表/启停/编辑 JSON/回滚/导出，经主进程 PluginHost */
+  plugins: {
+    list: () => ipcRenderer.invoke('diceCore:pluginsList'),
+    get: (id) => ipcRenderer.invoke('diceCore:pluginsGet', id),
+    toggle: (id, enabled) => ipcRenderer.invoke('diceCore:pluginsToggle', id, enabled),
+    saveJson: (id, jsonText) => ipcRenderer.invoke('diceCore:pluginsSaveJson', id, jsonText),
+    rollback: (id) => ipcRenderer.invoke('diceCore:pluginsRollback', id),
+    export: (id) => ipcRenderer.invoke('diceCore:pluginsExport', id)
   }
 };
 
