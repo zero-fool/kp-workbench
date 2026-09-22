@@ -1,0 +1,11 @@
+'use strict';
+/* brain/cmd：指令①核心组模块装配（r/rh/ra/rd/st/help）。require 即完成注册。 */
+
+require('./r');
+require('./rh');
+require('./ra');
+require('./rd');
+require('./st');
+require('./help');
+
+module.exports = { core: ['r', 'rh', 'ra', 'rd', 'st', 'help'] };
