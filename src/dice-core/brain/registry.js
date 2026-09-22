@@ -18,6 +18,7 @@ function registerCmd(cmd) {
     group: cmd.group || 'core',
     handle: cmd.handle
   };
+  if (typeof cmd.handleTrigger === 'function') c.handleTrigger = cmd.handleTrigger;
   commands.set(cmd.name, c);
   for (const a of c.alias) commands.set(a, c);
   return c;

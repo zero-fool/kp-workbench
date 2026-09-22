@@ -15,6 +15,7 @@ function newSession(id) {
     bind: null,      // 当前绑定人物卡名
     logs: [],        // 投骰记录：{id,t,expr,seed,detail,total,rule,hidden}
     users: {},       // 签到/情趣：{ id -> { days, favor, lastDate } }
+    customs: {},     // 自定义指令：{ 触发词 -> 回复模板 }
     settings: { prefix: '.', fullwidth: true },
     rngSeed: 'session:' + id,
     rngCounter: 0

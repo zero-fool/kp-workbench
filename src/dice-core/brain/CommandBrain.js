@@ -69,29 +69,28 @@ class CommandBrain {
     const parsed = parseCommand(messageIn.text, { prefix: '.', fullwidth: true });
     if (!parsed) return [];
     const session = this.sessions.getSession(sessionIdOf(messageIn));
+    const reply = (text) => ({
+      sessionId: session.id,
+      segments: [{ type: 'text', text }],
+      at: messageIn.user && messageIn.user.id
+    });
+    const ctx = makeContext(messageIn, session, this);
+    // 自定义触发词短路：命中优先于内置指令，但不覆盖内置指令（registered trigger ≠ builtin）
+    const customCmd = getCommand('custom');
+    if (customCmd && typeof customCmd.handleTrigger === 'function') {
+      const hit = customCmd.handleTrigger(ctx, parsed.name);
+      if (hit) return [reply(hit.text)];
+    }
     const cmd = getCommand(parsed.name);
     if (!cmd) {
-      return [{
-        sessionId: session.id,
-        segments: [{ type: 'text', text: `没有「${parsed.name}」这条指令。发送 .help 查看可用指令。` }],
-        at: messageIn.user && messageIn.user.id
-      }];
+      return [reply(`没有「${parsed.name}」这条指令。发送 .help 查看可用指令。`)];
     }
-    const ctx = makeContext(messageIn, session, this);
     try {
       const out = cmd.handle(ctx, parsed.args);
       const text = out.segments ? out.segments.map(s => s.text).join('') : out.text;
-      return [{
-        sessionId: session.id,
-        segments: [{ type: 'text', text }],
-        at: messageIn.user && messageIn.user.id
-      }];
+      return [reply(text)];
     } catch (err) {
-      return [{
-        sessionId: session.id,
-        segments: [{ type: 'text', text: friendlyError(err) }],
-        at: messageIn.user && messageIn.user.id
-      }];
+      return [reply(friendlyError(err))];
     }
   }
 }
