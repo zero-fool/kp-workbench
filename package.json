@@ -10,7 +10,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test \"tests/**/*.test.js\" && node tools/regress.test.js",
-    "verify": "node tools/wiring-audit.js && node tools/regress.test.js",
+    "verify": "node tools/wiring-audit.js && node tools/regress.test.js && node tools/dice-regression.js",
     "bench": "node tools/perf-bench.js",
     "build": "npm run build:installer",
     "build:installer": "cross-env RELEASE_TYPE=安装版 electron-builder --win nsis --publish never",

@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const { CommandBrain } = require('../../src/dice-core/brain/CommandBrain');
 const { createMemoryStore, createMemoryWorkspace } = require('../../src/dice-core/ports');
 require('../../src/dice-core/brain/cmd/r');
+require('../../src/dice-core/brain/cmd/rh');
 require('../../src/dice-core/brain/cmd/ra');
 require('../../src/dice-core/brain/cmd/st');
 require('../../src/dice-core/brain/cmd/help');
