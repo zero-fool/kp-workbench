@@ -28,6 +28,7 @@ class TokenKeeper {
     return this.token;
   }
   botToken() { return this.get().then((t) => `QQBot ${t}`); }
+  invalidate() { this.token = null; this.expireAt = 0; }
 }
 
 module.exports = { TokenKeeper, TOKEN_URL };
