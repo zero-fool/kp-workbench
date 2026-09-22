@@ -1,15 +1,27 @@
 'use strict';
-// Task 0 桩：满足 ChannelAdapter 形状；Task 6 将整体替换为真实 QQ 官方客户端实现。
-function stubAdapter(id) {
-  let cb = null;
+// QQ 官方机器人通道：TokenKeeper 令牌管理 + 网关连接（详见 Task 7）；此处为鉴权骨架，start 后持有 keeper
+const { TokenKeeper } = require('./token');
+
+function createQqOfficialAdapter(deps) {
+  const cfg = deps.cfg.qqofficial || {};
+  let state = 'stopped';
+  let lastError = null;
+  let keeper = null;
   return {
-    id,
-    async start() { this._state = 'running'; },
-    async stop() { this._state = 'stopped'; },
-    onInbound(fn) { cb = fn; },
+    id: 'qqofficial',
+    async start() {
+      if (!cfg.appId || !cfg.clientSecret) {
+        lastError = '缺少 appId/clientSecret';
+        throw new Error('缺少 appId/clientSecret');
+      }
+      keeper = new TokenKeeper({ appId: cfg.appId, clientSecret: cfg.clientSecret, fetchImpl: cfg.fetchImpl });
+      state = 'running';
+    },
+    async stop() { state = 'stopped'; },
+    onInbound() {},
     async send() {},
-    status() { return { state: this._state || 'stopped' }; },
-    _getInbound() { return cb; },
+    status() { return { state, lastError }; },
   };
 }
-module.exports = { createQqOfficialAdapter: () => stubAdapter('qqofficial') };
+
+module.exports = { createQqOfficialAdapter };
