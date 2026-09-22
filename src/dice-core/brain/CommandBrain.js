@@ -10,6 +10,7 @@ const { parseCommand } = require('./parser');
 const { createStateStore } = require('./state');
 const { createOfflineAi } = require('../ports');
 const { createReplyRenderer } = require('../reply');
+const { createPermGate } = require('../perm');
 const { DEFAULT_PERSONA, DEFAULT_TEMPLATES } = require('../reply/defaults');
 
 let uidSeq = 0;
@@ -44,15 +45,19 @@ function friendlyError(err) {
 
 function makeContext(msg, session, brain) {
   const rng = new Rng(session.rngSeed + ':' + session.rngCounter++);
-  return {
+  const p = session.perm || { whitelist: [], blacklist: [] };
+  const gate = createPermGate({ whitelist: p.whitelist, blacklist: p.blacklist });
+  const ctx = {
     session,
     sender: msg.user,
-    perm: { role: msg.user.role, level: msg.user.role === 'gm' ? 3 : 1 },
     data: { workspace: brain.workspace, cards: session.cards, state: session },
     rng,
     ai: brain.ai,
     render: brain.renderer.render.bind(brain.renderer)
   };
+  // 权限闸暴露在 ctx.perm：指令内可再查，CommandBrain 分发时已用 manage 拦管理组。
+  ctx.perm = Object.assign(gate, { _ctx: ctx });
+  return ctx;
 }
 
 class CommandBrain {
@@ -84,6 +89,11 @@ class CommandBrain {
     const cmd = getCommand(parsed.name);
     if (!cmd) {
       return [reply(`没有「${parsed.name}」这条指令。发送 .help 查看可用指令。`)];
+    }
+    // 管理组指令统一走权限闸：未通过 manage 则拒绝。
+    if (cmd.group === 'admin' && !ctx.perm.check(ctx.sender, 'manage')) {
+      const denied = ctx.render('admin.denied', { name: (ctx.sender && ctx.sender.name) || '' });
+      return [reply(denied)];
     }
     try {
       const out = cmd.handle(ctx, parsed.args);

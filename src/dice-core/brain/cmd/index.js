@@ -12,5 +12,7 @@ require('./sign');
 require('./drew');
 require('./custom');
 require('./log');
+require('./admin');
+require('./set');
 
-module.exports = { core: ['r', 'rh', 'ra', 'rd', 'st', 'help'], fun: ['jrrp', 'sign', 'drew'], admin: ['custom', 'log'] };
+module.exports = { core: ['r', 'rh', 'ra', 'rd', 'st', 'help'], fun: ['jrrp', 'sign', 'drew'], admin: ['custom', 'log', 'admin', 'set'] };
