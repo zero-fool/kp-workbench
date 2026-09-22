@@ -6,16 +6,56 @@ const { planApiCalls } = require('./api');
 
 function createOnebot11Adapter(deps) {
   const cfg = deps.cfg.onebot11 || {};
+  const mode = cfg.mode === 'client' ? 'client' : 'server';
   let cb = null;
   let server = null;
   let state = 'stopped';
   const conns = new Set();
   const pending = new Map(); // echo -> {resolve, timer}
   let seq = 0;
+  let reconnects = 0;
+  let lastError = null;
+  let clientSock = null;
+  let clientTimer = null;
+  let stopped = false;
+
+  function connectClient() {
+    if (stopped || !cfg.url) return;
+    lastError = null;
+    const url = `${cfg.url}${cfg.url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(cfg.accessToken || '')}`;
+    let sock;
+    try { sock = new WebSocket(url); } catch (err) { lastError = String(err); return; }
+    clientSock = sock;
+    sock.onmessage = (e) => {
+      let obj = null;
+      try { obj = JSON.parse(e.data); } catch { return; }
+      if (obj && obj.echo && pending.has(obj.echo)) {
+        const p = pending.get(obj.echo);
+        clearTimeout(p.timer); pending.delete(obj.echo); p.resolve(obj);
+        return;
+      }
+      const msg = normalizeEvent(obj);
+      if (msg && cb) cb(msg);
+    };
+    sock.onclose = () => {
+      if (stopped) return;
+      reconnects += 1;
+      lastError = 'upstream closed';
+      clientTimer = setTimeout(connectClient, cfg.reconnectMs || 5000); // 断线自动重连
+    };
+    sock.onerror = () => { lastError = 'upstream error'; };
+  }
 
   return {
     id: 'onebot11',
     async start() {
+      if (mode === 'client') {
+        stopped = false;
+        state = 'running';
+        connectClient();
+        return null;
+      }
+      stopped = false;
       server = new WsServer({
         verify(req) {
           if (!cfg.accessToken) return true;
@@ -23,6 +63,8 @@ function createOnebot11Adapter(deps) {
           const bearer = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || '')?.[1];
           return decodeURIComponent(q || '') === cfg.accessToken || bearer === cfg.accessToken;
         },
+        heartbeatSec: cfg.heartbeatSec,
+        deadSec: cfg.deadSec,
       });
       server.onConnection((conn) => {
         // 鉴权在 WsServer 握手阶段已完成（_handshake 读 query/Authorization），此处接收已鉴权连接
@@ -60,6 +102,10 @@ function createOnebot11Adapter(deps) {
       return port;
     },
     async stop() {
+      stopped = true;
+      if (clientTimer) { clearTimeout(clientTimer); clientTimer = null; }
+      if (clientSock && clientSock.readyState === WebSocket.OPEN) clientSock.close();
+      clientSock = null;
       if (server) await server.close();
       conns.clear();
       server = null;
@@ -70,8 +116,12 @@ function createOnebot11Adapter(deps) {
       const calls = planApiCalls(sessionId, reply);
       for (const call of calls) {
         const echo = `m2-${++seq}`;
-        const frame = { action: call.action, params: call.params, echo };
-        for (const c of conns) c.send(JSON.stringify(frame));
+        const frame = JSON.stringify({ action: call.action, params: call.params, echo });
+        if (mode === 'client') {
+          if (clientSock && clientSock.readyState === WebSocket.OPEN) clientSock.send(frame);
+        } else {
+          for (const c of conns) c.send(frame);
+        }
       }
     },
     settle(echo) {
@@ -80,7 +130,9 @@ function createOnebot11Adapter(deps) {
         pending.set(echo, { resolve, timer });
       });
     },
-    status() { return { state, connections: conns.size }; },
+    status() {
+      return { state, connections: conns.size, reconnects, lastError };
+    },
   };
 }
 

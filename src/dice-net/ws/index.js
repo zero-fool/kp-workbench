@@ -6,6 +6,7 @@ const { acceptKey, encodeFrame, decodeFrame } = require('./frame');
 class WsServer {
   constructor(opts = {}) {
     this.conns = new Set(); this._onConnection = null; this.verify = opts.verify || null;
+    this.heartbeatSec = opts.heartbeatSec ?? 15; this.deadSec = opts.deadSec ?? 30;
   }
   onConnection(fn) { this._onConnection = fn; }
   listen(port, host = '127.0.0.1') {
@@ -64,14 +65,21 @@ class WsServer {
         if (!frame) break;
         buf = frame.rest;
         if (frame.opcode === 0x8) { conn.close(); break; }
-        if (frame.opcode === 0x9) { sock.write(encodeFrame(frame.payload, { opcode: 0xA, mask: false })); continue; }
+        if (frame.opcode === 0x9) { conn.lastPong = Date.now(); sock.write(encodeFrame(frame.payload, { opcode: 0xA, mask: false })); continue; }
+        if (frame.opcode === 0xA) { conn.lastPong = Date.now(); continue; }
         if (frame.opcode === 0x1 || frame.opcode === 0x0) {
           const text = frame.payload.toString('utf8');
           if (conn._msgCb) conn._msgCb(text);
         }
       }
     });
-    sock.on('close', () => { this.conns.delete(conn); if (conn._closeCb) conn._closeCb(); });
+    // 心跳保活：定频 ping；超过 deadSec 无 pong 判定失联并清理
+    conn.lastPong = Date.now();
+    const hb = setInterval(() => {
+      if (Date.now() - conn.lastPong > this.deadSec * 1000) { clearInterval(hb); conn.close(); return; }
+      if (!sock.destroyed) sock.write(encodeFrame(Buffer.alloc(0), { opcode: 0x9, mask: false }));
+    }, this.heartbeatSec * 1000);
+    sock.on('close', () => { clearInterval(hb); this.conns.delete(conn); if (conn._closeCb) conn._closeCb(); });
     sock.on('error', () => {});
     if (this._onConnection) this._onConnection(conn);
   }
