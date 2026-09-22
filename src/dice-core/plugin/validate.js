@@ -20,7 +20,7 @@ const ALLOWED = {
 };
 // 与 calc 沙箱求值白名单一致（含 str，见设计规格 6.1 示例）
 const FN_OK = new Set(['if', 'roll', 'round', 'min', 'max', 'floor', 'ceil', 'abs', 'str']);
-const IDENT_OK = new Set(['R', 'true', 'false']); // 其余自由标识符必须命中 cardFields 的 key
+const IDENT_OK = new Set(['R', 'true', 'false', 'raw']); // 其余自由标识符必须命中 cardFields 的 key；raw 为 rules.check 注入的首骰原始值（唯一白名单扩充，见 M3 计划 Task 3 注）
 
 function err(errors, path, code, msg) { errors.push({ path, code, msg: path + ' ' + msg }); }
 
@@ -109,7 +109,9 @@ function validatePlugin(pkg) {
     { err(errors, '$', 'NOT_OBJECT', '插件包必须是对象'); return { ok: false, errors }; }
   if (Object.getPrototypeOf(pkg) !== Object.prototype)
     err(errors, '$.__proto__', 'FORBIDDEN_FIELD', '原型被篡改（__proto__ 污染）');
-  for (const k of Object.keys(pkg)) if (FORBIDDEN_TOP.includes(k)) err(errors, '$.' + k, 'FORBIDDEN_FIELD', '禁止字段');
+  for (const k of Object.keys(pkg))
+    if (FORBIDDEN_TOP.includes(k) || FORBIDDEN_KEYS.includes(k))
+      err(errors, '$.' + k, 'FORBIDDEN_FIELD', '禁止字段');
   const cardKeys = new Set([...IDENT_OK]);
   (Array.isArray(pkg.cardFields) ? pkg.cardFields : []).forEach(f => { if (f && f.key) cardKeys.add(String(f.key)); });
   if (!pkg.manifest || typeof pkg.manifest !== 'object') err(errors, '$.manifest', 'MISSING', '缺少 manifest');

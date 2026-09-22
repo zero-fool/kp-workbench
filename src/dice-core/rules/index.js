@@ -148,7 +148,8 @@ function pluginCheck(plugin, skill, env = {}, rng = Math.random) {
   try { roll = rollExpr(parseExpr(c.expr), R); }
   catch (e) { return { ok: false, error: { path: p + '.expr', code: 'RUNTIME_LIMIT', msg: p + '.expr ' + (e.message || String(e)) } }; }
   const total = typeof roll === 'number' ? roll : roll.total;
-  const vars = Object.assign({}, env, { R: total, roll: total });
+  const rawVal = typeof roll === 'number' ? total : firstDie(roll.detail);
+  const vars = Object.assign({}, env, { R: total, roll: total, raw: rawVal });
   let level = null;
   for (const cc of (c.calc || [])) {
     try {

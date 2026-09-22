@@ -1,0 +1,8 @@
+{ "manifest": { "id": "builtin-general", "name": "通用规则", "version": "1.0.0", "ruleset": "通用", "author": "KP跑团工作台", "minCore": "3.0" },
+  "dice": { "常用骰式": "1d100", "百分骰": "1d100", "四面骰": "1d4", "六面骰": "1d6", "二十面骰": "1d20" },
+  "checks": [ { "name": "敏捷", "expr": "1d100",
+      "levels": ["大成功", "极难成功", "困难成功", "成功", "失败", "大失败"],
+      "calc": [{ "name": "r", "expr": "if(R<=5,'大成功',if(R<=20,'极难成功',if(R<=40,'困难成功',if(R<=60,'成功',if(R<=95,'失败','大失败')))))" }] } ],
+  "cardFields": [{ "key": "敏捷", "label": "敏捷", "type": "number", "default": 50 }],
+  "commands": [],
+  "templates": { "checkResult": "{name} 进行「{skill}」检定：{roll} → {level}" } }

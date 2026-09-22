@@ -1,0 +1,8 @@
+{ "manifest": { "id": "builtin-dnd5e", "name": "龙与地下城 5版", "version": "1.0.0", "ruleset": "DnD 5e", "author": "KP跑团工作台", "minCore": "3.0" },
+  "dice": { "攻击": "1d20", "伤害": "1d8", "先攻": "1d20" },
+  "checks": [ { "name": "察觉", "expr": "1d20",
+      "levels": ["大成功", "极难成功", "困难成功", "成功", "失败", "大失败"],
+      "calc": [{ "name": "r", "expr": "if(raw+perception>=20,'大成功',if(raw+perception<=1,'大失败',if(raw+perception>=10,'成功','失败')))" }] } ],
+  "cardFields": [{ "key": "perception", "label": "感知调整", "type": "number", "default": 3 }],
+  "commands": [],
+  "templates": { "checkResult": "{name} 的{skill}检定：{roll} → {level}" } }
