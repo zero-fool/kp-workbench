@@ -43,18 +43,27 @@ function friendlyError(err) {
   return (err && err.message) ? err.message : String(err);
 }
 
-function makeContext(msg, session, brain) {
+function makeContext(msg, session, brain, extra) {
   const rng = new Rng(session.rngSeed + ':' + session.rngCounter++);
   const p = session.perm || { whitelist: [], blacklist: [] };
   const gate = createPermGate({ whitelist: p.whitelist, blacklist: p.blacklist });
   const ctx = {
     session,
     sender: msg.user,
-    data: { workspace: brain.workspace, cards: session.cards, state: session },
+    data: Object.assign({ workspace: brain.workspace, cards: session.cards, state: session }, extra || {}),
     rng,
     ai: brain.ai,
-    render: brain.renderer.render.bind(brain.renderer)
+    render: brain.renderer.render.bind(brain.renderer),
+    signal: null,
+    aiTimeoutMs: 0
   };
+  // 测试通道/主进程注入：rng/ai/signal/aiTimeoutMs 可经 ctxData 覆盖（Task 8 契约）
+  if (extra) {
+    if (extra.rng) ctx.rng = extra.rng;
+    if (extra.ai !== undefined) ctx.ai = extra.ai;
+    if (extra.signal) ctx.signal = extra.signal;
+    if (extra.aiTimeoutMs) ctx.aiTimeoutMs = extra.aiTimeoutMs;
+  }
   // 权限闸暴露在 ctx.perm：指令内可再查，CommandBrain 分发时已用 manage 拦管理组。
   ctx.perm = Object.assign(gate, { _ctx: ctx });
   return ctx;
@@ -67,19 +76,25 @@ class CommandBrain {
     this.sessions = o.sessions || createStateStore({ store: this.store });
     this.workspace = o.workspace || null;
     this.ai = o.ai || createOfflineAi();
-    this.renderer = o.renderer || createReplyRenderer({ persona: DEFAULT_PERSONA, templates: DEFAULT_TEMPLATES });
+    this.renderer = o.renderer
+      || (typeof o.render === 'function' ? { render: o.render } : null)
+      || createReplyRenderer({ persona: DEFAULT_PERSONA, templates: DEFAULT_TEMPLATES });
   }
   known(name) { return !!getCommand(name); }
-  handle(messageIn) {
+  handle(messageIn, ctxData) {
     const parsed = parseCommand(messageIn.text, { prefix: '.', fullwidth: true });
     if (!parsed) return [];
     const session = this.sessions.getSession(sessionIdOf(messageIn));
+    // 测试通道注入会话状态：ctxData.state.sessions[<会话id>] 覆盖该会话字段（开关位等）
+    if (ctxData && ctxData.state && ctxData.state.sessions && ctxData.state.sessions[session.id]) {
+      Object.assign(session, ctxData.state.sessions[session.id]);
+    }
     const reply = (text) => ({
       sessionId: session.id,
       segments: [{ type: 'text', text }],
       at: messageIn.user && messageIn.user.id
     });
-    const ctx = makeContext(messageIn, session, this);
+    const ctx = makeContext(messageIn, session, this, ctxData);
     // 自定义触发词短路：命中优先于内置指令，但不覆盖内置指令（registered trigger ≠ builtin）
     const customCmd = getCommand('custom');
     if (customCmd && typeof customCmd.handleTrigger === 'function') {
@@ -97,6 +112,10 @@ class CommandBrain {
     }
     try {
       const out = cmd.handle(ctx, parsed.args);
+      if (out && typeof out.then === 'function') {
+        return out.then(r => [reply(r.segments ? r.segments.map(s => s.text).join('') : r.text)])
+          .catch(err => [reply(friendlyError(err))]);
+      }
       const text = out.segments ? out.segments.map(s => s.text).join('') : out.text;
       return [reply(text)];
     } catch (err) {
