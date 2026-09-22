@@ -1,0 +1,23 @@
+{
+  "manifest": { "id": "coc7", "name": "CoC 7th", "version": "1.0.0", "ruleset": "克苏鲁的呼唤 7 版", "author": "KP跑团工作台", "minCore": "3.0" },
+  "dice": { "常用骰式": "1d100", "取优": "3d6kh1" },
+  "checks": [
+    {
+      "name": "技能检定",
+      "expr": "1d100",
+      "levels": ["大成功", "极限成功", "极难成功", "困难成功", "成功", "失败", "大失败"],
+      "calc": [
+        {
+          "name": "分档",
+          "expr": "if(R==1 or R<=ceil(skill/20),'大成功', if(R>=96,'大失败', if(L=='limit', if(R<=floor(skill/10),'极限成功','失败'), if(L=='extreme', if(R<=floor(skill/5),'极难成功','失败'), if(L=='hard', if(R<=floor(skill/2),'困难成功','失败'), if(R<=floor(skill/5),'极难成功', if(R<=floor(skill/2),'困难成功', if(R<=skill,'成功','失败'))))))))"
+        }
+      ]
+    }
+  ],
+  "cardFields": [
+    { "key": "侦查", "label": "侦查", "type": "number", "default": 25 },
+    { "key": "理智", "label": "理智 SAN", "type": "number", "default": 50 }
+  ],
+  "commands": [],
+  "templates": { "checkResult": "{name} 做出「{skill}」检定：掷出 {roll} → {level}" }
+}
