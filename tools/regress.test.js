@@ -135,10 +135,20 @@ check('全源码不再有裸调用 confirm(（删除类按钮缺陷根因；appC
 
 console.log('\n[T7] 骰娘按钮：bindDice 绑定 CoC/DnD 检定，引擎函数独立、无同名递归（v1.8.1 缺陷回归）');
 const parseNdz = load('parseNdz');
-const rollDice = load('rollDice', { parseNdz });
+/* M3 收口：渲染层 rollDice/cocJudge/dndJudge 经 window.diceCore（preload 注入）。测试时用自研内核真实引擎替代。 */
+const kExpr = require(path.join(__dirname, '..', 'src', 'dice-core', 'expr'));
+const kRules = require(path.join(__dirname, '..', 'src', 'dice-core', 'rules'));
+global.window = { diceCore: {
+  parseExpr: kExpr.parseExpr,
+  roll: kExpr.rollExpr,
+  check: kRules.check,
+  makeRng: (seed) => new kExpr.Rng(seed)
+} };
+let rollSeedN = 0;
+const rollDice = load('rollDice', { parseNdz, nextDiceSeed: () => 'h' + (++rollSeedN) });
 const bindDice = load('bindDice');
 const cocJudge = load('cocJudge', { rollDice });
-const dndJudgeFn = load('dndJudge');
+const dndJudgeFn = load('dndJudge', { rollDice });
 check('cocJudge 引擎存在', () => cocJudge ? true : '未找到');
 check('dndJudge 引擎存在', () => dndJudgeFn ? true : '未找到');
 check('bindDice 委托为 #cocJudgeBtn 绑定 cocJudgeBtn()（常驻 #content 事件委托）', () => {
@@ -212,10 +222,10 @@ check('开团向导：wizardHTML 定义 5 步（建档案→配AI→素材→拆
 });
 check('开团向导：可折叠（toggleWizard 持久化 layout.wizardHidden）且渲染进总览', () =>
   (/function\s+toggleWizard/.test(src) && /wizardHidden/.test(src) && /wizardHTML\(\)/.test(src) && /🚀\s*开团向导/.test(src)) ? true : '向导折叠/渲染缺失');
-check('版本与变更日志：2.10.1 已记录本次改动，且旧版本条目仍在', () => {
+check('版本与变更日志：3.0.0 已记录本次改动，且旧版本条目仍在', () => {
   const i = src.indexOf('const CHANGELOG');
   const cl = src.slice(i, i + 26000);
-  return (/APP_VERSION\s*=\s*'2\.10\.1'/.test(src)
+  return (/APP_VERSION\s*=\s*'3\.0\.0'/.test(src)
     && /骰娘内核/.test(cl) && /\/kp 数据桥端口/.test(cl) && /自动拉起内置骰娘内核/.test(cl) && /encNormOrder 归一化/.test(cl) && /轮次错乱/.test(cl)
     && /按钮高亮态未同步/.test(cl) && /保留未保存输入/.test(cl)
     && /存活\/倒下统计更严谨/.test(cl) && /回合顺序渲染前自动过滤失效 id/.test(cl) && /Ctrl\+E 进入临场战斗/.test(cl) && /未使用的热力图构建调用/.test(cl)
@@ -302,8 +312,14 @@ function loadPreload(invokeImpl) {
     },
     webUtils: { getPathForFile: () => '' }
   };
-  new Function('require', 'module', 'exports', preloadSrc)((m) => (m === 'electron' ? stub : require(m)), {}, {});
-  return { api, events };
+  /* preload 相对 require('./dice-core/...') 需相对 src/ 解析（M3 收口后自研内核都在 src/ 下） */
+  const SRC = path.join(__dirname, '..', 'src');
+  const res = new Function('require', 'module', 'exports', preloadSrc)((m) => {
+    if (m === 'electron') return stub;
+    const p = m.startsWith('.') ? path.join(SRC, m) : require.resolve(m);
+    return require(p);
+  }, {}, {});
+  return { api, events, res };
 }
 check('preload 可加载并暴露 AI 接口（含守卫）', () => {
   const { api } = loadPreload();
@@ -1527,6 +1543,39 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
   });
   check('D3 渲染层：帮助中心补全新快捷键说明', () => {
     return /Ctrl\+E/.test(src) && /Ctrl\+T/.test(src) && /帮助中心/.test(src) ? true : '帮助中心快捷键说明缺失';
+  });
+
+  console.log('\n[M3] 自研骰娘内核：退役清零 + 新接口收口 + 版本 3.0.0');
+  const M3pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const M3cl = src.slice(src.indexOf('const CHANGELOG'), src.indexOf('const CHANGELOG') + 4000);
+  const M3pre = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'preload.js'), 'utf8');
+  const M3main = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.js'), 'utf8');
+  check('M3 版本号：package.json version=3.0.0 且界面 APP_VERSION 同步', () => {
+    return (M3pkg.version === '3.0.0' && /APP_VERSION\s*=\s*'3\.0\.0'/.test(src)) ? true : '版本未同步到 3.0.0';
+  });
+  check('M3 CHANGELOG：含 v3.0 条目（骰娘工作台/插件工坊/AI 生成向导/退役/70MB）', () => {
+    return (/version:\s*'3\.0\.0'/.test(M3cl) && /插件工坊/.test(M3cl) && /AI 生成向导/.test(M3cl) && /退役/.test(M3cl) && /70MB/.test(M3cl)) ? true : 'CHANGELOG 缺 v3.0 条目';
+  });
+  check('M3 旧内核零残留：resources/dice-next 与 bridge/kp-workspace-bridge.js 已删除', () => {
+    return fs.existsSync(path.join(__dirname, '..', 'resources', 'dice-next'))
+      ? 'resources/dice-next 仍存在'
+      : fs.existsSync(path.join(__dirname, '..', 'bridge', 'kp-workspace-bridge.js')) ? 'bridge 桥插件仍存在' : true;
+  });
+  check('M3 preload 收口：只剩 diceCore.*，main.js 无 dice:* IPC', () => {
+    return (/^\s{2}dice\s*:\s*\{/m.test(M3pre) ? 'preload 仍暴露旧 dice:' : true)
+      && (/ipcMain\.handle\(\s*'dice:/.test(M3main) ? 'main.js 仍有 dice:* handler' : true);
+  });
+  check('M3 分区5：插件工坊与 AI 向导挂载点在册', () => {
+    return (/id="dice-zone-workshop"/.test(src) && /id="dice-zone-wizard"/.test(src)) ? true : '分区5 挂载点缺失';
+  });
+  check('M3 零第三方扫描联动：scanThirdparty 全绿', () => {
+    const { scanThirdparty } = require('./scan-thirdparty');
+    const r = scanThirdparty();
+    return r.ok ? true : '零第三方扫描: ' + r.bad + ' 处残留';
+  });
+  check('M3 指令④回归：dice-regression.js 含 kp/ai 用例', () => {
+    const reg = fs.readFileSync(path.join(__dirname, '..', 'tools', 'dice-regression.js'), 'utf8');
+    return (/name: 'kp-list'/.test(reg) && /name: 'ai-judge'/.test(reg)) ? true : '缺指令④回归用例';
   });
 
   console.log('\n[回归测试汇总] GREEN ' + pass + ' · RED ' + fail);

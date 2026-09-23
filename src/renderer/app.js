@@ -12,8 +12,14 @@
   const KINDS = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
   const TPL_KINDS = ['pcs', 'npcs', 'mobs']; // 仅「卡片类」实体支持切换模板（模板改变显示字段集）
   const THEMES = [['ember', '残火纪·暗黑'], ['parchment', '羊皮纸手账'], ['lite', '极简浅色'], ['neon', '赛博霓虹'], ['dusk', '暮光护眼']];
-  const APP_VERSION = '2.10.1';
+  const APP_VERSION = '3.0.0';
   const CHANGELOG = [
+    { version: '3.0.0', date: '2026-09-23', type: '正式版', items: [
+      '新增：骰娘板块升级为「骰娘工作台」——六分区（投骰台 / 连接中心 / 指令日志 / 文案与人设 / 插件工坊 / 测试通道），本地投骰与群指令共用同一套自研 dice-core 引擎（规则插件对两端同时生效）。',
+      '新增：插件工坊 + AI 生成向导——喂规则文本 → 生成 → 测试通道试跑 → 确认安装（两道闸，装坏可一键回滚，可导出分享）。',
+      '新增：.kp 指令原生读写工作台数据并与界面实时双向刷新；.ai 指令支持对话与定向判定（可取消、超时兜底，掷骰永不依赖 AI）。',
+      '优化：彻底退役旧掷骰引擎与 HTTP 桥插件，打包体积约 206MB → 约 70MB，零第三方可执行文件。'
+    ]},
     { version: '2.10.1', date: '2026-09-21', type: '测试版', items: [
       '优化：清理应用内对外展示的第三方骰娘软件标识，统一为本应用自有「骰娘内核」表述。',
       '加固：修复 /kp 数据桥端口选择可能越过自动发现范围导致 .kp 指令偶发失联的问题——端口现限定在发现集内按真实可用性探测，监听失败不再悬挂。',
@@ -29,7 +35,7 @@
       '新增：连 QQ（内嵌骰娘内核）——可释放/启停/重启内核，直接在应用内添加官方机器人 / 个人账号并扫码登录；内核仅支持 Windows。',
       '新增：骰娘板块内嵌完整本地投骰面板——规则库（通用 / CoC 7th / DnD 5e）、自定义与快捷投掷、CoC/DnD 定向检定、AI 定向判定、人物卡 Excel 导入、独立 AI 端口、最近记录，与原「本地掷骰」视图功能完全一致，全部可正常运行且离线可玩。',
       '新增：独立 AI 端口（骰娘专用）——在本板块内配置一个 OpenAI 兼容端点（如本地 Ollama http://127.0.0.1:11434/v1），启用后 AI 定向判定独立走此端口，不再依赖工作台全局 AI 配置；提供保存与连接测试。',
-      '优化：移除桥插件——骰娘暂不内置 kp-workspace-bridge.js（后续版本将直接整合到软件内部），原 .kp 指令数据桥接文案一并移除',
+      '优化：移除桥插件——原 .kp 指令数据桥接改由应用内原生实现',
       '优化：原「本地掷骰」视图保留，与「骰娘」板块共用同一套投骰面板与记录，互为一致'
     ]},
     { version: '2.9.4', date: '2026-09-19', type: '正式版', items: [
@@ -6346,7 +6352,7 @@
   }
 
   /* ========== 骰娘 · 连 QQ（引擎托管） ========== */
-  const _diceHost = { refreshing: false, timer: null, status: null, lastEvent: 0, mode: null, conns: null, qrImg: '', qrTip: '', qrConnId: null, qrHintAt: 0, plugins: [] };
+  const _diceHost = { refreshing: false, timer: null, status: null, lastEvent: 0, mode: null, conns: null, qrImg: '', qrTip: '', qrConnId: null, qrHintAt: 0, plugins: [], wizard: { step: 'input' }, wizardDraftId: null, wizardToken: null };
   const DH_STATE = {
     stopped: ['stopped', '已停止', 'dim'],
     starting: ['starting', '启动中…', 'run'],
@@ -6366,24 +6372,14 @@
   function dhGlobalNow() {
     return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }
-  function dhCopy(text, okMsg) {
-    try {
-      const a = document.createElement('textarea');
-      a.value = text || '';
-      document.body.appendChild(a); a.select();
-      document.execCommand('copy'); document.body.removeChild(a);
-      toast(okMsg || '已复制', 'ok');
-    } catch (_) { toast('复制失败，请手动复制', ''); }
-  }
   async function dhRefresh(silent) {
     if (_diceHost.refreshing) return;
     _diceHost.refreshing = true;
     try {
-      if (!window.api || !window.api.dice) return;
-      const st = await window.api.dice.status();
+      if (!window.api || !window.api.diceCore) return;
+      const st = await window.api.diceCore.engine.status();
       _diceHost.status = st;
       dhLivePaint();
-      if (st.state === 'running') qqRefresh(true); // 引擎在线时顺带刷新 QQ 连接状态（静默）
     } catch (_) { _diceHost.lastEvent = Date.now(); dhLivePaint(); }
     finally { _diceHost.refreshing = false; }
   }
@@ -6395,57 +6391,42 @@
       chip.className = 'dh-chip ' + cls;
       chip.innerHTML = `<i class="dh-dot ${cls}"></i>${esc(label)}`;
     }
-    const hb = q('dhHb');
-    if (hb && _diceHost.status) {
-      const st = _diceHost.status;
-      hb.textContent = '心跳：' + (st.heartbeatFresh ? '在线' : '无上报') + ' · ' + (st.heartbeatAt ? dhClock(st.heartbeatAt) : '—');
-    }
   }
   function dhStartPoll() {
     if (_diceHost.timer) return;
-    _diceHost.timer = setInterval(() => { if (S.view === 'dicehost' && window.api && window.api.dice) dhRefresh(true); }, 4000);
+    _diceHost.timer = setInterval(() => { if (S.view === 'dicehost' && window.api && window.api.diceCore) dhRefresh(true); }, 4000);
   }
   function renderDiceHost() {
     dhStartPoll();
     if (!_diceHost._sub) {
       _diceHost._sub = true;
       try {
-        if (window.api && window.api.dice) {
-          window.api.dice.onEvent((v) => { _diceHost.lastEvent = Date.now(); dhRefresh(true); });
-          window.api.dice.onDataChanged((v) => { toast('骰娘已改写工作台数据（' + (v && v.action || '') + '），已同步', 'ok'); });
+        if (window.api && window.api.diceCore) {
+          window.api.diceCore.onEngineEvent((v) => { _diceHost.lastEvent = Date.now(); dhRefresh(true); });
+          window.api.diceCore.onWorkspaceChanged((v) => { toast('骰娘已改写工作台数据（' + (v && v.action || '') + '），已同步', 'ok'); });
         }
       } catch (_) {}
     }
-    const api = !!(window.api && window.api.dice);
+    const api = !!(window.api && window.api.diceCore);
     let html = `<div class="page-title"><h2>骰娘</h2>
-      <span class="hint">连 QQ（内嵌骰娘内核）＋ 本地投骰 / AI 定向判定 / 人物卡，全功能一体</span></div>`;
+      <span class="hint">内嵌骰娘内核 ＋ 本地投骰 / AI 定向判定 / 人物卡 / 插件工坊，全功能一体</span></div>`;
     if (!api) {
       html += `<div class="setcard"><div class="empty">当前环境未暴露骰娘接口（请通过桌面版打开本页面）。</div></div>`;
       contentInner(html); return;
     }
     const st = _diceHost.status || {};
-    const running = st.state === 'running';
-    const hasEng = !!st.hasEngine;
 
     html += `<div class="dhgrid">`;
 
-    /* 左：引擎卡（连 QQ） */
+    /* 左：内核状态（M3：内核内嵌、随应用自动启动，无独立托管进程） */
     html += `<div class="dh-card dh-main">
-      <div class="dh-head"><b>⚠ 连 QQ 引擎</b><span class="grow"></span>
+      <div class="dh-head"><b>🧠 骰娘内核</b><span class="grow"></span>
         <span class="dh-chip ${dhState()[2]}" id="dhStateChip"><i class="dh-dot ${dhState()[2]}"></i>${esc(dhState()[1])}</span></div>
-      <div class="dh-row"><span class="lbl">引擎目录</span><span class="val" title="${esc(st.engineDir || '')}">${esc(st.engineDir || '未释放')}</span></div>
-      <div class="dh-row"><span class="lbl">来源</span><span class="val">${esc(st.sourceDir || '内置/未指定')}</span></div>
-      <div class="dh-row"><span class="lbl">启动时间</span><span class="val" id="dhStartAt">${st.startedAt ? dhClock(st.startedAt) : '—'}</span></div>
-      <div class="dh-row"><span class="lbl">Web 控制台</span><span class="val">${esc(st.webuiUrl || '—')}</span></div>
-      <div class="dh-ctrl">
-        <button onclick="WB.diceStart()" ${running ? 'disabled' : ''}>▶ 启动引擎</button>
-        <button class="ghost" onclick="WB.diceStop()" ${running ? '' : 'disabled'}>■ 停止</button>
-        <button class="ghost" onclick="WB.diceRestart()" ${running ? '' : 'disabled'}>⟳ 重启</button>
-        <button class="ghost" onclick="WB.dicePickSource()" title="选择骰娘内核目录">🗁 定位内核</button>
-        <button class="ghost" onclick="WB.diceOpenWebui()" ${running ? '' : 'disabled'} title="浏览器打开引擎 Web 控制台">🖥 控制台</button>
-      </div>
+      <div class="dh-row"><span class="lbl">引擎</span><span class="val">dice-core（内置 · 随应用运行）</span></div>
+      <div class="dh-row"><span class="lbl">插件</span><span class="val">${st.plugins != null ? st.plugins + ' 个启用' : '—'}</span></div>
+      <div class="dh-row"><span class="lbl">版本</span><span class="val">${esc(st.version || '—')}</span></div>
       ${st.error ? `<div class="dh-err">⚠ ${esc(st.error)}</div>` : ''}
-      <div class="dh-note">连 QQ：内核已随应用内置、打开即自动启动；如需更换可点「定位内核」另选目录 →「启动引擎」。在下方面板<b>直接添加官方机器人 / 个人账号</b>，扫码或填凭据即可完成，全程不出本应用。内核仅支持 Windows。<br><b>若提示「内核被拦截/无法启动」：多为 Windows 安全中心或杀毒软件拦截，按错误提示到「排除项/信任区」放行本应用目录后重试即可</b>。</div>
+      <div class="dh-note">M3 起骰娘内核<b>内嵌于应用</b>，随应用自动运行、无独立托管进程，不再需要单独定位内核目录或启动引擎。下方「本地投骰 / AI / 人物卡」与「分区 5 插件工坊 / AI 生成向导」即为全部功能。</div>
     </div>`;
 
     /* 右：本地掷骰端到端状态 */
@@ -6461,35 +6442,14 @@
       </div>
     </div></div>`;
 
-    /* 数据接口 + 桥插件（.kp 直达工作台数据） */
-    const bp = st.bridgePlugin || {};
-    html += `<div class="dh-card" style="margin-top:14px">
-      <div class="dh-head"><b>🔗 数据接口 ＋ 桥插件（.kp 直达工作台）</b><span class="grow"></span>
-        <span id="dhHb" class="hint">心跳：${st.heartbeatFresh ? '在线' : '无上报'}</span></div>
-      <div class="dh-row"><span class="lbl">接口地址</span><span class="val mono">${esc(st.apiBase || '—')}
-        <button class="ghost mini" onclick="WB.diceCopyApi()">📋 复制</button></span></div>
-      <div class="dh-row"><span class="lbl">写鉴权 Token</span><span class="val mono">${st.token ? esc(st.token.slice(0, 8)) + '…' + esc(st.token.slice(-4)) : '—'}
-        <button class="ghost mini" onclick="WB.diceCopyToken()">📋 复制</button></span></div>
-      <div class="dh-row"><span class="lbl">心跳上报</span><span class="val">${st.heartbeatAt ? dhClock(st.heartbeatAt) : '—'}（${esc(st.heartbeatBot || '—')}）</span></div>
-      <div class="dh-row"><span class="lbl">桥插件</span><span class="val">${bp.installed ? '已装入（v' + esc(bp.version || '?') + '）' + (bp.installedAt ? ' · ' + dhClock(bp.installedAt) : '') : (bp.sourceExists ? '未装入到引擎' : '未找到插件源文件')} ${bp.error ? '<span class="dh-err">' + esc(bp.error) + '</span>' : ''}</span></div>
-      <div class="dh-ctrl">
-        <button class="ghost" onclick="WB.diceTest()" ${running ? '' : 'disabled'} title="检测本地数据接口是否可达">🔍 测试接口</button>
-        <button class="ghost" onclick="WB.diceBridge()" ${hasEng ? '' : 'disabled'} title="把 kp-workspace-bridge.js 重新拷入引擎插件目录">🔄 重新装入插件</button>
-      </div>
-      <div class="dh-note">引擎运行并进其 <b>Web 控制台</b>装载本插件后，QQ 群里即可用 <code>.kp help / .kp list npc / .kp add 怪物 …</code> 等指令<b>直接读写当前档案</b>，界面即时刷新。</div>
-    </div>`;
-
-    /* QQ 接入方式（官方机器人 / 个人账号扫码·密码） */
-    html += qqLoginCardHTML();
-
-    /* 完整掷骰面板（本地功能全套，不连 QQ 也可用） */
+    /* 完整掷骰面板（本地功能全套） */
     html += `<div class="dh-board">${diceBoardHTML('')}</div>`;
 
     /* 说明 */
     html += `<div class="dh-card" style="margin-top:14px"><ol class="dh-help">
-      <li>「综述」：整个骰娘板块分为<b>连 QQ 引擎</b>与<b>本地投骰</b>两半，下表即本地全部功能：规则库（通用/CoC 7th/DnD 5e）、自定义与快捷投掷、定向检定、AI 定向判定、人物卡 Excel、独立 AI 端口、历史记录。</li>
+      <li>「骰娘」板块分为<b>内嵌内核</b>与<b>本地投骰</b>两半：规则库（通用/CoC 7th/DnD 5e）、自定义与快捷投掷、定向检定、AI 定向判定、人物卡 Excel、独立 AI 端口、历史记录。</li>
       <li>独立 AI 端口：在下方「AI 定向判定 - 独立 AI 端口」配置一个 OpenAI 兼容端点（如本地 Ollama），启用后 AI 判定<b>独立走此端口</b>，不依赖工作台全局 AI。</li>
-      <li>本地功能<b>完全离线可玩</b>；只有连 QQ 的进阶接入才需要启动 DiaNext 引擎（Windows）。</li>
+      <li>群内 <code>.kp</code> 指令读写工作台数据、<code>.ai</code> 指令定向判定均由内嵌内核处理，界面实时刷新。全部本地功能<b>完全离线可玩</b>。</li>
     </ol></div>`;
 
     contentInner(html);
@@ -6501,262 +6461,6 @@
     const p = (S.settings.dice && S.settings.dice.aiPort) || {};
     const g = !!(S.settings.ai || {}).apiKey;
     return (S.settings.dice && S.settings.dice.ai !== false && g) || (!!p.enabled && !!p.base);
-  }
-
-  /* —— QQ 接入卡片：内核原生 API（连接列表/二维码/官方机器人/个人账号），全程不出应用 —— */
-  function qqStateText(s) {
-    const m = { 0: '已断开', 1: '已连接', 2: '连接中', 3: '连接失败' };
-    return m[s] != null ? m[s] : '未知';
-  }
-  function qqStateCls(s) {
-    if (s === 1) return 'ok';
-    if (s === 2) return 'run';
-    if (s === 3) return 'fail';
-    return 'dim';
-  }
-  function qqProtoText(p) {
-    const m = { official: '官方机器人', onebot: 'OneBot(内置协议)', 'walle-q': 'Walle-Q', milky: 'Milky', lagrange: 'Lagrange', red: 'Red' };
-    return m[p] || p || '未知协议';
-  }
-  function qqLoginCardHTML() {
-    const st = _diceHost.status || {};
-    const ql = st.qqLogin || {};
-    const mode = _diceHost.mode || ((ql.mode === 'official' || ql.mode === 'personal') ? ql.mode : 'official');
-    const running = st.state === 'running';
-    const online = !!st.engineOnline;
-    const off = ql.official || {}; const per = ql.personal || {};
-    const conns = _diceHost.conns || [];
-    let h = `<div class="dh-card" style="margin-top:14px">`;
-    h += `<div class="dh-head"><b>🆔 QQ 接入方式</b><span class="grow"></span><span class="hint">原生 API · 全程在本应用内完成</span></div>`;
-    h += `<div class="dh-row"><span class="lbl">引擎 API</span><span class="val"><span class="qq-api-dot ${running ? (online ? 'ok' : 'run') : 'dim'}"></span>${running ? (online ? '在线（可接入 QQ）' : '启动中…') : '引擎未启动，先点上方「启动引擎」'}</span></div>`;
-    h += `<div class="qqmode">
-      <button class="${mode === 'official' ? '' : 'ghost'}" onclick="WB.qqMode('official')">🤖 官方机器人</button>
-      <button class="${mode === 'personal' ? '' : 'ghost'}" onclick="WB.qqMode('personal')">👤 个人账号 · 扫码/密码</button></div>`;
-    if (mode === 'official') {
-      h += `<div class="qqform">
-        <div class="row"><label>AppID（QQ 开放平台机器人应用 ID，留空则扫码登录）</label><input id="qqOfficialAppid" placeholder="例如 1024xxxxxx，留空 = 用管理 QQ 扫码" value="${esc(off.appID || '')}" style="font-family:monospace"></div>
-        <div class="row"><label>AppSecret（应用密钥，扫码登录可留空）</label><input id="qqOfficialSecret" type="password" placeholder="应用密钥" value="${esc(off.appSecret || '')}" style="font-family:monospace"></div>
-        <div class="row"><label class="ai-toggle"><input id="qqOfficialWebhook" type="checkbox"> 启用 Webhook（需公网 HTTPS，默认走官方 WebSocket）</label></div>
-        <div class="toolbar"><button onclick="WB.qqAddOfficial()" ${running && online ? '' : 'disabled'}>🔗 连接官方机器人</button>
-          <button class="ghost" onclick="WB.qqSave('official')" ${running && online ? '' : 'disabled'}>💾 保存配置</button>
-          <span class="hint">${off.appID ? '当前 AppID：' + esc(off.appID) : '尚未保存'}</span></div>
-        <div class="dh-note">填好 AppID/AppSecret 后点「连接官方机器人」，引擎直连官方网关；AppID 留空则进入<b>扫码登录</b>（用机器人管理 QQ 扫码），二维码会显示在下方。保存配置仅保留本地凭据，连接需点上方按钮。</div></div>`;
-    } else {
-      h += `<div class="qqform">
-        <div class="row"><label>QQ 账号（UIN）</label><input id="qqPerUin" placeholder="个人 QQ 号" value="${esc(per.uin || '')}" style="font-family:monospace"></div>
-        <div class="row"><label>密码（可选，留空则扫码）</label><input id="qqPerPass" type="password" placeholder="QQ 密码" value=""></div>
-        <div class="row"><label class="ai-toggle"><input id="qqPerQr" type="checkbox" ${per.needQR !== false ? 'checked' : ''}> 优先扫码登录</label></div>
-        <div class="toolbar"><button onclick="WB.qqAddPersonal()" ${running && online ? '' : 'disabled'}>🔗 添加账号并登录</button>
-          <button class="ghost" onclick="WB.qqSave('personal')" ${running && online ? '' : 'disabled'}>💾 保存配置</button>
-          <span class="hint">${per.uin ? '已保存账号 ' + esc(per.uin) + (per.password ? ' · 已设密码' : ' · 扫码登录') : '尚未保存'}</span></div>
-        <div class="dh-note">填 QQ 号（可留空密码）点「添加账号并登录」，引擎内置协议端开始登录：需要扫码时二维码显示在下方，用手机 QQ 扫一下即可上线，全程不出本应用。</div></div>`;
-    }
-    /* 连接列表（原生渲染） */
-    h += `<div class="qqconns" id="qqConnsBox">${qqConnListHTML(conns)}</div>`;
-    /* 二维码 / 登录提示区 */
-    h += `<div class="qrcode-wrap" id="qqQrBox" style="${_diceHost.qrImg ? '' : 'display:none'}">
-      ${_diceHost.qrImg ? `<div class="qrcode-pane">
-        <img src="${_diceHost.qrImg}" alt="QQ 登录二维码">
-        <div class="qr-tip">${esc(_diceHost.qrTip || '请用手机 QQ 扫描二维码登录')}</div>
-        <div class="qr-ops"><button class="ghost" onclick="WB.qqRefreshQr()">🔄 刷新二维码</button><button class="ghost" onclick="WB.qqCloseQr()">✕ 关闭</button></div>
-      </div>` : ''}
-    </div>`;
-    h += `</div>`;
-    return h;
-  }
-  function qqConnListHTML(conns) {
-    if (!conns || !conns.length) return `<div class="empty" style="margin:10px 0">尚无 QQ 连接。在上方选择方式并点「连接/添加」按钮，连接状态会实时显示在这里。</div>`;
-    return `<div class="qqconn-title">已接入连接（${conns.length}）</div>` + conns.map((c) => {
-      const sc = qqStateCls(c.state);
-      const act = `<button class="ghost mini" onclick="WB.qqQrcode('${esc(c.id)}')" title="获取登录二维码">📱 二维码</button>
-        <button class="ghost mini" onclick="WB.qqSetEnable('${esc(c.id)}')">${c.enable ? '⏸ 停用' : '▶ 启用'}</button>
-        <button class="ghost mini danger" onclick="WB.qqDel('${esc(c.id)}')" title="删除该连接">🗑 删除</button>`;
-      return `<div class="qqconn ${c.enable ? '' : 'off'}">
-        <span class="qq-dot ${sc}"></span>
-        <span class="qq-name">${esc(c.nickname || c.userId || '未命名')}</span>
-        <span class="qq-id mono">${esc(c.userId || '')}</span>
-        <span class="qq-proto">${esc(qqProtoText(c.protocolType))}</span>
-        <span class="qq-state ${sc}">${esc(qqStateText(c.state))}</span>
-        <span class="grow"></span>
-        <span class="qq-acts">${act}</span>
-      </div>`;
-    }).join('');
-  }
-  function qqMode(m) {
-    if (m !== 'official' && m !== 'personal') m = 'official';
-    _diceHost.mode = m;
-    renderDiceHost();
-  }
-  async function qqSave(mode) {
-    if (!window.api || !window.api.dice) { toast('当前环境未暴露骰娘接口', ''); return; }
-    const isOff = mode === 'official';
-    const g = (id) => { const el = q(id); return el ? el.value : ''; };
-    const ck = (id) => { const el = q(id); return !!(el && el.checked); };
-    const fields = isOff
-      ? { appID: g('qqOfficialAppid'), appSecret: g('qqOfficialSecret'), useWebhook: ck('qqOfficialWebhook') }
-      : { uin: g('qqPerUin'), password: g('qqPerPass'), needQR: ck('qqPerQr') };
-    let res;
-    try { res = await window.api.dice.qqSave(isOff ? 'official' : 'personal', fields); }
-    catch (e) { toast('保存失败：' + String((e && e.message) || e), 'fail'); return; }
-    const r = res && res.result;
-    if (!r || !r.ok) { toast((r && r.note) || '保存失败', 'fail'); return; }
-    _diceHost.mode = (r.mode === 'official' || r.mode === 'personal') ? r.mode : (isOff ? 'official' : 'personal');
-    const pass = q('qqPerPass'); if (pass) pass.value = ''; // 保存后不回显密码
-    toast('已保存到本地配置', 'ok');
-    dhRefresh(true);
-    renderDiceHost();
-  }
-  /* 连接官方机器人：有 AppID 走凭据直连；留空走扫码（二维码显示在下方面板） */
-  async function qqAddOfficial() {
-    if (!window.api || !window.api.dice || !window.api.dice.qq) { toast('当前环境未暴露骰娘接口', ''); return; }
-    const g = (id) => { const el = q(id); return el ? el.value.trim() : ''; };
-    const ck = (id) => { const el = q(id); return !!(el && el.checked); };
-    const f = { appID: g('qqOfficialAppid'), appSecret: g('qqOfficialSecret'), useWebhook: ck('qqOfficialWebhook') };
-    toast('正在连接官方机器人…', '');
-    let r;
-    try { r = await window.api.dice.qq.addOfficial(f); }
-    catch (e) { toast('操作失败：' + String((e && e.message) || e), 'fail'); return; }
-    if (!r.ok) { toast(r.error || '连接失败', 'fail'); return; }
-    toast('官方机器人已添加' + (r.id ? '' : ''), 'ok');
-    await qqRefresh();
-    if (!f.appID && r.id) { // 扫码模式：直接拉二维码
-      await qqQrcode(r.id);
-    }
-  }
-  /* 添加个人账号并开始登录（可能进入扫码/验证码，二维码自动显示） */
-  async function qqAddPersonal() {
-    if (!window.api || !window.api.dice || !window.api.dice.qq) { toast('当前环境未暴露骰娘接口', ''); return; }
-    const g = (id) => { const el = q(id); return el ? el.value.trim() : ''; };
-    const f = { account: g('qqPerUin'), password: g('qqPerPass') };
-    if (!f.account) { toast('请填写 QQ 账号', 'fail'); return; }
-    toast('正在添加账号并登录…', '');
-    let r;
-    try { r = await window.api.dice.qq.addPersonal(f); }
-    catch (e) { toast('操作失败：' + String((e && e.message) || e), 'fail'); return; }
-    if (!r.ok) { toast(r.error || '添加失败', 'fail'); return; }
-    const pass = q('qqPerPass'); if (pass) pass.value = '';
-    toast('账号已添加，正在登录…', 'ok');
-    await qqRefresh();
-    if (r.id) await qqQrcode(r.id); // 自动进入扫码/状态轮询
-  }
-  /* 获取指定连接的登录二维码并显示（若引擎提示需要验证码/短信则提示） */
-  async function qqQrcode(id) {
-    if (!window.api || !window.api.dice || !window.api.dice.qq) return;
-    _diceHost.qrConnId = id;
-    let r;
-    try { r = await window.api.dice.qq.qrcode(id); }
-    catch (e) { toast('获取二维码失败：' + String((e && e.message) || e), 'fail'); return; }
-    if (!r.ok) { toast(r.error || '获取二维码失败', 'fail'); return; }
-    if (r.img) {
-      _diceHost.qrImg = r.img;
-      _diceHost.qrTip = '请用手机 QQ 扫描二维码完成登录';
-      qqPaintQr();
-    } else {
-      const conn = (_diceHost.conns || []).find(c => c.id === id);
-      const s = conn ? conn.state : null;
-      if (s === 1) { toast('该连接已在线，无需扫码', 'ok'); qqCloseQr(); }
-      else if (s === 3) { toast('登录失败（连接失败），请删除后重试或检查账号', 'fail'); qqCloseQr(); }
-      else if (r.tip) { _diceHost.qrImg = ''; _diceHost.qrTip = r.tip; qqPaintQr(); toast('需要验证码/短信：' + r.tip, ''); }
-      else { // 保留 qrConnId，由轮询继续拉取；提示节流，避免每轮弹
-        const now = Date.now();
-        if (!_diceHost.qrHintAt || now - _diceHost.qrHintAt > 10000) {
-          _diceHost.qrHintAt = now;
-          toast('引擎尚未生成二维码（登录进行中），自动轮询中…', '');
-        }
-      }
-    }
-  }
-  /* 重绘二维码面板（用缓存数据，不整体重绘） */
-  function qqPaintQr() {
-    const box = q('qqQrBox');
-    if (!box) return;
-    box.style.display = _diceHost.qrImg ? '' : 'none';
-    box.innerHTML = _diceHost.qrImg
-      ? `<div class="qrcode-pane">
-          <img src="${_diceHost.qrImg}" alt="QQ 登录二维码">
-          <div class="qr-tip">${esc(_diceHost.qrTip || '请用手机 QQ 扫描二维码登录')}</div>
-          <div class="qr-ops"><button class="ghost" onclick="WB.qqRefreshQr()">🔄 刷新二维码</button><button class="ghost" onclick="WB.qqCloseQr()">✕ 关闭</button></div>
-        </div>`
-      : '';
-  }
-  async function qqRefreshQr() {
-    if (!_diceHost.qrConnId) { toast('先选择一条连接', ''); return; }
-    await qqQrcode(_diceHost.qrConnId);
-  }
-  function qqCloseQr() { _diceHost.qrImg = ''; _diceHost.qrTip = ''; _diceHost.qrConnId = null; qqPaintQr(); }
-  /* 刷新连接列表（静默失败，供轮询与手动触发） */
-  async function qqRefresh(silent) {
-    if (!window.api || !window.api.dice || !window.api.dice.qq) return;
-    try {
-      const r = await window.api.dice.qq.list();
-      if (!r.ok) { if (!silent) toast(r.error || '获取连接列表失败', 'fail'); return; }
-      _diceHost.conns = r.list || [];
-      qqPaintConns();
-      /* 登录中的连接：自动保持二维码/状态轮询 */
-      if (_diceHost.qrConnId) {
-        const c = _diceHost.conns.find(x => x.id === _diceHost.qrConnId);
-        if (!c) { qqCloseQr(); return; }
-        if (c.state === 1) { _diceHost.qrImg = ''; qqPaintQr(); toast('🎉 已连接上线：' + (c.nickname || c.userId), 'ok'); _diceHost.qrConnId = null; }
-        else if (c.state === 2 && !_diceHost.qrImg) { qqQrcode(c.id); }
-      }
-    } catch (_) { if (!silent) toast('获取连接列表失败', 'fail'); }
-  }
-  function qqPaintConns() {
-    const box = q('qqConnsBox');
-    if (box) box.innerHTML = qqConnListHTML(_diceHost.conns || []);
-  }
-  async function qqSetEnable(id) {
-    const c = (_diceHost.conns || []).find(x => x.id === id);
-    const next = !(c && c.enable);
-    if (!window.api || !window.api.dice || !window.api.dice.qq) return;
-    const r = await window.api.dice.qq.setEnable(id, next).catch(() => null);
-    if (!r || !r.ok) { toast((r && r.error) || '操作失败', 'fail'); return; }
-    toast(next ? '已启用连接' : '已停用连接', 'ok');
-    qqRefresh(true);
-  }
-  async function qqDel(id) {
-    if (!(await appConfirm('删除 QQ 连接', '确定删除该 QQ 连接？此操作不可恢复。'))) return;
-    if (!window.api || !window.api.dice || !window.api.dice.qq) return;
-    const r = await window.api.dice.qq.del(id).catch(() => null);
-    if (!r || !r.ok) { toast((r && r.error) || '删除失败', 'fail'); return; }
-    toast('已删除连接', 'ok');
-    if (_diceHost.qrConnId === id) qqCloseQr();
-    qqRefresh(true);
-  }
-
-  /* —— 骰娘操作（供 WB 暴露） —— */
-  async function diceActionRun(fn) {
-    try { const r = await fn(); _diceHost.status = r; dhLivePaint(); return r; }
-    catch (e) { toast('骰娘操作失败：' + String((e && e.message) || e), 'fail'); return null; }
-  }
-  async function diceStart() {
-    if (!window.api || !window.api.dice) return;
-    dhLivePaint();
-    await diceActionRun(() => window.api.dice.start());
-    if (_diceHost.status && _diceHost.status.result && !_diceHost.status.result.ok) toast(_diceHost.status.result.error || '启动失败', 'fail');
-  }
-  async function diceStop() { if (!window.api || !window.api.dice) return; await diceActionRun(() => window.api.dice.stop()); }
-  async function diceRestart() { if (!window.api || !window.api.dice) return; await diceActionRun(() => window.api.dice.restart()); }
-  async function diceEnsure() { if (!window.api || !window.api.dice) return; await diceActionRun(() => window.api.dice.ensure()); }
-  async function dicePickSource() { if (!window.api || !window.api.dice) return; const r = await diceActionRun(() => window.api.dice.pickSource()); }
-  async function diceOpenWebui() { if (!window.api || !window.api.dice) return; await window.api.dice.openWebui(); }
-  async function diceTest() {
-    if (!window.api || !window.api.dice) { toast('当前环境未暴露骰娘接口', ''); return; }
-    const st = _diceHost.status || {};
-    if (!st.running) { toast('引擎未运行，无法测试', ''); return; }
-    try {
-      const res = await fetch(st.apiBase + '/_health', { method: 'GET' });
-      const j = await res.json().catch(() => null);
-      toast('本地数据接口正常：' + (j && j.ok ? 'OK' : '有响应但异常'), 'ok');
-    } catch (e) { toast('连接失败：' + String((e && e.message) || e), 'fail'); }
-  }
-  function diceCopyToken() { dhCopy(_diceHost.status && _diceHost.status.token, '已复制写鉴权 Token'); }
-  function diceCopyApi() { dhCopy(_diceHost.status && _diceHost.status.apiBase, '已复制数据接口地址'); }
-  async function diceBridge() {
-    if (!window.api || !window.api.dice) { toast('当前环境未暴露骰娘接口', ''); return; }
-    await diceActionRun(() => window.api.dice.bridge());
-    if (_diceHost.status && _diceHost.status.result && !_diceHost.status.result.ok) toast(_diceHost.status.result.error || '装入插件失败', 'fail');
-    else { dhRefresh(true); toast('桥插件已重新装入，请在引擎控制台 reload 插件后生效', 'ok'); }
   }
 
   /* ========== 统计报表（主页区块） ========== */
@@ -6970,7 +6674,7 @@
     const cfg = readDiceAiPort();
     if (cfg.enabled && cfg.base) {
       try {
-        const rep = await window.api.dice.aiChat({ base: cfg.base, key: cfg.key, model: cfg.model }, messages);
+        const rep = await window.api.diceCore.ai.chat({ base: cfg.base, key: cfg.key, model: cfg.model }, messages);
         if (rep && rep.ok && rep.reply) return rep.reply;
         if (rep && !rep.ok) toast('独立 AI 端口：' + (rep.error || '调用失败') + '，已回退全局 AI', '');
       } catch (_) {}
@@ -6994,7 +6698,7 @@
     cfg.base = val('diceAiPortBase'); cfg.key = val('diceAiPortKey'); cfg.model = val('diceAiPortModel'); persist();
     if (!cfg.base) { toast('请先填写接口地址', 'err'); return; }
     const st = q('diceAiPortState'); if (st) { st.textContent = '测试中…'; }
-    const rep = await window.api.dice.aiChat({ base: cfg.base, key: cfg.key, model: cfg.model }, [{ role: 'user', content: '只回复两个字：成功' }]);
+    const rep = await window.api.diceCore.ai.chat({ base: cfg.base, key: cfg.key, model: cfg.model }, [{ role: 'user', content: '只回复两个字：成功' }]);
     if (st) st.textContent = rep && rep.ok ? ('连接成功 · ' + (rep.model || cfg.model || '模型')) : ('失败：' + ((rep && rep.error) || '无响应'));
     toast(rep && rep.ok ? '独立 AI 端口连接成功' : ('独立 AI 端口失败：' + ((rep && rep.error) || '无响应')), rep && rep.ok ? 'ok' : 'err');
   }
@@ -7052,7 +6756,7 @@
 
   /* ---------- 骰娘工作台界面（分区 2 连接中心 / 3 指令日志 / 4 文案 / 6 测试通道） ---------- */
   const _dw = { simMsgs: [], logPanel: null, replyPack: null, filter: '' };
-  function dwApi() { return (window.api && window.api.dice) ? window.api.dice : null; }
+  function dwApi() { return (window.api && window.api.diceCore) ? window.api.diceCore : null; }
   function dwNetCfg() {
     if (!S.settings.diceNet) S.settings.diceNet = { onebot11: { host: '127.0.0.1', port: 6700 }, qqofficial: {}, sim: {} };
     return S.settings.diceNet;
@@ -7193,6 +6897,7 @@
         <div class="dh-card"><div class="dh-head"><b>🧩 插件工坊（分区 5）</b><span class="grow"></span><span id="dwPlgMeta" class="hint">…</span>
           <button class="ghost mini" id="dwRefreshPlg">🔄 刷新</button></div>
           <div id="dice-zone-workshop" class="dice-zone-workshop"></div>
+          <div id="dice-zone-wizard" class="dice-zone-wizard" style="margin-top:10px"></div>
           <div class="dh-note">内置三套规则与用户插件统一管理：启停即时生效、编辑保存过校验器、回滚一键还原、导出分享。</div></div>
       </div>
       <div class="dh-card" style="margin-top:14px"><div class="dh-head"><b>🧪 测试通道聊天窗（分区 6）</b><span class="grow"></span></div>
@@ -7207,6 +6912,7 @@
     refreshCmdLog();
     refreshReplyEditor();
     dhRenderWorkshop();
+    dhRenderWizard();
     drawSimChat();
     bindSimChat();
     const on = (id, cb) => { const b = document.getElementById(id); if (b) b.onclick = cb; };
@@ -7222,7 +6928,7 @@
   async function dhRenderWorkshop() {
     const box = q('dice-zone-workshop');
     if (!box) return;
-    const api = window.diceCore && window.diceCore.plugins;
+    const api = window.api && window.api.diceCore && window.api.diceCore.plugins;
     if (!api) { box.innerHTML = '<div class="hint">插件工坊接口未就绪（diceCore.plugins）</div>'; return; }
     const r = await api.list();
     if (!r || !r.ok) { box.innerHTML = '<div class="hint">插件列表读取失败：' + ((r && r.error) || '未知') + '</div>'; return; }
@@ -7238,7 +6944,7 @@
     });
   }
   async function workshopAct(act, id, btn) {
-    const api = window.diceCore && window.diceCore.plugins;
+    const api = window.api && window.api.diceCore && window.api.diceCore.plugins;
     if (!api) return;
     const box = q('dice-zone-workshop');
     if (!box) return;
@@ -7275,6 +6981,47 @@
       else toast('导出失败：' + ((r && r.error) || '未知'), 'err');
     }
     dhRenderWorkshop();
+  }
+
+  /* ---------- 骰娘工作台：分区 5 AI 生成向导 ---------- */
+  function dhRenderWizard(st) {
+    const box = q('dice-zone-wizard');
+    if (!box) return;
+    _diceHost.wizard = st || _diceHost.wizard || { step: 'input' };
+    box.innerHTML = DiceUI.wizardViewHTML(_diceHost.wizard);
+    box.querySelectorAll('[data-act]').forEach(btn => { btn.onclick = () => wizardAct(btn.dataset.act); });
+  }
+  async function wizardAct(act) {
+    const api = window.api && window.api.diceCore && window.api.diceCore.wizard;
+    if (!api) return;
+    const w = _diceHost.wizard;
+    if (act === 'wizard-start') {
+      const ta = q('dice-zone-wizard').querySelector('.wz-rules');
+      const text = ta ? ta.value.trim() : '';
+      if (!text) return;
+      dhRenderWizard({ step: 'generating' });
+      const r = await api.start(text);
+      if (r && r.ok) { _diceHost.wizardDraftId = r.draftId; _diceHost.wizardToken = r.token; dhRenderWizard({ step: 'generated', pkg: r.pkg }); }
+      else { dhRenderWizard({ step: 'error', errors: (r && (r.errors || [r.error])) || ['未知错误'] }); }
+    } else if (act === 'wizard-abort') {
+      await api.abort(_diceHost.wizardToken);
+      dhRenderWizard({ step: 'input' });
+    } else if (act === 'wizard-trial') {
+      const r = await api.trial(_diceHost.wizardDraftId);
+      if (r && r.ok) dhRenderWizard({ step: 'trialed', pkg: w && w.pkg, results: r.results });
+      else dhRenderWizard({ step: 'error', errors: [(r && r.error) || '试跑失败'] });
+    } else if (act === 'wizard-install') {
+      const r = await api.install(_diceHost.wizardDraftId);
+      if (r && r.ok) { dhRenderWizard({ step: 'done', id: r.id, version: r.version }); }
+      else dhRenderWizard({ step: 'error', errors: [(r && r.error) || '安装失败'] });
+    } else if (act === 'wizard-discard') {
+      await api.discard(_diceHost.wizardDraftId);
+      _diceHost.wizardDraftId = null;
+      dhRenderWizard({ step: 'input' });
+    } else if (act === 'wizard-back') {
+      dhRenderWizard({ step: 'input' });
+    }
+    if (act === 'wizard-install') dhRenderWorkshop();   // 安装后插件列表同步刷新
   }
 
   /* =============== 界面舒适度优化（2.8.0）：A1/A2/B1/B2 =============== */
@@ -7460,9 +7207,7 @@
     addField: () => { const box = q('fieldEditor');            box.insertAdjacentHTML('beforeend', _rfRow()); },
     delField, fieldUp, fieldDown, saveFields, setFieldTpl, saveAsTemplate, aiBuildTemplate, toggleTile, resetLayout, doBackup, exportData, importData, openFolder, importLegacy,
     setDiceRule, setDiceAi, rollExpr, rollQuick, cocJudgeBtn, dndJudgeBtn, delDiceLog, diceClearLog,
-    diceStart, diceStop, diceRestart, diceEnsure, dicePickSource, diceOpenWebui, diceTest,
-     diceAiPortSave, diceAITest, diceViewRefresh, diceCopyToken, diceCopyApi, diceBridge,
-     qqMode, qqSave, qqAddOfficial, qqAddPersonal, qqQrcode, qqRefreshQr, qqCloseQr, qqRefresh, qqSetEnable, qqDel,
+    diceAiPortSave, diceAITest, diceViewRefresh,
     readSheet, sheetUsage, aiJudge, aiJudgeExplain, checkUpdate,
     relAddNode, relSaveNewNode, relSaveNode, relDelNode, relAddEdge, relSaveNewEdge, relSaveEdge, relDelEdge,
     relEdgePick, relConfirmEdge, relLayout, relUndo, relClear, relImportEnts, relAiSuggest,

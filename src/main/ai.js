@@ -954,6 +954,24 @@ function stripWrap(s) {
   return String(s || '').replace(/^\s*```[^\n]*\n?/, '').replace(/\s*```\s*$/, '').trim();
 }
 
+/* 向导 AiPort 用：原样完成一条消息序列（不经人设注入、不截断为单轮），
+ * 仍走 requestCompletions 的取消/超时/组取消，并对输出做内容安全过滤后再返回。
+ * 返回 { ok:true, text } | 抛错（取消/超时/上游错误由调用方按 AbortError 处理）。 */
+async function chatRaw(cfg, messages, opts) {
+  opts = opts || {};
+  const msgs = (messages || []).filter(m => m && (m.role === 'system' || m.role === 'user' || m.role === 'assistant'))
+    .map(m => ({ role: m.role, content: sanitizeStr(m.content, ASSIST_USER_MAX) }));
+  if (!msgs.length) throw new Error('无有效消息可发送');
+  const j = await requestCompletions(cfg, {
+    model: cfg.model,
+    temperature: typeof cfg.temperature === 'number' ? cfg.temperature : 0.5,
+    max_tokens: cfg.maxTokens || 4000,
+    messages: msgs
+  }, opts.timeoutMs || cfg.timeoutMs);
+  const raw = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
+  return { ok: true, text: finalReply(cfg, raw) };
+}
+
 /* ==================== AI 稳健性公共设施：清洗 / 文本审核 / 输出收口 ====================
  * 统一解决这几类典型问题：
  *   文本审核 —— 拦截明确高危内容（真实未成年人、自残自杀、非法毒品、现实诱赌、性剥削、人口交易）及提示词注入；
@@ -1612,4 +1630,4 @@ async function breakdownScenario(cfg, text, settings) {
   return result;
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, usageLog, resetUsage, cancelGroup, recordUsage };
+module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, usageLog, resetUsage, cancelGroup, recordUsage };

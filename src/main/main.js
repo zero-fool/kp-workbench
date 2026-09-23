@@ -50,10 +50,10 @@ function autoMigrateLegacyData(target) {
 const { DataStore } = require('./store');
 const ai = require('./ai');
 const exporter = require('./exporter');
-const { DiceHost } = require('./dice');
 const { createMainStorePort } = require('./dice-state-store');
 const { createPluginHost } = require('../dice-core/plugin/host');
 const { validatePlugin } = require('../dice-core/plugin/validate');
+const { createWizard } = require('../dice-core/plugin/wizard');
 
 let win = null;
 const dataDir = resolveDataDir();
@@ -71,31 +71,6 @@ if (!Array.isArray(doc.settings.templates)) doc.settings.templates = [];
   }
 }
 store.save(doc);
-
-/* 内置引擎目录：打包时随 resources/dice-next 一同发布（与 app.asar 平级），
- * 打开软件即可自动释放使用，无需再"手动定位引擎"。开发态指向仓库 resources/dice-next。 */
-const diceBundledDir = app.isPackaged
-  ? path.join(process.resourcesPath, 'dice-next')
-  : path.join(app.getAppPath(), 'resources', 'dice-next');
-
-/* 骰娘（DiceNext）引擎托管实例：把「连 QQ 的骰娘」内嵌进应用，数据接口直通当前档案。
- * 通过 ctx 回调双向打通：getDoc/saveDoc 直连工作台数据，onExternalWrite 在群里 .kp 写入后
- * 通知渲染层刷新，notify 向渲染层广播引擎状态。 */
-const dice = new DiceHost({
-  dataDir,
-  bundledDir: diceBundledDir,
-  getDoc: () => doc,
-  saveDoc: () => { try { store.save(doc); } catch (_) {} },
-  onExternalWrite: (action) => {
-    try { if (win && win.webContents) win.webContents.send('dice:dataChanged', { action }); } catch (_) {}
-  },
-  getArchiveName: () => worldName(),
-  notify: (evt, payload) => {
-    try { if (win && win.webContents) win.webContents.send('dice:event', { evt, payload }); } catch (_) {}
-  }
-});
-dice.loadPersist();
-dice.startStatusTimer();
 
 /* ---- 崩溃会话心跳（B2）：运行中每 30s 落一个「在线标记」；正常退出(will-quit)会清除它，
  * 崩溃/被杀进程则保留，下次启动据此提示「上次可能未正常退出，此前数据已保留」。 */
@@ -997,54 +972,59 @@ function registerIpc() {
     return { ok: true, id: p.manifest.id, json: JSON.stringify(p, null, 2) };
   });
 
-  /* ---- 骰娘（引擎托管）---- 状态 / 启动 / 停止 / 重启 / 定位内核 / 数据接口 */
-  ipcMain.handle('dice:status', () => dice.snapshot());
-  ipcMain.handle('dice:ensure', async () => {
-    const r = dice.ensureEngine();
-    if (r.ok) await dice.ensureDataHttp();
-    return Object.assign({ result: r }, dice.snapshot());
+  /* ---- AI 生成向导（分区 5）：两道闸后端直连，草稿仅存主进程内存，不落盘不生效 ----
+   * start 走专用群组「wizard」，与其它 AI 类型相隔离；取消同时触发 组取消 + AbortController，
+   * 无论生成在修错轮与在飞请求哪个阶段都能中止。 */
+  const wizardAiPort = {
+    async chat(cfg, messages, signal) {
+      const c = aiCfg('wizard', 'AI 生成插件');
+      const out = await ai.chatRaw(c, messages, { signal });
+      return { text: out.text };
+    }
+  };
+  const pluginWizard = createWizard({ host: pluginHost, aiPort: wizardAiPort, opts: { cfg: aiCfg('wizard', 'AI 生成插件') } });
+  let _wizardCtl = null;              // 在飞的 AbortController
+  let _wizardSeq = 0;
+  ipcMain.handle('diceCore:wizardStart', async (e, ruleText) => {
+    const text = String(ruleText || '').trim();
+    if (!text) return { ok: false, errors: ['规则文本不能为空'] };
+    const controller = new AbortController();
+    _wizardCtl = controller;
+    const seq = ++_wizardSeq;
+    try {
+      const r = await pluginWizard.start(text, { cfg: aiCfg('wizard', 'AI 生成插件'), signal: controller.signal });
+      if (!r.ok) return r;
+      return { ok: true, draftId: r.draftId, pkg: r.pkg, rounds: r.rounds, token: String(seq) };
+    } catch (err) {
+      if (err && (err.name === 'AbortError' || err.code === 'ABORT_ERR' || String(err.message || '').indexOf('AI_TASK_CANCELLED') === 0)) {
+        return { ok: false, errors: [{ msg: '生成已取消' }] };
+      }
+      return { ok: false, errors: [{ msg: 'AI_TRANSPORT: ' + (err && err.message || String(err)) }] };
+    } finally {
+      if (_wizardCtl === controller) _wizardCtl = null;
+    }
   });
-  ipcMain.handle('dice:start', async () => {
-    const r = dice.start();
-    await dice.ensureDataHttp();
-    return Object.assign({ result: r }, dice.snapshot());
+  ipcMain.handle('diceCore:wizardAbort', () => {
+    ai.cancelGroup('wizard');
+    if (_wizardCtl) { try { _wizardCtl.abort(); } catch (_) {} _wizardCtl = null; }
+    return { ok: true };
   });
-  ipcMain.handle('dice:stop', () => { const r = dice.stop(); return Object.assign({ result: r }, dice.snapshot()); });
-  ipcMain.handle('dice:restart', async () => { const r = dice.restart(); await dice.ensureDataHttp(); return Object.assign({ result: r }, dice.snapshot()); });
-  ipcMain.handle('dice:pickSource', async () => {
-    const r = await dialog.showOpenDialog(win, {
-      title: '选择骰娘内核目录（应包含内核主程序）',
-      properties: ['openDirectory']
-    });
-    const dir = !r.canceled && r.filePaths && r.filePaths[0];
-    if (!dir) return { ok: false, canceled: true, source: dice.sourceDir };
-    const s = dice.setSourceDir(dir);
-    return Object.assign({ result: s }, dice.snapshot());
+  ipcMain.handle('diceCore:wizardTrial', (e, draftId) => pluginWizard.trial(String(draftId || '')));
+  ipcMain.handle('diceCore:wizardInstall', (e, draftId) => {
+    const r = pluginWizard.install(String(draftId || ''));
+    if (!r.ok) return r;
+    return { ok: true, id: r.id, version: r.version };
   });
-  ipcMain.handle('dice:setSource', (e, dir) => { const s = dice.setSourceDir(String(dir || '')); return Object.assign({ result: s }, dice.snapshot()); });
-  ipcMain.handle('dice:openWebui', () => { if (dice.webuiPort) shell.openExternal('http://127.0.0.1:' + dice.webuiPort + '/'); return { ok: true }; });
-  /* 桥插件：查询/重新装入 .kp 数据接口插件（start 时随配置自动装入，这里供手动重装/刷新状态） */
-  ipcMain.handle('dice:bridge', () => {
-    const r = dice.installBridgePlugin();
-    return Object.assign({ result: r }, dice.snapshot());
-  });
-  /* QQ 接入：读取已保存登录配置 / 保存官方或个人账号接入配置 */
-  ipcMain.handle('dice:qqGet', () => dice.qqLogin);
-  ipcMain.handle('dice:qqSave', (e, mode, fields) => {
-    const r = dice.setQQLogin(String(mode || 'personal'), fields || {});
-    return Object.assign({ result: r }, dice.snapshot());
-  });
-  /* QQ 接入（原生 /sd-api，不经 webview）：在线探测 / 连接列表 / 添加 / 二维码 / 启停 / 删除 */
-  ipcMain.handle('dice:qqApiOnline', async () => ({ ok: true, online: await dice.engineOnline() }));
-  ipcMain.handle('dice:qqList', async () => dice.qqList());
-  ipcMain.handle('dice:qqAddOfficial', async (e, f) => dice.qqAddOfficial(f || {}));
-  ipcMain.handle('dice:qqAddPersonal', async (e, f) => dice.qqAddPersonal(f || {}));
-  ipcMain.handle('dice:qqQrcode', async (e, id) => dice.qqQrcode(String(id || '')));
-  ipcMain.handle('dice:qqSetEnable', async (e, id, en) => dice.qqSetEnable(String(id || ''), !!en));
-  ipcMain.handle('dice:qqDel', async (e, id) => dice.qqDel(String(id || '')));
+  ipcMain.handle('diceCore:wizardDiscard', (e, draftId) => { pluginWizard.discard(String(draftId || '')); return { ok: true }; });
 
-  /* ---- 骰娘独立 AI 端口：OpenAI 兼容 /chat/completions；由渲染层传入配置与消息 ---- */
-  ipcMain.handle('dice:aiChat', async (e, cfg, messages) => {
+  /* ---- 骰娘新内核统一接口（M3 收口）：旧 dice:* 引擎托管 / QQ / webui / bridge 全部退役 ----
+   * engine 仅报告内核运行态；定向判定走独立 AI 端口 diceCore:aiChat（OpenAI 兼容 /chat/completions）。 */
+  ipcMain.handle('diceCore:engineStatus', () => ({
+    ok: true, engine: 'dice-core', builtin: true,
+    plugins: pluginHost.list().filter(p => p.enabled !== false).length,
+    workspace: !!wsPort, version: app.getVersion()
+  }));
+  ipcMain.handle('diceCore:aiChat', async (e, cfg, messages) => {
     const base = String((cfg && cfg.base) || '').trim().replace(/\/+$/, '');
     if (!base) return { ok: false, error: '未配置 AI 端口地址', reply: '' };
     const reqLib = base.startsWith('https:') ? dhttps : dhttp;
@@ -1069,6 +1049,22 @@ function registerIpc() {
       r.write(body); r.end();
     });
   });
+
+  /* ---- 工作台数据（Task 6 WorkspaceDataPort，主进程直连 store 的 crud）----
+   * 群内 .kp 指令写入后经 onMutate 广播到渲染层实时刷新（dice-core:workspace-changed）。 */
+  const { createWorkspaceDataPort } = require('./dice-port');
+  const wsPort = createWorkspaceDataPort({
+    storeImpl: store,
+    onMutate: v => {
+      try { if (win && win.webContents) win.webContents.send('dice-core:workspace-changed', v); } catch (_) {}
+    }
+  });
+  ipcMain.handle('diceCore:workspaceList', (e, kind) => wsPort.list(String(kind || '')));
+  ipcMain.handle('diceCore:workspaceGet', (e, kind, key) => wsPort.get(String(kind || ''), key));
+  ipcMain.handle('diceCore:workspaceCreate', (e, kind, item) => wsPort.create(String(kind || ''), item));
+  ipcMain.handle('diceCore:workspaceUpdate', (e, kind, key, patch) => wsPort.update(String(kind || ''), key, patch));
+  ipcMain.handle('diceCore:workspaceRemove', (e, kind, key) => wsPort.remove(String(kind || ''), key));
+  ipcMain.handle('diceCore:workspaceAudit', () => wsPort.audit());
 
   /* ---- 骰娘 state / 文案 / 事件表持久化（StorePort 经 DataStore 落盘）---- */
   const diceStorePort = createMainStorePort(store);
@@ -1132,11 +1128,6 @@ app.whenReady().then(() => {
   // 启动时对已有明文 API Key 做一次加密迁移
   if (hardenAiKeyIfNeeded()) store.save(doc);
   createWindow();
-  // 打开软件即可直接使用骰娘：自动拉起内置引擎（无需手动定位/启动）。
-  // 已释放过引擎或已在运行时跳过；失败仅置状态，不阻塞主界面。
-  setTimeout(() => {
-    try { if (dice.state !== 'running' && dice.state !== 'starting') dice.start(); } catch (_) {}
-  }, 1500);
   // 自动备份：按用户配置的间隔（默认 30 分钟）+ 退出前各一次。
   // 用分钟级轮询实现，方便用户在设置里改间隔后即时生效。
   setInterval(() => {
@@ -1150,7 +1141,6 @@ app.whenReady().then(() => {
   try { store._lastBackup = Date.now(); } catch (_) {}
   app.on('before-quit', () => {
     try { store.backup(); } catch (_) {}
-    try { dice.dispose(); } catch (_) {}
     // 三通道（OneBot 11 / QQ 官方 / 模拟器）优雅回收；Task 13 装配后 global.diceNetAdapters 有值
     if (global.diceNetAdapters && Array.isArray(global.diceNetAdapters)) {
       for (const ad of global.diceNetAdapters) { try { if (ad && typeof ad.stop === 'function') ad.stop(); } catch (_) {} }

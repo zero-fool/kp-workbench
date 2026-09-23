@@ -13,6 +13,7 @@
 > - `build:update` 会额外生成 `latest.yml` 和 `.exe.blockmap`（差分 / 最新版本元数据），应用据此检查并下载新版，在原有安装上覆盖升级。
 > - 两种命令在 **Windows** 上执行即能得到最终 `.exe`。在 Linux/mac 上打包 Windows 目标需要 `wine`，建议直接在 Windows 机器上发布。
 > - 便携版仍可用 `npm run build:portable` 产出单文件绿色版（但不支持自更新）。
+> - 版本示例统一从 `3.0.0` 起（`3.0.0 → 3.0.1`）；3.0.0 起 `build.files` 已移除 `bridge/**`，`resources/dice-next` 不再随包。
 
 ## 2. 第一步：先设置更新源地址
 
@@ -26,9 +27,9 @@
 
 ## 3. 发布更新包的步骤
 
-1. 改版本号：把 `package.json` 的 `version` 升为新版本（例如 `2.4.4` → `2.4.5`）。
+1. 改版本号：把 `package.json` 的 `version` 升为新版本（例如 `3.0.0` → `3.0.1`）。
    - 版本比较完全依赖 `package.json` 的 `version`，**每次发版必须提升**，否则应用认为没有新版本。
-   - 同步把 `src/renderer/app.js` 顶部的 `APP_VERSION = '2.4.4'` 改成相同值（仅用于界面显示）。
+   - 同步把 `src/renderer/app.js` 顶部的 `APP_VERSION = '3.0.0'` 改成相同值（仅用于界面显示）。
 2. 在「更新公告」页脚本（`src/renderer/app.js` 的 `CHANGELOG`）里补一条本次更新的条目，方便用户看到说明。
 3. 在 Windows 上执行 `npm run build:update`。
 4. 把 `dist/` 下这 **三个文件** 上传到第 2 步的地址根目录：
@@ -36,6 +37,13 @@
    - `KP跑团工作台_v<版本>_安装版.exe.blockmap`
    - `latest.yml`
 5. 老用户打开应用 →「更新公告」→「检查更新」，即自动比对、后台下载、下载完自动重启完成覆盖升级。
+
+## 3.1 3.0.0 特别说明（自研骰娘内核）
+
+- 打包清单 `build.files` 已移除 `bridge/**/*`；`resources/dice-next/`（149MB 旧内核 + lagrange/milky）已整体删除，不再随包。
+- 发布前必须依次跑通：`node --test tests/`（全绿）与 `npm run verify`（wiring-audit + 零第三方扫描 + regress.test 三条链）。
+- 体积硬性上限：绿色版 / 安装版解包后 < 100MB（规格预期约 70MB）；超限视为发布失败，先检查是否有旧内核残留回流。
+- 骰娘板块由「连 QQ 骰娘（内嵌 dice-next）」升级为「骰娘工作台」六分区；preload 只剩 `diceCore.*` 新接口，无第三方可拦截面。
 
 ## 4. 更新源托管选项
 

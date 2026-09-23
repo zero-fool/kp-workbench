@@ -1,5 +1,5 @@
 'use strict';
-/* WorkspaceDataPort 主进程实现：直连 src/main/store.js 的 DataStore，替换原 bridge/kp-workspace-bridge.js + /sd-api HTTP 链路。
+/* WorkspaceDataPort 主进程实现：直连 src/main/store.js 的 DataStore，.kp 数据存取应用内原生实现（原第三方桥接链路已退役）。
  * 契约（规格 4.1）：{ list/get/create/update/remove(kind, …), audit() }，kind ∈ pcs/npcs/regions/logs/mobs。
  * 固定导出名：createWorkspaceDataPort({ storeImpl, onMutate })；KINDS。 */
 

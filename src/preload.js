@@ -6,6 +6,8 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
  * 类（Rng）不跨桥，改由 makeRng(seed) 工厂返回 {int,pick}，M2/M3 再接入端口与通道服务。 */
 const diceCoreExpr = require('./dice-core/expr');
 const diceCoreRules = require('./dice-core/rules');
+/* M3 收口：window.diceCore 只保留「同步求值内核」（本地投骰面板用），
+ * 插件 / 向导 / 工作台等通道统一归入 window.api.diceCore（见下方 api 命名空间）。 */
 const diceCore = {
   parseExpr: diceCoreExpr.parseExpr,
   roll: diceCoreExpr.rollExpr,
@@ -13,15 +15,6 @@ const diceCore = {
   makeRng(seed) {
     const r = new diceCoreExpr.Rng(seed);
     return { int: (a, b) => r.int(a, b), pick: (arr) => r.pick(arr) };
-  },
-  /* 插件工坊（分区 5）：列表/启停/编辑 JSON/回滚/导出，经主进程 PluginHost */
-  plugins: {
-    list: () => ipcRenderer.invoke('diceCore:pluginsList'),
-    get: (id) => ipcRenderer.invoke('diceCore:pluginsGet', id),
-    toggle: (id, enabled) => ipcRenderer.invoke('diceCore:pluginsToggle', id, enabled),
-    saveJson: (id, jsonText) => ipcRenderer.invoke('diceCore:pluginsSaveJson', id, jsonText),
-    rollback: (id) => ipcRenderer.invoke('diceCore:pluginsRollback', id),
-    export: (id) => ipcRenderer.invoke('diceCore:pluginsExport', id)
   }
 };
 
@@ -178,51 +171,49 @@ contextBridge.exposeInMainWorld('api', {
     close: () => ipcRenderer.invoke('win:close'),
     onMaximized: (cb) => { ipcRenderer.on('win:maximized', (_e, v) => cb(v)); }
   },
-  /* 骰娘（引擎托管）：状态 / 启停 / 定位内核 / 数据接口 / 订阅 */
-  dice: {
-    status: () => ipcRenderer.invoke('dice:status'),
-    ensure: () => ipcRenderer.invoke('dice:ensure'),
-    start: () => ipcRenderer.invoke('dice:start'),
-    stop: () => ipcRenderer.invoke('dice:stop'),
-    restart: () => ipcRenderer.invoke('dice:restart'),
-    pickSource: () => ipcRenderer.invoke('dice:pickSource'),
-    setSource: (dir) => ipcRenderer.invoke('dice:setSource', dir),
-    openWebui: () => ipcRenderer.invoke('dice:openWebui'),
-    /* 桥插件：查询/重新装入 .kp 数据接口插件 */
-    bridge: () => ipcRenderer.invoke('dice:bridge'),
-    /* QQ 接入：读取已保存配置 / 保存官方或个人账号接入配置 */
-    qqGet: () => ipcRenderer.invoke('dice:qqGet'),
-    qqSave: (mode, fields) => ipcRenderer.invoke('dice:qqSave', mode, fields),
-    /* QQ 接入（原生 /sd-api，不经 webview）：连接列表 / 添加 / 二维码 / 启停 / 删除 / 在线探测 */
-    qq: {
-      apiOnline: () => ipcRenderer.invoke('dice:qqApiOnline'),
-      list: () => ipcRenderer.invoke('dice:qqList'),
-      addOfficial: (f) => ipcRenderer.invoke('dice:qqAddOfficial', f),
-      addPersonal: (f) => ipcRenderer.invoke('dice:qqAddPersonal', f),
-      qrcode: (id) => ipcRenderer.invoke('dice:qqQrcode', id),
-      setEnable: (id, en) => ipcRenderer.invoke('dice:qqSetEnable', id, en),
-      del: (id) => ipcRenderer.invoke('dice:qqDel', id)
+  /* 骰娘内核统一接口（M3 收口）：所有通道归入 diceCore.*，旧 window.api.dice 全部退役。
+   * engine 仅报告新内核运行态；插件/向导/工作台在分区 5；骰娘工作台沿用 diceNet/log/reply/sim。 */
+  diceCore: {
+    engine: { status: () => ipcRenderer.invoke('diceCore:engineStatus') },
+    /* 插件工坊（分区 5）：列表/启停/编辑 JSON/回滚/导出，经主进程 PluginHost */
+    plugins: {
+      list: () => ipcRenderer.invoke('diceCore:pluginsList'),
+      get: (id) => ipcRenderer.invoke('diceCore:pluginsGet', id),
+      toggle: (id, enabled) => ipcRenderer.invoke('diceCore:pluginsToggle', id, enabled),
+      saveJson: (id, jsonText) => ipcRenderer.invoke('diceCore:pluginsSaveJson', id, jsonText),
+      rollback: (id) => ipcRenderer.invoke('diceCore:pluginsRollback', id),
+      export: (id) => ipcRenderer.invoke('diceCore:pluginsExport', id)
     },
-    /* 独立 AI 端口（OpenAI 兼容），供 AI 定向判定独立调用，不依赖工作台全局 AI */
-    aiChat: (cfg, messages) => ipcRenderer.invoke('dice:aiChat', cfg, messages),
-    /* 引擎状态事件（state/status），不含引擎内部心跳 */
-    onEvent: (cb) => { ipcRenderer.on('dice:event', (_e, v) => cb(v)); },
-    /* 群里 .kp 写入工作台数据后触发，供界面刷新 */
-    onDataChanged: (cb) => { ipcRenderer.on('dice:dataChanged', (_e, v) => cb(v)); },
-    /* 骰娘 state / 文案 / 事件表持久化：走主进程 StorePort（DataStore 落盘） */
-    state: {
-      load: (key) => ipcRenderer.invoke('diceState:load', key),
-      save: (key, value) => ipcRenderer.invoke('diceState:save', key, value),
-      backup: () => ipcRenderer.invoke('diceState:backup')
+    /* AI 生成向导（分区 5）：第一道闸生成/取消 → 试跑 → 第二道闸安装/丢弃 */
+    wizard: {
+      start: (ruleText) => ipcRenderer.invoke('diceCore:wizardStart', ruleText),
+      abort: (token) => ipcRenderer.invoke('diceCore:wizardAbort', token),
+      trial: (draftId) => ipcRenderer.invoke('diceCore:wizardTrial', draftId),
+      install: (draftId) => ipcRenderer.invoke('diceCore:wizardInstall', draftId),
+      discard: (draftId) => ipcRenderer.invoke('diceCore:wizardDiscard', draftId)
     },
-    /* 骰娘工作台（分区 2/3/4/6）：
-     * diceNet = 连接中心（三通道启停/状态）、log = 指令日志、reply = 文案与人设、sim = 测试通道聊天窗。
-     * 主进程统一由 diceWorkbench 运行时驱动，IPC channel 见 src/main/main.js 对应 dice*: 段。 */
+    /* 工作台数据（Task 6 WorkspaceDataPort，主进程直连 store） */
+    workspace: {
+      list: (kind) => ipcRenderer.invoke('diceCore:workspaceList', kind),
+      get: (kind, key) => ipcRenderer.invoke('diceCore:workspaceGet', kind, key),
+      create: (kind, item) => ipcRenderer.invoke('diceCore:workspaceCreate', kind, item),
+      update: (kind, key, patch) => ipcRenderer.invoke('diceCore:workspaceUpdate', kind, key, patch),
+      remove: (kind, key) => ipcRenderer.invoke('diceCore:workspaceRemove', kind, key),
+      audit: () => ipcRenderer.invoke('diceCore:workspaceAudit')
+    },
+    /* 独立 AI 端口（OpenAI 兼容），供投骰台 AI 定向判定独立调用，不依赖工作台全局 AI */
+    ai: { chat: (cfg, messages) => ipcRenderer.invoke('diceCore:aiChat', cfg, messages) },
+    /* 骰娘工作台（分区 2/3/4/6），自旧 dice.* 迁移，通道不变 */
     diceNet: {
       list: () => ipcRenderer.invoke('diceNet:list'),
       start: (id) => ipcRenderer.invoke('diceNet:start', id),
       stop: (id) => ipcRenderer.invoke('diceNet:stop', id),
       status: (id) => ipcRenderer.invoke('diceNet:status', id)
+    },
+    state: {
+      load: (key) => ipcRenderer.invoke('diceState:load', key),
+      save: (key, value) => ipcRenderer.invoke('diceState:save', key, value),
+      backup: () => ipcRenderer.invoke('diceState:backup')
     },
     log: {
       query: (o) => ipcRenderer.invoke('diceLog:query', o),
@@ -235,6 +226,10 @@ contextBridge.exposeInMainWorld('api', {
     },
     sim: {
       send: (o) => ipcRenderer.invoke('diceSim:send', o)
-    }
+    },
+    /* 工作台数据变更（群 .kp 写入后触发）→ 界面实时刷新 */
+    onWorkspaceChanged: (cb) => { ipcRenderer.on('dice-core:workspace-changed', (_e, v) => cb(v)); },
+    /* 引擎状态事件（state/status），不含引擎内部心跳 */
+    onEngineEvent: (cb) => { ipcRenderer.on('dice-core:engine-event', (_e, v) => cb(v)); }
   }
 });
