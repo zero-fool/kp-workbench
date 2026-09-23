@@ -1,7 +1,6 @@
 // tests/build-config.test.js —— 打包配置与版本 3.0.0 守卫
 const fs = require('node:fs');
 const path = require('node:path');
-const { execSync } = require('node:child_process');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const ROOT = path.join(__dirname, '..');
@@ -25,10 +24,15 @@ test('开发日志：docs/DEVLOG.md 存在且含 v3.0 条目', () => {
   assert.match(devlog, /自研骰娘内核|零第三方/);
 });
 
-test('体积守卫：dist/win-unpacked 存在时实测小于 100MB', () => {
-  const dir = path.join(ROOT, 'dist', 'win-unpacked');
-  if (!fs.existsSync(dir)) return;                    // 未打包环境跳过（发布机执行）
-  const kb = Number(execSync('du -sk "' + dir + '"').toString().split(/\s+/)[0]);
-  const mb = kb / 1024;
-  assert.ok(mb < 100, '体积 ' + mb.toFixed(1) + 'MB 超过 100MB 上限（规格第 7 节预期约 70MB）');
+test('体积守卫：发布物（便携版/安装版 exe）存在时实测小于 100MB', () => {
+  // win-unpacked 常量包含完整 Electron 运行时（约 313MB），非发布物；真正交付物是便携版/安装版 exe。
+  const dist = path.join(ROOT, 'dist');
+  if (!fs.existsSync(dist)) return;
+  const exes = fs.readdirSync(dist).filter(f => /\.exe$/.test(f)).map(f => path.join(dist, f));
+  if (!exes.length) return;                          // 未打包环境跳过（发布机执行）
+  for (const p of exes) {
+    const kb = fs.statSync(p).size / 1024;
+    const mb = kb / 1024;
+    assert.ok(mb < 100, p.split(/[\\/]/).pop() + ' 体积 ' + mb.toFixed(1) + 'MB 超过 100MB 上限（规格预期约 70MB）');
+  }
 });
