@@ -122,3 +122,32 @@ test('反例：生成阶段取消 → CANCELLED，不产生草稿', async () => 
   assert.ok(r.errors.some(e => e.code === 'CANCELLED'));
   assert.equal(w.list().length, 0);
 });
+
+/* M3 回归（用户报告：便携版双击后 data 文件夹出现但窗口不显示）：
+ * main.js 曾在 registerIpc 注册期同步调用 aiCfg() → currentCfg() 在用户未配置
+ * AI 连接时同步 throw → app.whenReady() 回调中断 → createWindow() 永不执行。
+ * 本测试锁定契约：opts.cfg 可为惰性函数，start() 时才求值——注册期不调用；
+ * 未配置 AI 时 start() 走结构化失败（AI_TRANSPORT），绝不向外抛出。 */
+test('M3 回归：opts.cfg 惰性求值——注册期不调用，未配置 AI 时 start 结构化失败', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kp-wz-lazy-'));
+  let cfgEval = 0;
+  const w = createWizard({
+    host: createPluginHost({ dir }),
+    aiPort: portOf([goodPkg]),
+    opts: { cfg: () => { cfgEval++; throw new Error('尚未配置 AI 连接'); } }  // 模拟未配置 AI
+  });
+  assert.equal(cfgEval, 0, 'createWizard 注册期不得求值 cfg（否则 whenReady 中断、窗口永不创建）');
+  // 不传 o.cfg：start() 内部才求值 opts.cfg → 抛错 → generate 捕获 → AI_TRANSPORT 结构化失败
+  const r = await w.start('任意规则文本');
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.ok(r.errors.some(e => e.code === 'AI_TRANSPORT' && /尚未配置/.test(e.msg)), JSON.stringify(r.errors));
+  assert.equal(cfgEval, 1, 'cfg 恰好在 start() 时求值一次');
+  // 显式 o.cfg 覆盖：opts.cfg 不被触碰，生成走通
+  const w2 = createWizard({
+    host: createPluginHost({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'kp-wz-lazy2-')) }),
+    aiPort: portOf([goodPkg]),
+    opts: { cfg: () => { throw new Error('不得被求值'); } }
+  });
+  const r2 = await w2.start('任意规则文本', { cfg: { baseUrl: 'x', apiKey: 'k', model: 'm' } });
+  assert.equal(r2.ok, true, JSON.stringify(r2));
+});

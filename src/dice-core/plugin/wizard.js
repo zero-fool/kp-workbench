@@ -13,11 +13,22 @@ function createWizard({ host, aiPort, opts = {} }) {
   const drafts = new Map();                       // draftId -> { pkg, state, rounds }
   const uid = () => crypto.randomBytes(6).toString('hex');
   const fail = (code, why) => ({ ok: false, error: code + ': ' + why });
+  /* cfg 惰性求值：opts.cfg 可为函数（注册期不求值），start() 时若未显式传入 o.cfg 才调用。
+   * 修复 M3 回归：main.js 注册向导时若同步求值 aiCfg()，未配置 AI 会同步 throw，
+   * 导致 whenReady 回调中断、createWindow() 永不执行（窗口不出现、仅 data 文件夹生成）。 */
+  const resolveCfg = (o) => {
+    if (o.cfg !== undefined) return typeof o.cfg === 'function' ? o.cfg() : o.cfg;
+    return typeof opts.cfg === 'function' ? opts.cfg() : opts.cfg;
+  };
 
   async function start(ruleText, o = {}) {
     const rounds = { n: 0 };
+    let cfg;
+    try { cfg = resolveCfg(o); } catch (err) {
+      return { ok: false, errors: [{ path: '$.cfg', code: 'AI_TRANSPORT', msg: 'AI 配置不可用：' + (err && err.message || String(err)) }] };
+    }
     const r = await generate(ruleText, aiPort, {
-      cfg: o.cfg || opts.cfg, signal: o.signal,
+      cfg, signal: o.signal,
       onRound: () => { rounds.n++; }
     });
     if (!r.ok) return r;                          // 第一道闸：生成 + 校验，不过不产生草稿

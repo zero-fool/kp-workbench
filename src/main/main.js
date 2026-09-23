@@ -982,7 +982,7 @@ function registerIpc() {
       return { text: out.text };
     }
   };
-  const pluginWizard = createWizard({ host: pluginHost, aiPort: wizardAiPort, opts: { cfg: aiCfg('wizard', 'AI 生成插件') } });
+  const pluginWizard = createWizard({ host: pluginHost, aiPort: wizardAiPort, opts: { cfg: () => aiCfg('wizard', 'AI 生成插件') } });
   let _wizardCtl = null;              // 在飞的 AbortController
   let _wizardSeq = 0;
   ipcMain.handle('diceCore:wizardStart', async (e, ruleText) => {
