@@ -7103,6 +7103,14 @@
         <div id="dice-sim-chat" class="dice-chat"></div>
         <div class="dice-chat-input"><input id="dice-sim-input" placeholder="输入指令，如 .jrrp / .sign / .drew / .r1d20 / .admin list"><button id="dice-sim-send">发送</button></div>
         <div class="dh-note">不经真实 QQ：在本应用内模拟玩家身份，构造消息进中枢，回显气泡并写入指令日志。</div></div>
+      <div class="dh-card" style="margin-top:14px"><div class="dh-head"><b>🧠 K P 建议（批次5）</b><span class="grow"></span>
+          <span id="dwKpAdviceState" class="hint">…</span>
+          <button class="ghost mini" id="dwKpAdviceRun">💡 生成建议</button></div>
+        <div class="dh-kpadvice">
+          <div class="dh-note" style="margin-bottom:8px">依据骰娘正在跑的对局上下文（近期指令日志、出场角色 / NPC / 区域、当前人设），为 KP 生成推进建议。建议仅在此面板展示，绝不通过骰娘对外发送。若开关「KP 建议」关闭或总开关关闭，则不调用 AI、不消耗 token。</div>
+          <textarea id="dwKpAdviceFocus" placeholder="（可选）本次最想解决的推进方向，留空则综合出招。如：玩家卡在搜证环节、如何引入新 NPC、boss战如何收尾…" class="dice-reply-editor textarea"></textarea>
+          <div id="dwKpAdviceOut" class="dh-note" style="white-space:pre-wrap;margin-top:8px;min-height:120px">点「生成建议」后，这里会给出可执行的分点建议。</div>
+        </div></div>
     `;
     const el = q('content'); el.innerHTML = html;
     _dw.simMsgs = []; _dw.logPanel = null;
@@ -7121,6 +7129,32 @@
     on('dwSaveReply', saveReply);
     on('dwExportReply', exportReply);
     on('dwRefreshPlg', dhRenderWorkshop);
+    on('dwKpAdviceRun', runKpAdvice);
+    paintKpAdviceState();
+  }
+
+  /* ---------- 骰娘工作台：KP 建议（批次5） ---------- */
+  async function paintKpAdviceState() {
+    const st = q('dwKpAdviceState'); if (!st) return;
+    const api = dwApi() && dwApi().kpAdvice;
+    if (!api) { st.textContent = '接口未就绪'; st.style.color = '#d33'; return; }
+    try {
+      const on = await api.enabled();
+      st.textContent = on ? '可调用（开关已放行）' : '已关闭（不调用 AI）';
+      st.style.color = on ? 'var(--ok)' : 'var(--warn)';
+    } catch (_) { st.textContent = '读取失败'; }
+  }
+  async function runKpAdvice() {
+    const api = dwApi() && dwApi().kpAdvice;
+    if (!api) { toast('KP 建议接口未就绪', 'err'); return; }
+    const focus = q('dwKpAdviceFocus') ? q('dwKpAdviceFocus').value.trim() : '';
+    const out = q('dwKpAdviceOut'); if (out) out.textContent = '正在生成建议…';
+    const btn = q('dwKpAdviceRun'); if (btn) btn.disabled = true;
+    try {
+      const r = await api.suggest({ focus });
+      if (out) out.textContent = (r && r.ok) ? r.text : ((r && r.text) || '生成失败，请检查 AI 配置/开关。');
+    } catch (e) { if (out) out.textContent = '建议生成出错：' + ((e && e.message) || e); }
+    finally { if (btn) btn.disabled = false; paintKpAdviceState(); }
   }
 
   /* ---------- 骰娘工作台：分区 5 插件工坊 ---------- */

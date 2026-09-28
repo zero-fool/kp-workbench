@@ -237,6 +237,11 @@ contextBridge.exposeInMainWorld('api', {
       tag: (token, tagList, op) => ipcRenderer.invoke('diceMeme:tag', token, tagList, op),
       sample: (tags) => ipcRenderer.invoke('diceMeme:sample', tags || undefined)
     },
+    /* KP 建议（批次5）：聚合当前对局上下文在面板内生成建议，不对外发送 */
+    kpAdvice: {
+      suggest: (opts) => ipcRenderer.invoke('diceKpAdvice:suggest', opts || {}),
+      enabled: () => ipcRenderer.invoke('diceKpAdvice:enabled')
+    },
     /* 工作台数据变更（群 .kp 写入后触发）→ 界面实时刷新 */
     onWorkspaceChanged: (cb) => { ipcRenderer.on('dice-core:workspace-changed', (_e, v) => cb(v)); },
     /* 引擎状态事件（state/status），不含引擎内部心跳 */

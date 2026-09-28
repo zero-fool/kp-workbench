@@ -504,11 +504,11 @@ function registerIpc() {
   /* 大户：团本/长文档导入。容量与主存安全平衡——单文件上限扩大，工作副本读取量加大，
    * 分块 AI 分析并发提速（见 file:analyzeImport）。命中率由更完整的正文 + 逐段合并保证。 */
   const IMPORT_MAX = 8 * 1024 * 1024 * 1024;  // 单文件上限 8GB（原 1GB）
-  const WORK_CAP = 256 * 1024 * 1024;         // 文本工作副本最大读取量 256MB（原 120MB）
-  const PREVIEW_CAP = 80000;                   // 返回给界面预览的字符数（原 40k）
+  const WORK_CAP = 512 * 1024 * 1024;         // 文本工作副本最大读取量 512MB（原 120MB，再扩容）
+  const PREVIEW_CAP = 120000;                  // 返回给界面预览的字符数（原 40k，再扩容）
   const XL_ROW_CAP = 20000;                    // Excel 工作表最大读取行(防止超大表拖慢)
   const IMPORT_MAX_TXT = '8GB';                // 错误提示文案
-  const AI_SPLIT_CAP = 300 * 1024;             // file:splitImport 交给 AI 的正文上限(字符)
+  const AI_SPLIT_CAP = 500 * 1024;             // file:splitImport 交给 AI 的正文上限(字符)
 
   function extOf(fp) { const m = /\.([a-z0-9]+)$/i.exec(String(fp || '')); return m ? m[1].toLowerCase() : ''; }
   /* 安全白名单：仅允许读取「当前数据目录 uploads/ 内」的文件（导入/上传生成的工作副本）。
@@ -738,7 +738,7 @@ function registerIpc() {
   ipcMain.handle('file:analyzeImport', async (e, { path: p, title }) => {
     try {
       if (!p || !ensureUploadPath(p) || !fs.existsSync(p)) return { ok: false, error: '找不到已抽取的导入文本，请重新导入。' };
-      const maxChunk = 16000, overlap = 800, MAX_CHUNKS = 400;
+      const maxChunk = 25000, overlap = 1400, MAX_CHUNKS = 600;
       const chunks = [];
       const ALL = fs.readFileSync(p, 'utf8'); // 工作副本已封顶(WORK_CAP)
       let i = 0;
@@ -754,7 +754,7 @@ function registerIpc() {
       // 阶段一：逐块并行抽取独立摘要（并发上限兜底，避免打爆连接/限流）
       const digests = new Array(chunks.length);
       let cursor = 0;
-      const CONC = 5;
+      const CONC = 8; // 并发摘要：在连接余量内尽可能多占空闲，明显缩短大文件墙钟时长。
       async function worker() {
         while (true) {
           const k = cursor++;
@@ -1190,6 +1190,38 @@ function registerIpc() {
       };
     }
   });
+  /* ---- KP 建议（批次5）：聚合当前对局上下文，经 dice-ai 走 kpAdvice 开关生成建议，
+   * 仅在本工作台「KP 建议」面板展示，绝不对外发送。---- */
+  const { createKpAdvice } = require('./dice-kp-advice');
+  const kpAdvice = createKpAdvice({
+    aiBridge: diceAI,
+    getConfig() {
+      const a = (doc.settings && doc.settings.ai) || {};
+      return { enabled: a.enabled !== false, features: a.features || {} };
+    },
+    // 聚合对局上下文：指令日志 + 文案人设 + 工作台实体(PC/NPC/区域)
+    getContext() {
+      const ctx = {};
+      try {
+        const logs = diceWorkbench.logQuery({ limit: 16 });
+        ctx.logs = logs || [];
+      } catch (_) { ctx.logs = []; }
+      try {
+        const rep = diceWorkbench.replyLoad();
+        if (rep && rep.persona) ctx.persona = { name: rep.persona.name, style: rep.persona.style };
+        // 团本设定：优先取工作台实体里的“地区/设定”类描述汇总
+      } catch (_) {}
+      const ws = (global.__workspacePort) || null;
+      if (ws) {
+        try { ctx.pcs = ws.list('pcs') || []; } catch (_) {}
+        try { ctx.npcs = ws.list('npcs') || []; } catch (_) {}
+        try { ctx.regions = ws.list('regions') || []; } catch (_) {}
+      }
+      return ctx;
+    }
+  });
+  ipcMain.handle('diceKpAdvice:suggest', (e, opts) => kpAdvice.suggest(opts || {}));
+  ipcMain.handle('diceKpAdvice:enabled', () => kpAdvice.enabled());
   const transformReplies = createTransformReplies({
     aiBridge: diceAI,
     memes: memeStore,

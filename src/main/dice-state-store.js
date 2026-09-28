@@ -1,6 +1,6 @@
 'use strict';
 // StorePort 主进程实现（契约：load(key) / save(key, value) / backup()），落盘复用 DataStore 的写入与备份机制
-const KEYS = new Set(['dice-state', 'dice-replies', 'dice-drew', 'dice:sessions']);
+const KEYS = new Set(['dice-state', 'dice-replies', 'dice-drew', 'dice:sessions', 'dice-memes']);
 
 function createMainStorePort(dataStore) {
   return {
