@@ -16,7 +16,7 @@ function newSession(id) {
     logs: [],        // 投骰记录：{id,t,expr,seed,detail,total,rule,hidden}
     users: {},       // 签到/情趣：{ id -> { days, favor, lastDate } }
     customs: {},     // 自定义指令：{ 触发词 -> 回复模板 }
-    settings: { prefix: '.', fullwidth: true, switches: { fun: true, admin: true } },
+    settings: { prefix: '.', fullwidth: true, switches: { fun: true, admin: true, ai: true, optimize: true, interject: false, meme: true, kpAdvice: true } },
     perm: { whitelist: [], blacklist: [] }, // 会话权限名单（roles 依托 sender.role 判定）
     rngSeed: 'session:' + id,
     rngCounter: 0

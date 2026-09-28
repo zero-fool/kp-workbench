@@ -41,8 +41,9 @@ function createSimChannel(opts) {
     },
     getUser(id) { return users.get(id) || null; },
     onEvent(cb) { listeners.push(cb); },
-    /* 模拟玩家发消息：直接走 onInbound → hub → brain；返回本通道产出的回复数组 */
-    sendUser(userId, text, groupId) {
+    /* 模拟玩家发消息：直接走 onInbound → hub → brain；返回本通道产出的回复数组。
+     * 入站处理后异步（hub 内 await brain.handle 以兼容异步指令），故本方法为异步，调用处需 await。 */
+    async sendUser(userId, text, groupId) {
       if (state !== 'running') throw new Error('通道未启动，请先 start()');
       const u = users.get(userId);
       if (!u) throw new Error(`用户 ${userId} 未注册`);
@@ -51,7 +52,7 @@ function createSimChannel(opts) {
         user: u, text, ts: Date.now()
       };
       const before = outbox.length;
-      if (inbound) inbound(raw);
+      if (inbound) { const called = inbound(raw); if (called && typeof called.then === 'function') { await called; } }
       return outbox.slice(before);
     },
     clearOutbox() { outbox.length = 0; }

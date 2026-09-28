@@ -16,9 +16,17 @@ function createHub(opts) {
 
   function emit(ev) { for (const cb of listeners) { try { cb(ev); } catch (_) {} } }
 
-  function handleInbound(channel, raw) {
+  async function handleInbound(channel, raw) {
     const msg = normalizeMessage(raw, channel.id);
-    const replies = brain.handle(msg);
+    // 指令句柄可能同步返回 ReplyOut[]，也可能是 Promise（.kp/.ai 等异步指令），统一 await。
+    let replies = await brain.handle(msg);
+    // 外部注入的回复增强器（主进程扫骰点文本优化 / 随机插话等 AI 功能）。失败时保持原回复，不炸指令。
+    if (typeof o.transformReplies === 'function') {
+      try {
+        const enhanced = await o.transformReplies({ channel, msg, replies });
+        if (Array.isArray(enhanced)) replies = enhanced;
+      } catch (_) {}
+    }
     for (const r of replies) {
       channel.send(r.sessionId, r);
     }

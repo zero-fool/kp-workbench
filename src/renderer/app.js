@@ -664,6 +664,8 @@
     S.view = view;
     navPush(view);
     document.querySelectorAll('#sidebar .nav').forEach(n => n.classList.toggle('active', n.dataset.view === view));
+    const snav = document.querySelector('#sidebar details.snav');
+    if (snav && ['relations', 'tags', 'rawtext', 'encounter', 'stats', 'maps', 'polish', 'ai', 'persona', 'aiconf', 'dicehost', 'dice', 'dicework'].includes(view)) snav.open = true;
     if (view === 'dash') renderDash();
     else if (view === 'search') renderGlobalSearch();
     else if (S.data.entities[view]) renderDataView(view);
@@ -743,6 +745,8 @@
     const shown = ord.filter(k => !hidden.includes(k));
 
     let html = `<div class="page-title"><h2>总览</h2><span class="hint">资料总计：${KINDS.map(k => `${DATA_TYPE[k]} ${(S.data.entities[k] || []).length}`).join(' · ')}　拖拽卡片可自由排序</span></div>`;
+    html += dashTodayHTML();
+    html += dashOverviewHTML();
     html += `<div class="homearch setcard"><div class="home-sh">
         <div><b style="font-size:15px">开始使用 · 选择或新建档案</b><div class="hint">数据按“主题名”开档，多套团可各自独立；开档是第一步</div></div>
         <span class="grow"></span>
@@ -789,6 +793,82 @@
     bindDashDrag(shown);
     paintHomeArchives();
   }
+
+  /* 参考格局：总览 · 「今天要处理」面板 */
+  function dashTodayHTML() {
+    const all = S.data.entities;
+    const encOpen = (all.encounters || []).filter(x => x && x._open);
+    const favN = favCount();
+    const totalN = KINDS.reduce((n, k) => n + (all[k] ? all[k].length : 0), 0);
+    let rows = '';
+    if (encOpen.length > 0) {
+      rows += `<div class="dt-row"><div class="dt-lbl"><div class="dt-t">进行中的遭遇 (${encOpen.length})</div>
+        <div class="dt-d">${esc(encOpen.map(e => e.name || '未命名遭遇').join('、'))} · 投骰会自动并入其流水</div></div>
+        <span class="dash-pill warn">待临场</span><button class="mini-btn" onclick="WB.go('encounter')">前往 ▸</button></div>`;
+    }
+    if (favN > 0) {
+      rows += `<div class="dt-row"><div class="dt-lbl"><div class="dt-t">常用收藏 (${favN})</div>
+        <div class="dt-d">你的高频资料已置顶，点击即达</div></div><span class="dash-pill quiet">收藏</span></div>`;
+    }
+    if (totalN === 0) {
+      rows += `<div class="dt-row"><div class="dt-lbl"><div class="dt-t">开始建卡</div>
+        <div class="dt-d">档案还是空的，先建立第一个角色卡，把故事铺开</div></div>
+        <span class="dash-pill danger">新手上路</span><button class="mini-btn" onclick="WB.go('pcs')">去建 ▸</button></div>`;
+    }
+    if (!rows) {
+      rows = `<div class="dt-calm">✓ 暂无待处理事项，享受片刻安宁。</div>`;
+    }
+    return `<div class="dash-today"><div class="dt-head"><span class="dot"></span>今天要处理</div>${rows}</div>`;
+  }
+
+  /* 参考格局：总览 · 「战局概览」统计卡片 + 分布环 */
+  function dashOverviewHTML() {
+    const all = S.data.entities;
+    const palette = [
+      { k: 'pcs', c: '#e3c072' }, { k: 'npcs', c: '#c79a3e' }, { k: 'regions', c: '#b9822a' },
+      { k: 'logs', c: '#6b9fd1' }, { k: 'mobs', c: '#a8361d' }, { k: 'lore', c: '#7a9a6a' }, { k: 'rules', c: '#8a7bb5' }
+    ];
+    const kindColor = {};
+    for (const p of palette) kindColor[p.k] = p.c;
+    let cards = '';
+    const entries = [];
+    let total = 0;
+    for (const k of KINDS) {
+      const n = (all[k] || []).length;
+      total += n;
+      if (n > 0 || k === 'pcs') entries.push({ k, n });
+      cards += `<div class="dash-stat dash-click" data-k="${k}" style="--stat-glow:${kindColor[k]}" onclick="WB.go('${k}')">
+        <div class="num">${n}</div><div class="cap"><span class="ccore" style="background:${kindColor[k]}"></span>${DATA_TYPE[k]}</div></div>`;
+    }
+    /* 分布环：用 stroke-dasharray 分片，简单可靠 */
+    const C = 2 * Math.PI * 70;
+    let segs = '', acc = 0;
+    if (total > 0) {
+      for (const e of entries) {
+        if (!e.n) continue;
+        const frac = e.n / total;
+        const len = frac * C;
+        segs += `<circle r="70" cx="85" cy="85" fill="none" stroke="${kindColor[e.k]}"
+          stroke-width="20" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}"
+          transform="rotate(${(acc * 360).toFixed(2)} 85 85)" stroke-linecap="butt"/>`;
+        acc += frac;
+      }
+    }
+    const legend = KINDS.map(k => `<div class="li"><span class="sw" style="background:${kindColor[k]}"></span>${DATA_TYPE[k]}<b>${(all[k] || []).length}</b></div>`).join('');
+    return `<section>
+      <div class="dsec" style="margin:0 0 10px">战局概览 <span class="hint" style="font-family:var(--font);font-weight:400;letter-spacing:0">共 ${total} 条资料</span></div>
+      <div class="dash-ov">${cards}</div>
+      <div class="dash-today"><div class="dt-head"><span class="dot"></span>资料分布</div>
+        <div style="display:flex;align-items:center;gap:22px;flex-wrap:wrap">
+          <svg width="170" height="170" viewBox="0 0 170 170">
+            <circle r="70" cx="85" cy="85" fill="none" stroke="color-mix(in srgb,var(--line) 50%,transparent)" stroke-width="20"/>
+            ${total > 0 ? segs : `<text x="85" y="92" text-anchor="middle" font-size="16" fill="color-mix(in srgb,var(--ink-faint) 80%,transparent)">暂无</text>`}
+          </svg>
+          <div class="dash-legend">${legend}</div>
+        </div></div>
+    </section>`;
+  }
+
   /* 主页“开始使用 · 档案”列表 */
   async function paintHomeArchives() {
     const box = q('homeArList'); if (!box) return;
@@ -948,6 +1028,7 @@
     }
     S._sel = (S._sel || {}); const selSet = S._sel[kind] = S._sel[kind] || {};
     const batchMode = !!S.batchMode;
+    const isRuled = (kind === 'rules' || kind === 'lore');   // 参考格局：规则/背景用可折叠「速查卡」
     const sel = (v, key) => v === key ? ' selected' : '';
     const sortOpts = [['none', '排序：添加顺序'], ['fav', '★ 收藏置顶'], ['name', '名称 A→Z'], ['named', '名称 Z→A'], ['custom', '排序：自定义']]
       .map(([v, l]) => `<option value="${v}"${sel(v, (dv && dv.sort) || 'none')}>${l}</option>`).join('');
@@ -1013,7 +1094,7 @@
           if (v === undefined || v === null || v === '') continue;
           if (Array.isArray(v) && !v.length) continue;
           shown++;
-          if (shown > 6) break;
+          if (shown > 12) break;
           if (tagsF.has(f.k)) {
             const ts = Array.isArray(v) ? v : tagsToArr(v);
             inner += `<div class="row"><b>${esc(f.l)}</b><span class="tags">${ts.map(x => `<span class="tag">${esc(x)}</span>`).join('')}</span></div>`;
@@ -1025,6 +1106,19 @@
         }
         const selVals = cs.filter(f => selectF.has(f.k) && it[f.k]).map(f => `<span class="tag">${esc(f.l)}·${esc(it[f.k])}</span>`).join('');
         const tplTag = it.tpl ? `<span class="ctag tpl" title="模板：${esc(tplName(it.tpl))}">${esc(tplName(it.tpl))}</span>` : '';
+        if (isRuled) {
+          /* 参考格局：规则/背景一条 = 一张可折叠速查卡 */
+          return `<details class="rcard"${it._open ? ' open' : ''}>
+            <summary><span class="rc-chev">▸</span><span class="cnm">${esc(name)}</span>${tplTag}${it.source ? '<span class="ctag">' + esc(it.source) + '</span>' : ''}
+              <span class="fav-star" onclick="event.preventDefault();WB.toggleFav('${kind}','${it.id}')" title="收藏/取消收藏">${isFav(kind, it.id) ? '★' : '☆'}</span>
+              <span class="grow"></span><span class="rc-actions">
+                <button class="ghost" onclick="event.preventDefault();event.stopPropagation();WB.edit('${kind}','${it.id}')">编辑</button>
+                <button class="ghost" onclick="event.preventDefault();event.stopPropagation();WB.dupCard('${kind}','${it.id}')" title="复制">⧉</button>
+                <button class="danger" onclick="event.preventDefault();event.stopPropagation();WB.del('${kind}','${it.id}')">删除</button>
+              </span></summary>
+            <div class="rc-body">${selVals ? `<div class="tags">${selVals}</div>` : ''}${inner || '<div class="row" style="color:var(--ink-faint)">暂无正文</div>'}</div>
+          </details>`;
+        }
         const favStar = isFav(kind, it.id) ? '★' : '☆';
         const selChecked = selSet[it.id] ? ' checked' : '';
         return `<div class="card${isFav(kind, it.id) ? ' faved' : ''}${isCustomSort ? ' dragsortable' : ''}" data-kind="${esc(kind)}" data-id="${esc(it.id)}" oncontextmenu="WB.openCtx(event,'${kind}','${it.id}')">
@@ -1042,7 +1136,7 @@
             <button class="danger" onclick="WB.del('${kind}','${it.id}')">删除</button>
           </div></div>`;
       };
-      html += `<div class="cardgrid" id="cardgrid">`;
+      html += `<div class="cardgrid${isRuled ? ' rcards' : ''}" id="cardgrid">`;
       const LEN = list.length;
       const CHUNK = 500;                          // 单批量渲染张数
       const WINDOW = 600;                         // 窗口化首屏/阈值：首屏渲染上限，越界后再按需追加
@@ -2757,6 +2851,14 @@
         <div id="userPrefsList"></div>
         <button class="ghost" onclick="WB.addUserPref()" style="margin-top:8px">＋ 添加偏好条目</button>
       </div>
+      <div class="setcard"><h4>骰娘 AI 功能开关</h4>
+        <div class="hint" style="color:var(--ink-faint);font-size:12px;margin-bottom:8px">这些开关专控「骰娘」运行时用到的 AI 能力。关闭即绝不向模型发起该功能请求，能有效防止 token 在日常使用中被消耗。总开关关闭时，下列所有功能一并停止请求。</div>
+        <div style="display:grid;grid-template-columns:1fr;gap:12px" id="diceAiSwitches"><div class="hint">加载中…</div></div>
+      </div>
+      <div class="setcard"><h4>骰娘表情包库</h4>
+        <div class="hint" style="color:var(--ink-faint);font-size:12px;margin-bottom:8px">从群里“偷”到的表情会被自动收集到这里（emoji / 图片 / 文本图），在骰娘随机插话时有概率被附带使用。可手动录入、打标签、管理。若「骰娘 AI 功能开关」里的「表情包(meme)」被关闭，则插话时不会附带收集到的表情，但收集仍可进行。</div>
+        <div id="memeManage"><div class="hint">加载中…</div></div>
+      </div>
       <div class="setcard"><h4>长期记忆（可选，手动维护）</h4>
         <div class="hint" style="margin-bottom:8px">如需长期记忆，在这里逐条记录要点（会自动注入每次对话的 prompt）</div>
         <div id="longMemoryList"></div>
@@ -2767,6 +2869,8 @@
     contentInner(html);
     paintLongMemoryList();
     paintUserPrefsList();
+    paintDiceAiSwitches();
+    paintMemeManage();
   }
   function saveAIConf() {
     const toS = Number(val('aif_to')) || 120;
@@ -2786,6 +2890,97 @@
     });
     persist(); toast('AI 连接与行为配置已保存', 'ok'); switchView('aiconf');
   }
+
+  /* ---- 骰娘 AI 功能开关（读主进程统一开关，写即生效） ---- */
+  const DICE_AI_FEATS = [
+    { key: 'dice', label: '骰娘专属 AI 对话', hint: '.ai 指令发起的对话/定向判定，走独立开关；关闭则 .ai 直接给友好提示' },
+    { key: 'optimize', label: '骰点文本优化', hint: '掷骰回复结合开团背景润色，更有剧情感（保留数值原义）' },
+    { key: 'interject', label: '随机插话', hint: '以设定概率在回复后插一句骰娘本人的话（不消费太多 token，受插话概率控制）' },
+    { key: 'meme', label: '表情包（偷表情）', hint: '收集群里 emoji/图片/文本图，插话时按概率附带；关闭则不附带已收集表情' },
+    { key: 'kpAdvice', label: 'KP 建议', hint: '依据当前对局给 KP 生成建议（仅在本工作台界面展示，不对外发送）' }
+  ];
+  async function paintDiceAiSwitches() {
+    const box = q('diceAiSwitches'); if (!box) return;
+    let sw;
+    try { sw = await (window.API && window.API.aiSwitchesGet ? window.API.aiSwitchesGet() : null); }
+    catch (_) { sw = null; }
+    if (!sw) { box.innerHTML = '<div class="hint">开关服务不可用（preload 未暴露 aiSwitchesGet）。</div>'; return; }
+    const feats = sw.features || {};
+    const rows = DICE_AI_FEATS.map((f) => `
+      <label class="toggle-row" style="display:flex;align-items:center;gap:10px">
+        <input type="checkbox" data-sw="${f.key}" ${chk(feats[f.key] !== false)} onchange="WB.saveDiceAiSwitches()">
+        <span><b>${f.label}</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">${f.hint}</span></span>
+      </label>`).join('');
+    const row = (id, label, val, min, max) => `
+      <div class="row" style="grid-template-columns:1fr 140px"><label>${label}</label>
+        <input id="${id}" type="number" min="${min}" max="${max}" value="${val}" onchange="WB.saveDiceAiSwitches()"></div>`;
+    box.innerHTML = `
+      <label class="toggle-row" style="display:flex;align-items:center;gap:10px">
+        <input type="checkbox" id="dsw_total" ${chk(sw.enabled)} onchange="WB.saveDiceAiSwitches()">
+        <span><b>总开关（所有骰娘 AI 功能）</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">关闭后不发起任何 AI 请求，仅此页面可重新开启</span></span>
+      </label>
+      ${rows}
+      ${row('dsw_interjectProb', '随机插话概率（% 命中率）', sw.interjectProb, 0, 100)}
+      ${row('dsw_memeProb', '插话附带表情概率（%）', sw.memeProb, 0, 100)}
+    `;
+  }
+  window.WB.saveDiceAiSwitches = async function saveDiceAiSwitches() {
+    const feats = {};
+    for (const f of DICE_AI_FEATS) { const el = q('[data-sw="' + f.key + '"]'); if (el) feats[f.key] = el.checked; }
+    const patch = {
+      enabled: !!(q('dsw_total') && q('dsw_total').checked),
+      features: feats,
+      interjectProb: Number(q('dsw_interjectProb') && q('dsw_interjectProb').value),
+      memeProb: Number(q('dsw_memeProb') && q('dsw_memeProb').value)
+    };
+    try {
+      if (window.API && window.API.aiSwitchesSet) {
+        const r = await window.API.aiSwitchesSet(patch);
+        toast('骰娘 AI 开关已保存', 'ok');
+        paintDiceAiSwitches();
+        return r;
+      }
+    } catch (e) { toast('保存开关失败：' + (e && e.message || e), 'err'); }
+  };
+
+  /* ---- 骰娘表情包库管理 ---- */
+  async function paintMemeManage() {
+    const box = q('memeManage'); if (!box) return;
+    let data;
+    try { data = await (window.API && window.API.diceCore && window.API.diceCore.meme ? window.API.diceCore.meme.list() : null) || { items: [], tags: [], count: 0 }; }
+    catch (_) { data = { items: [], tags: [], count: 0 }; }
+    const tags = data.tags || [];
+    const items = data.items || [];
+    const rows = items.slice(0, 30).map((it) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line);flex-wrap:wrap">
+        <code style="min-width:60px">${esc(it.token)}</code>
+        <span style="font-size:12px;color:var(--ink-faint)">×${it.count}</span>
+        <span>${(it.tags || []).map((t) => '<span class="tag" style="background:var(--panel);padding:0 6px;border-radius:8px;font-size:11px">' + esc(t) + '</span>').join(' ')}</span>
+        <button class="ghost small" onclick="WB.addMemeTag(${JSON.stringify(it.token).replace(/"/g, '&quot;')})">＋标签</button>
+        <button class="ghost small danger" onclick="WB.sampleMeme()">用一次</button>
+      </div>`).join('');
+    box.innerHTML = `
+      <div class="hint" style="margin-bottom:6px">已收集 ${data.count||0} 个表情，标签：${tags.map((t) => esc(t)).join(' / ') || '（无）'}</div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <input id="memeAddInput" placeholder="录入一个表情，如 😄 或 [CQ:image,...]" style="flex:1;min-width:220px">
+        <button class="ghost" onclick="WB.addMeme()">收录</button>
+        <button class="ghost" onclick="WB.sampleMeme()">随机调用一个</button>
+      </div>
+      <div style="max-height:230px;overflow:auto">${rows || '<div class="hint">还没有表达式，先在测试通道/群里发点表情，或手动收录。</div>'}</div>`;
+  }
+  window.WB.paintMemeManage = function () { paintMemeManage(); };
+  window.WB.addMeme = async function () {
+    const el = q('memeAddInput'); const v = el && el.value.trim();
+    if (!v) { toast('请输入表情内容', 'err'); return; }
+    try { if (window.API && window.API.diceCore && window.API.diceCore.meme) { await window.API.diceCore.meme.add(v); paintMemeManage(); toast('已收录表情', 'ok'); } } catch (e) { toast('收录失败', 'err'); }
+  };
+  window.WB.sampleMeme = async function () {
+    try { let t = ''; if (window.API && window.API.diceCore && window.API.diceCore.meme) t = await window.API.diceCore.meme.sample([]); toast(t || '表情库还是空的', t ? 'ok' : 'err'); } catch (e) { toast('调用失败', 'err'); }
+  };
+  window.WB.addMemeTag = async function (token) {
+    try { if (window.API && window.API.diceCore && window.API.diceCore.meme) { await window.API.diceCore.meme.tag(token, ['通用'], 'add'); paintMemeManage(); } } catch (_) {}
+  };
+
   /* ---- 内容过滤规则：读取 / 渲染 / 添加 / 删除 ---- */
   let _modRuleSeed = null;
   const chk = (b) => b ? 'checked' : ''; // 勾选态工具（供规则/开关渲染共用，避免作用域缺失导致按钮失效）
@@ -6237,7 +6432,8 @@
       <label class="ai-toggle"><input type="checkbox" id="diceAi" ${aiOn ? 'checked' : ''}> AI 判定</label></div>`;
 
     // 通用/自定义投掷区：任意规则下都可自定义输入并投掷，常见骰子点击即掷
-    html += `<div class="dicebox"><div class="row"><label>自定义投掷（NdM±X，如 2d6、1d20+3、1d100、3d6+2）</label>
+    html += `<div class="dicebox"><div class="dsec">🎲 常用骰 · 自定义投掷</div>
+      <div class="row"><label>自定义投掷（NdM±X，如 2d6、1d20+3、1d100、3d6+2）</label>
       <input id="diceExpr" value="${esc(sel.expr || '1d20')}" placeholder="NdM±X" style="font-family:monospace;font-size:15px"></div>
       <div class="toolbar"><button id="diceRollBtn">⚀ 投掷</button>
         <button class="ghost dicequick" data-die="1d4">d4</button>
@@ -6251,12 +6447,14 @@
 
     // 规则定向检定
     if (rule === 'coc') {
-      html += `<div class="dicebox"><div class="row" style="display:flex;gap:12px"><div style="flex:1"><label>技能/属性值（目标值 1-99）</label>
+      html += `<div class="dicebox"><div class="dsec">🎯 CoC 7th 检定</div>
+        <div class="row" style="display:flex;gap:12px"><div style="flex:1"><label>技能/属性值（目标值 1-99）</label>
         <input id="diceCocTarget" type="number" min="1" max="99" value="${sel.cocTarget || 50}"></div>
         <div style="flex:1"><label>检定骰</label><input id="diceCocRoll" value="${esc(sel.cocRoll || '1d100')}"></div></div>
         <div class="toolbar"><button id="cocJudgeBtn">🎯 CoC 检定</button><span class="hint">1 大成功 · ≤1/5 极难 · ≤1/2 困难 · ≤目标普通 · ≥96 大失败</span></div></div>`;
     } else if (rule === 'dnd') {
-      html += `<div class="dicebox"><div class="row" style="display:flex;gap:12px">
+      html += `<div class="dicebox"><div class="dsec">🎯 DnD 5e 检定</div>
+        <div class="row" style="display:flex;gap:12px">
         <div style="flex:1"><label>属性调整值（mod，可为负）</label><input id="diceDndMod" type="number" value="${sel.dndMod != null ? sel.dndMod : 0}"></div>
         <div style="flex:1"><label>难度等级 DC</label><input id="diceDndDc" type="number" value="${sel.dndDc || 10}"></div>
         <div style="flex:1"><label>优势/劣势</label><select id="diceDndAdv"><option value="0" ${!sel.dndAdv ? 'selected' : ''}>普通</option><option value="1" ${sel.dndAdv === 1 ? 'selected' : ''}>优势</option><option value="-1" ${sel.dndAdv === -1 ? 'selected' : ''}>劣势</option></select></div></div>
@@ -6265,10 +6463,11 @@
     html += `</div>`;
 
     // 结果显示区
-    html += `<div id="diceOut" class="diceout">${S.settings.diceLast ? renderDiceResult(S.settings.diceLast) : '<div class="empty">投掷 / 检定结果将显示在这里</div>'}</div>`;
+    html += `<div class="dsec" style="margin:14px 0 0">掷骰结果</div>
+      <div id="diceOut" class="diceout">${S.settings.diceLast ? renderDiceResult(S.settings.diceLast) : '<div class="empty">投掷 / 检定结果将显示在这里</div>'}</div>`;
 
     // AI 定向判定 + 人物卡 Excel
-    html += `<details class="diceai"><summary>🎭 AI 定向判定（可导入人物卡 Excel，可独立接本地 AI 端口）</summary>
+    html += `<details class="diceai"><summary class="dsec" style="margin:0;cursor:pointer;list-style:none">🎭 AI 定向判定 <span class="hint" style="font-family:var(--font);font-weight:400;letter-spacing:0">可导入人物卡 Excel，可独立接本地 AI 端口</span></summary>
       <div class="airow"><label class="file-label"><input type="file" id="sheetFile" accept=".xlsx,.xls,.csv" hidden onchange="WB.readSheet(this)">
         <span class="ghost filebtn">📄 选择人物卡 Excel</span></label>
         <span id="sheetState" class="hint">${S.settings.sheetName ? '已加载：' + esc(S.settings.sheetName) : '未加载人物卡'}</span>

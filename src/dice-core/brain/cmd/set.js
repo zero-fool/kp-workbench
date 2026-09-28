@@ -15,8 +15,8 @@ module.exports = registerCmd({
     if (m) { cfg.prefix = m[1]; return { text: ctx.render ? ctx.render('set.saved', { summary: `指令前缀 = ${cfg.prefix}` }) : `已保存：指令前缀 = ${cfg.prefix}` }; }
     m = /^fullwidth\s+(on|off)$/.exec(arg);
     if (m) { cfg.fullwidth = m[1] === 'on'; return { text: ctx.render ? ctx.render('set.saved', { summary: `全角兼容 = ${cfg.fullwidth ? '开' : '关'}` }) : `已保存：全角兼容 = ${cfg.fullwidth ? '开' : '关'}` }; }
-    m = /^(fun|admin)\s+(on|off)$/.exec(arg);
+    m = /^(fun|admin|ai|optimize|interject|meme|kpAdvice|dice)\s+(on|off)$/.exec(arg);
     if (m) { cfg.switches[m[1]] = m[2] === 'on'; return { text: ctx.render ? ctx.render('set.saved', { summary: `${m[1]} 功能 = ${cfg.switches[m[1]] ? '开' : '关'}` }) : `已保存：${m[1]} 功能 = ${cfg.switches[m[1]] ? '开' : '关'}` }; }
-    return { text: '用法：set prefix <符号> / set fullwidth on|off / set fun on|off / set admin on|off' };
+    return { text: '用法：set prefix <符号> / set fullwidth on|off / set fun|admin|ai|optimize|interject|meme on|off' };
   }
 });

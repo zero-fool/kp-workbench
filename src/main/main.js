@@ -70,6 +70,18 @@ if (!Array.isArray(doc.settings.templates)) doc.settings.templates = [];
     if (!have.has(b.id)) { doc.settings.templates.unshift(JSON.parse(JSON.stringify(b))); have.add(b.id); }
   }
 }
+/* AI 统一开关：总开关(enabled) + 按功能分开关(features)。
+ * enabled=false 时所有 AI 请求一律拒发；分开关让用户在具体功能上用不到时关掉，杜绝 token 偷跑。 */
+{
+  if (!doc.settings.ai) doc.settings.ai = {};
+  if (doc.settings.ai.enabled === undefined) doc.settings.ai.enabled = true;
+  if (!doc.settings.ai.features) doc.settings.ai.features = {};
+  const def = { dice: true, optimize: true, interject: false, meme: true, kpAdvice: true };
+  for (const f of Object.keys(def)) if (doc.settings.ai.features[f] === undefined) doc.settings.ai.features[f] = def[f];
+  if (doc.settings.ai.interjectProb === undefined) doc.settings.ai.interjectProb = 15;     // 随机插话命中率(%)
+  if (doc.settings.ai.memeProb === undefined) doc.settings.ai.memeProb = 25;              // 插话时附带“偷来的表情”的概率(%)
+  if (doc.settings.ai.optimizePrompt === undefined) doc.settings.ai.optimizePrompt = '';    // 骰点优化附加提示词
+}
 store.save(doc);
 
 /* ---- 崩溃会话心跳（B2）：运行中每 30s 落一个「在线标记」；正常退出(will-quit)会清除它，
@@ -451,7 +463,7 @@ function registerIpc() {
       const st = fs.statSync(fp);
       if (!st.isFile()) return { ok: false, error: '所选项不是文件' };
       if (st.size === 0) return { ok: false, error: '文件为空(0 字节)' };
-      if (st.size > IMPORT_MAX) return { ok: false, error: '文件过大(>1GB)，已超出单文件上限。' };
+      if (st.size > IMPORT_MAX) return { ok: false, error: '文件过大(>' + IMPORT_MAX_TXT + ')，已超出单文件上限。' };
       const kind = detectImportKind(fp);
       if (kind === 'other') return { ok: false, error: '暂不支持该格式，请选择文本/PDF/Word/Excel/CSV 等文字类文件。' };
       const { text } = await extractText(fp, kind, st.size);
@@ -489,10 +501,14 @@ function registerIpc() {
     }
   });
   /* ==================== 大文件多格式导入 ==================== */
-  const IMPORT_MAX = 1073741824;          // 单文件上限 1GB（覆盖“至少 500MB”）
-  const WORK_CAP = 120 * 1024 * 1024;     // 文本工作副本最大读取量 120MB
-  const PREVIEW_CAP = 40000;               // 返回给界面预览的字符数
-  const XL_ROW_CAP = 20000;                // Excel 工作表最大读取行(防止超大表拖慢)
+  /* 大户：团本/长文档导入。容量与主存安全平衡——单文件上限扩大，工作副本读取量加大，
+   * 分块 AI 分析并发提速（见 file:analyzeImport）。命中率由更完整的正文 + 逐段合并保证。 */
+  const IMPORT_MAX = 8 * 1024 * 1024 * 1024;  // 单文件上限 8GB（原 1GB）
+  const WORK_CAP = 256 * 1024 * 1024;         // 文本工作副本最大读取量 256MB（原 120MB）
+  const PREVIEW_CAP = 80000;                   // 返回给界面预览的字符数（原 40k）
+  const XL_ROW_CAP = 20000;                    // Excel 工作表最大读取行(防止超大表拖慢)
+  const IMPORT_MAX_TXT = '8GB';                // 错误提示文案
+  const AI_SPLIT_CAP = 300 * 1024;             // file:splitImport 交给 AI 的正文上限(字符)
 
   function extOf(fp) { const m = /\.([a-z0-9]+)$/i.exec(String(fp || '')); return m ? m[1].toLowerCase() : ''; }
   /* 安全白名单：仅允许读取「当前数据目录 uploads/ 内」的文件（导入/上传生成的工作副本）。
@@ -682,7 +698,7 @@ function registerIpc() {
       const st = fs.statSync(fp);
       if (!st.isFile()) return { ok: false, error: '所选项不是文件' };
       if (st.size === 0) return { ok: false, error: '文件为空(0 字节)' };
-      if (st.size > IMPORT_MAX) return { ok: false, error: '文件过大(>1GB)，已超出单文件上限。' };
+      if (st.size > IMPORT_MAX) return { ok: false, error: '文件过大(>' + IMPORT_MAX_TXT + ')，已超出单文件上限。' };
       const name = path.basename(fp);
       const kind = detectImportKind(fp);
       if (kind === 'other') return { ok: false, error: '暂不支持该格式：' + name + '。支持 txt/md/log/json/csv/xlsx/pdf/docx 等文本与文档格式。' };
@@ -713,29 +729,60 @@ function registerIpc() {
   ipcMain.handle('file:splitImport', async (e, args) => {
     args = args || {};
     let text = String((args && args.preview) || '');
-    if (args.path && ensureUploadPath(args.path) && fs.existsSync(args.path)) text = String(fs.readFileSync(args.path, 'utf8') || '').slice(0, 120000);
+    if (args.path && ensureUploadPath(args.path) && fs.existsSync(args.path)) text = String(fs.readFileSync(args.path, 'utf8') || '').slice(0, AI_SPLIT_CAP);
     const existing = doc.entities || {};
     return ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 拆分导入资料'), existing, { settings: doc.settings, strict: args.strict !== false, excludePC: args.excludePC === true });
   });
-  /* 大文件的分块 AI 分析整理：流式分帧，逐段交给 AI 汇总为结构提纲 */
+  /* 大文件的分块 AI 分析整理：先并行抽取每段独立摘要(并发受控)，再顺序合并为完整提纲。
+   * 相比旧版逐段串行合并：并行占满空闲连接、缩短墙钟时长；合并阶段小步串行保证连贯与命中率。 */
   ipcMain.handle('file:analyzeImport', async (e, { path: p, title }) => {
     try {
       if (!p || !ensureUploadPath(p) || !fs.existsSync(p)) return { ok: false, error: '找不到已抽取的导入文本，请重新导入。' };
-      const maxChunk = 12000, overlap = 500;
+      const maxChunk = 16000, overlap = 800, MAX_CHUNKS = 400;
       const chunks = [];
       const ALL = fs.readFileSync(p, 'utf8'); // 工作副本已封顶(WORK_CAP)
       let i = 0;
-      while (i < ALL.length) { let j = Math.min(i + maxChunk, ALL.length); chunks.push(ALL.slice(i, j)); i = j - overlap; if (i < 0) i = 0; if (chunks.length > 200) break; }
+      while (i < ALL.length) {
+        const j = Math.min(i + maxChunk, ALL.length);
+        chunks.push(ALL.slice(i, j));
+        i = j - overlap; if (i < 0) i = 0;
+        if (chunks.length >= MAX_CHUNKS) break;
+      }
       const profile = currentProfile(); const fields = ai.effectiveFields(doc); const cfg = aiCfg('cards', 'AI 分析导入资料'); const wn = worldName();
-      const digTpl = ai.effectivePrompts(doc.settings).digest;
-      let digest = '';
-      for (let k = 0; k < chunks.length; k++) {
-        const head = k === 0 ? ('这是导入资料《' + (title || '导入内容') + '》的第 1 段。') : ('这是同一份资料的第 ' + (k + 1) + ' / ' + chunks.length + ' 段(前面已有摘要)。');
-        let prompt;
-        if (digest) prompt = head + '\n请把「已有摘要」与「新片段」合并为一份更完整的结构化中文提纲(涵盖：核心设定/规则要点/人物角色/地点/通关或剧情关键点)。保留全部未重复的关键信息，按条目列出，控制在 800 字内。\n【已有摘要】\n' + digest.slice(-9000) + '\n【新片段】\n' + chunks[k];
-        else prompt = head + '\n' + ai.renderPrompt(digTpl, { fragment: chunks[k] }, true);
-        const res = await ai.chat(profile, [{ role: 'user', content: prompt }], fields, cfg, wn);
-        digest = String((res && res.content) || '').trim() || digest;
+      const name0 = title || '导入内容';
+
+      // 阶段一：逐块并行抽取独立摘要（并发上限兜底，避免打爆连接/限流）
+      const digests = new Array(chunks.length);
+      let cursor = 0;
+      const CONC = 5;
+      async function worker() {
+        while (true) {
+          const k = cursor++;
+          if (k >= chunks.length) return;
+          const head = chunks.length > 1
+            ? `这是导入资料《${name0}》的第 ${k + 1} / ${chunks.length} 段。`
+            : `这是导入资料《${name0}》的全部内容。`;
+          const prompt = head + '\n请抽取本段的「结构化中文提纲」，涵盖：核心设定/规则要点/人物角色/地点/通关或剧情关键点。保留本段全部关键信息（勿省略人名地名称号数值），控制在 800 字内，不加以源之外的信息。\n【片段】\n' + chunks[k];
+          try {
+            const res = await ai.chat(profile, [{ role: 'user', content: prompt }], fields, cfg, wn);
+            digests[k] = String((res && res.content) || '').trim();
+          } catch (_) { digests[k] = ''; }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(CONC, chunks.length) }, worker));
+      const sig = digests.filter(Boolean);
+      if (!sig.length) return { ok: false, error: 'AI 未能从内容中提炼出有效信息，请检查文件是否为可读正文。' };
+
+      // 阶段二：把各块摘要顺序合并为一份完整提纲（保持上下文连贯，控制合并调用次数）
+      let digest = sig[0];
+      for (let k = 1; k < sig.length; k++) {
+        const left = digest.slice(-9000), right = sig[k];
+        const prompt = `你在整理导入资料《${name0}》的结构化中文提纲。请把「已有提纲」与「又一片段摘要」合并为更完整的一份(涵盖：核心设定/规则要点/人物角色/地点/通关或剧情关键点)。删除重复，保留全部未重复的关键信息(人名/地名/称号/数值勿省)，按条目列出，控制在 1400 字内。\n【已有提纲】\n${left}\n【新片段摘要】\n${right}`;
+        try {
+          const res = await ai.chat(profile, [{ role: 'user', content: prompt }], fields, cfg, wn);
+          const merged = String((res && res.content) || '').trim();
+          if (merged) digest = merged;
+        } catch (_) { digest = digest + '\n' + right; }
       }
       return { ok: true, digest, chunks: chunks.length };
     } catch (e) {
@@ -929,6 +976,30 @@ function registerIpc() {
     try { if (win && win.webContents) win.webContents.send('ai:cancelled', { group, hit: n }); } catch (_) {}
   });
 
+  /* ---- AI 统一开关：读取 / 写入（总开关 + 按功能分开关），供界面与策略配置 ---- */
+  ipcMain.handle('ai:switchesGet', () => {
+    const a = (doc.settings && doc.settings.ai) || {};
+    return { enabled: a.enabled !== false, features: Object.assign({ dice: true, optimize: true, interject: false, meme: true, kpAdvice: true }, a.features || {}), interjectProb: Number.isFinite(a.interjectProb) ? a.interjectProb : 15, memeProb: Number.isFinite(a.memeProb) ? a.memeProb : 25, optimizePrompt: String(a.optimizePrompt || '') };
+  });
+  ipcMain.handle('ai:switchesSet', (e, patch) => {
+    patch = patch || {};
+    if (!doc.settings.ai) doc.settings.ai = {};
+    if (typeof patch.enabled === 'boolean') doc.settings.ai.enabled = patch.enabled;
+    if (parseFloat(patch.interjectProb) >= 0) doc.settings.ai.interjectProb = Math.min(100, Number(patch.interjectProb));
+    if (parseFloat(patch.memeProb) >= 0) doc.settings.ai.memeProb = Math.min(100, Number(patch.memeProb));
+    if (typeof patch.optimizePrompt === 'string') doc.settings.ai.optimizePrompt = patch.optimizePrompt;
+    if (patch.features && typeof patch.features === 'object') {
+      if (!doc.settings.ai.features) doc.settings.ai.features = {};
+      const f = doc.settings.ai.features;
+      if (patch.features.enabled !== undefined) doc.settings.ai.enabled = patch.features.enabled;
+      for (const k of Object.keys(patch.features)) { if (typeof patch.features[k] === 'boolean') f[k] = patch.features[k]; }
+    }
+    store.save(doc);
+    doc = store.load();
+    const a = (doc.settings && doc.settings.ai) || {};
+    return { enabled: a.enabled !== false, features: Object.assign({ dice: true, optimize: true, interject: false, meme: true, kpAdvice: true }, a.features || {}), interjectProb: Number.isFinite(a.interjectProb) ? a.interjectProb : 15, memeProb: Number.isFinite(a.memeProb) ? a.memeProb : 25, optimizePrompt: String(a.optimizePrompt || '') };
+  });
+
   /* ---- AI 数据一致性审查 ---- */
   ipcMain.handle('ai:audit', async () => {
     const cfg = aiCfg('sys', 'AI 数据审查');
@@ -1073,9 +1144,61 @@ function registerIpc() {
   ipcMain.handle('diceState:backup', () => diceStorePort.backup());
 
   /* ---- 骰娘工作台运行时（分区 2/3/4/6）----
-   * 装配 hub + 三通道适配器 + state/log/文案持久化；改名引用：registerIpc 起用 diceWorkbench。 */
+   * 装配 hub + 三通道适配器 + state/log 文案持久化；改名引用：registerIpc 起用 diceWorkbench。
+   * AI 经 dice-ai 桥接接入：统一受 settings.ai(enabled + features) 开关约束，放行才真正消耗 token。 */
   const { createDiceRuntime } = require('./dice-runtime');
-  const diceWorkbench = createDiceRuntime({ store: diceStorePort, cfg: { onebot11: {}, qqofficial: {}, sim: {} } });
+  const { createDiceAi } = require('./dice-ai');
+  const { createTransformReplies } = require('./dice-enhance');
+  // 骰娘表情库：从会话“偷”到的 emoji/图片/文本图，打标签存储，插话时可概率附带。
+  // 经 diceStorePort 持久化到 doc.settings 之外独立子键，避免与 AI 文案混存。
+  const { createMemeStore } = require('./dice-memes');
+  const memeStore = createMemeStore();
+  (function loadMemeStore() {
+    try {
+      const saved = diceStorePort.load('dice-memes');
+      if (saved && typeof saved === 'object') memeStore.fromJSON(saved);
+    } catch (_) {}
+  })();
+  // 表情库 IPC：查询/手动录入/打标签/抽样（UI 与测试均可用）
+  ipcMain.handle('diceMeme:list', () => ({ items: memeStore.list(), tags: memeStore.tagList(), count: memeStore.count() }));
+  ipcMain.handle('diceMeme:add', (e, token) => {
+    const ok = memeStore.add(token);
+    if (ok) diceStorePort.save('dice-memes', memeStore.toJSON());
+    return ok;
+  });
+  ipcMain.handle('diceMeme:tag', (e, token, tagList, op) => {
+    const ok = memeStore.tag(token, tagList, op);
+    if (ok) diceStorePort.save('dice-memes', memeStore.toJSON());
+    return ok;
+  });
+  ipcMain.handle('diceMeme:sample', (e, tags) => memeStore.sample(tags || undefined));
+  const diceAI = createDiceAi({
+    ai,
+    getContext(feature) {
+      const a = (doc.settings && doc.settings.ai) || {};
+      const cfg = currentCfg(); // 未配置会抛错 → 短路，不调用供应商
+      return {
+        enabled: a.enabled !== false && (a.features ? a.features[feature] !== false : true),
+        cfg,
+        buildSystem(f) {
+          const sys = '你是跑团群里的「骰娘」，负责掷骰、判定与引导剧情推进。请用活泼、亲切、适合 TRPG 玩家阅读的'
+            + (f === 'dice' ? '口吻直接回答玩家的问题，涉及检定结果时不要改动数值本身，只做带剧情的润色。' : '口吻辅助。')
+            + '\n\n感谢用户记得你所在团的世界观：\n' + buildLoreText()
+            + (userPrefsText() ? '\n\n【KP 偏好】\n' + userPrefsText() : '');
+          return String(sys).slice(0, 6000);
+        }
+      };
+    }
+  });
+  const transformReplies = createTransformReplies({
+    aiBridge: diceAI,
+    memes: memeStore,
+    getConfig() {
+      const a = (doc.settings && doc.settings.ai) || {};
+      return { enabled: a.enabled !== false, features: a.features || {}, interjectProb: a.interjectProb, memeProb: a.memeProb, optimizePrompt: a.optimizePrompt };
+    }
+  });
+  const diceWorkbench = createDiceRuntime({ store: diceStorePort, ai: diceAI, transformReplies, cfg: { onebot11: {}, qqofficial: {}, sim: {} } });
   global.diceNetAdapters = diceWorkbench.adapters; // 兼容既有 before-quit 回收逻辑
 
   // 连接中心（分区 2）
