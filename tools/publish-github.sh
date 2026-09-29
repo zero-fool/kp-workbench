@@ -2,7 +2,9 @@
 # tools/publish-github.sh —— 一键发布到 GitHub Releases
 #
 # 把 dist/ 下的发布产物（绿色版 zip / 便携版 exe / 安装版 exe）按版本号建 Release 并上传为附件。
-# 已存在的 Release 与已上传的附件会自动跳过，可重复执行（断点续传）。
+# Release 正文（「更新通告」）由 tools/release-notes.js 依据 src/renderer/app.js 的 CHANGELOG 自动生成，
+# 并附上绿色版下载须知。Release 与附件均已存在的会自动跳过，可重复执行（断点续传），
+# 重复执行时会把已存在 Release 的通告正文刷新为最新内容。
 #
 # 用法：
 #   GH_TOKEN=xxx bash tools/publish-github.sh            # 发布 dist 中所有尚未发布的版本
@@ -85,15 +87,33 @@ for v in $versions; do
   rel_json="$(api "https://api.github.com/repos/$REPO/releases/tags/$tag" || true)"
   rel_id="$(printf '%s' "$rel_json" | json_get 'o.id')"
 
+  # 更新通告正文：由 src/renderer/app.js 的 CHANGELOG 生成，只列出本版真实存在的附件类型。
+  kinds=""
+  for f in "$DIST"/*_"v$v"_*; do
+    [ -f "$f" ] || continue
+    case "$(basename "$f")" in
+      *_绿色版.zip) kinds="$kinds green" ;;
+      *_便携版.exe) kinds="$kinds portable" ;;
+      *_安装版.exe) kinds="$kinds setup" ;;
+    esac
+  done
+  body="$(node "$ROOT/tools/release-notes.js" "$v" $kinds 2>/dev/null || true)"
+  if [ -z "$body" ]; then
+    body="KP 跑团工作台 $tag 发布。完整更新记录见应用内「更新公告」与 https://github.com/$REPO/releases"
+    echo "  提示：CHANGELOG 中没有 $v，Release 正文退回通用说明"
+  fi
+
   if [ -z "$rel_id" ]; then
     if [ "$DRY_RUN" = 1 ]; then echo "  [dry] 将创建 Release $tag"; rel_id="DRY"; else
       echo "  创建 Release $tag …"
-      rel_id="$(api -X POST "https://api.github.com/repos/$REPO/releases" \
-        -d "$(node -e 'process.stdout.write(JSON.stringify({tag_name:process.argv[1],name:"KP跑团工作台 "+process.argv[2],body:"KP 跑团工作台 "+process.argv[2]+" 发布。详见应用内「更新公告」。",draft:false,prerelease:false}))' "$tag" "$tag")" | json_get 'o.id')"
+      rel_id="$(printf '%s' "$body" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const t=process.argv[1];process.stdout.write(JSON.stringify({tag_name:t,name:"KP跑团工作台 "+t,body:s,draft:false,prerelease:false}))})' "$tag" \
+        | api -X POST -H "Content-Type: application/json" "https://api.github.com/repos/$REPO/releases" -d @- | json_get 'o.id')"
       [ -n "$rel_id" ] || { echo "  创建失败，跳过"; continue; }
     fi
   else
-    echo "  Release 已存在（id=$rel_id）"
+    echo "  Release 已存在（id=$rel_id），同步更新通告正文 …"
+    [ "$DRY_RUN" = 1 ] || printf '%s' "$body" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{process.stdout.write(JSON.stringify({body:s}))})' \
+      | api -X PATCH -H "Content-Type: application/json" "https://api.github.com/repos/$REPO/releases/$rel_id" -d @- >/dev/null || echo "  （正文更新失败，跳过）"
   fi
 
   # 已上传附件名单

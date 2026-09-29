@@ -45,7 +45,20 @@
 - 体积硬性上限：绿色版 / 安装版解包后 < 100MB（规格预期约 70MB）；超限视为发布失败，先检查是否有旧内核残留回流。
 - 骰娘板块由「连 QQ 骰娘（内嵌 dice-next）」升级为「骰娘工作台」六分区；preload 只剩 `diceCore.*` 新接口，无第三方可拦截面。
 
-## 4. 更新源托管选项
+## 4. 一键发布到 GitHub Releases（tools/publish-github.sh）
+
+```bash
+GH_TOKEN=<具备 Contents: write 的令牌> bash tools/publish-github.sh            # 发布 dist 中所有版本
+GH_TOKEN=xxx bash tools/publish-github.sh 3.1.2                              # 只发指定版本
+GH_TOKEN=xxx bash tools/publish-github.sh --dry-run                          # 只打印动作
+```
+
+- Release 正文（「更新通告」）由 `tools/release-notes.js` 从 `src/renderer/app.js` 的 `CHANGELOG` 自动生成，并附带「绿色版下载须知」要点与 `DOWNLOAD.md` 链接；因此**发版前务必先在 CHANGELOG 里补上该版本条目**，否则正文会退回通用说明。
+- 附件名统一为 ASCII：`KP-workbench-vX.Y.Z-green.zip` / `-portable.exe` / `-setup.exe`。
+- 脚本可重复执行：已存在的 Release 会刷新通告正文，已上传的附件自动跳过；缺失的附件会补传。
+- 面向用户的完整下载说明见仓库根目录 [DOWNLOAD.md](DOWNLOAD.md)（数据位置、升级不丢数据、常见问题）。
+
+## 5. 更新源托管选项
 
 - **任意静态站点 / 对象存储 / 自建 Web 服务**：把三个文件放在一个固定可访问的 HTTPS 目录即可（上面的 generic 方式）。
 - 换用 **GitHub Releases**：把 `publish` 改为
@@ -54,11 +67,11 @@
   ```
   然后发布 tag 时把三个产物传上去，应用会自动从 GitHub 读取。
 
-## 5. 数据安全保证
+## 6. 数据安全保证
 
 安装版数据存放于系统用户目录（`app.getPath('userData')`），与安装目录无关。原地覆盖升级、甚至卸载重装都不会触碰数据；从旧绿色版切换过来时，应用会自动把旧 `data/` 搬到用户目录，无需手动处理。
 
-## 6. 贴合你诉求的验证对照
+## 7. 贴合你诉求的验证对照
 
 - 「只留一个安装包，可选安装位置」→ `build:installer`，NSIS 安装器 `allowToChangeInstallationDirectory: true`。
 - 「更新包在原有包体上更新，不用反复删除」→ `build:update` 产出差分包 + `latest.yml`，应用下载后 `quitAndInstall` 原地覆盖升级。
