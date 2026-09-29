@@ -25,9 +25,12 @@ DIST="$ROOT/dist"
 REPO="${GH_REPO:-}"
 if [ -z "$REPO" ]; then
   url="$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)"
-  REPO="$(printf '%s' "$url" | sed -E 's#.*github\.com[:/]([^/]+)/([^/]+?)(\.git)?$#\1/\2#')"
+  REPO="$(printf '%s' "$url" | sed -E 's#^.*github\.com[:/]##; s#\.git$##; s#/+$##')"
 fi
-[ -n "$REPO" ] && [ "$REPO" != "$url" ] || { echo "无法确定仓库，请设置 GH_REPO=owner/repo"; exit 1; }
+case "$REPO" in
+  */*) ;;
+  *) echo "无法确定仓库，请设置 GH_REPO=owner/repo（当前：${REPO:-空}）"; exit 1 ;;
+esac
 
 # ---- 参数 ----
 DRY_RUN=0
@@ -43,6 +46,21 @@ done
 api() { curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$@"; }
 json_get() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const o=JSON.parse(s);process.stdout.write(String(eval(process.argv[1])??""))}catch(e){process.stdout.write("")}})' "$1"; }
 urlenc() { node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$1"; }
+
+# 附件名统一用 ASCII（GitHub 会把中文附件名规范化成 KP._vX_.exe，导致同类文件撞名）：
+#   绿色版 zip → KP-workbench-vX.Y.Z-green.zip
+#   便携版 exe → KP-workbench-vX.Y.Z-portable.exe
+#   安装版 exe → KP-workbench-vX.Y.Z-setup.exe
+asset_name() {
+  local b="$1" v
+  v="$(printf '%s' "$b" | sed -nE 's/.*_v([0-9]+\.[0-9]+\.[0-9]+(_[0-9]+)?)_.*/\1/p')"
+  case "$b" in
+    *_绿色版.zip) printf 'KP-workbench-v%s-green.zip' "$v" ;;
+    *_便携版.exe) printf 'KP-workbench-v%s-portable.exe' "$v" ;;
+    *_安装版.exe) printf 'KP-workbench-v%s-setup.exe' "$v" ;;
+    *) printf '%s' "$b" ;;
+  esac
+}
 
 echo "仓库：$REPO   产物目录：$DIST"
 [ -d "$DIST" ] || { echo "dist/ 不存在，先执行打包"; exit 1; }
@@ -88,13 +106,14 @@ for v in $versions; do
     [ -f "$f" ] || continue
     case "$(basename "$f")" in *_绿色版.zip|*_便携版.exe|*_安装版.exe) ;; *) continue ;; esac
     name="$(basename "$f")"
-    if printf '%s\n' "$have" | grep -Fqx "$name"; then echo "  已存在，跳过：$name"; continue; fi
-    if [ "$DRY_RUN" = 1 ]; then echo "  [dry] 将上传：$name ($(du -h "$f" | cut -f1))"; continue; fi
-    echo "  上传：$name ($(du -h "$f" | cut -f1)) …"
+    aname="$(asset_name "$name")"
+    if printf '%s\n' "$have" | grep -Fqx "$aname"; then echo "  已存在，跳过：$aname"; continue; fi
+    if [ "$DRY_RUN" = 1 ]; then echo "  [dry] 将上传：$aname ($(du -h "$f" | cut -f1))"; continue; fi
+    echo "  上传：$aname ($(du -h "$f" | cut -f1)) …"
     api -X POST \
       -H "Content-Type: application/octet-stream" \
       --data-binary @"$f" \
-      "https://uploads.github.com/repos/$REPO/releases/$rel_id/assets?name=$(urlenc "$name")" \
+      "https://uploads.github.com/repos/$REPO/releases/$rel_id/assets?name=$(urlenc "$aname")" \
       | json_get 'o.state==="uploaded"?"  -> ok":("  -> 失败: "+(o.message||""))' >&2 || echo "  -> 上传出错"
   done
 done
