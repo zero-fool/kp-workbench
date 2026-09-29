@@ -1,6 +1,10 @@
 'use strict';
 /* KP 跑团工作台 · 渲染层 */
 (function () {
+  /* 尽早初始化全局 WB 命名空间：骰娘 AI 开关/表情包等方法在文件中部(提交自 window.WB= 之前)
+   * 以「window.WB.xxx = function」方式挂载，若不预先建空对象会在加载期抛 TypeError 导致
+   * 整页卡在「加载中…」且所有按钮失效。详见 7539 行的 Object.assign 合并。 */
+  window.WB = window.WB || {};
   const q = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   /* 用于「内联 onclick 的 JS 字符串参数」，防止 esc() 的 `&#39;` 被浏览器先解引用成 `'` 再闭合 JS 字符串造成注入。
@@ -12,8 +16,22 @@
   const KINDS = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
   const TPL_KINDS = ['pcs', 'npcs', 'mobs']; // 仅「卡片类」实体支持切换模板（模板改变显示字段集）
   const THEMES = [['ember', '残火纪·暗黑'], ['parchment', '羊皮纸手账'], ['lite', '极简浅色'], ['neon', '赛博霓虹'], ['dusk', '暮光护眼']];
-  const APP_VERSION = '3.0.0';
+  const APP_VERSION = '3.1.2';
   const CHANGELOG = [
+    { version: '3.1.2', date: '2026-09-29', type: '正式版·修复', items: [
+      '修复：骰娘工作台「插件工坊」一打开即报「DiceUI.pluginListHTML is not a function」——插件工坊（workshop.js）与 AI 生成向导（wizard.js）共用 window.DiceUI 命名空间，后加载的向导直接整体覆盖命名空间，把插件工坊的方法全部抹掉。现两分区改为合并式挂载，方法共存、互不覆盖。',
+      '修复：骰娘通道启动仍报「当前运行环境缺少 WebSocket」——主进程（Node 20）没有全局 WebSocket，原先的兜底（undici / ws 依赖）在打包环境都取不到。现新增项目自带的零依赖 WebSocket 客户端（基于 net/tls 实现 RFC6455 子集），启动早期优先注入，打包后也能连 QQ 官方 / OneBot 网关。',
+      '说明：以上两项在 3.1.1 已改源码但未打进打包产物，本版重新打包后真正生效。'
+    ]},
+    { version: '3.1.1', date: '2026-09-29', type: '正式版', items: [
+      '修复：骰娘「连接中心」QQ 官方机器人通道无法启动——填好 appId / clientSecret 点启动后输入框被清空并提示“请输入”。根因有二：① 主进程持有一份写死的空配置，界面填写的凭据从未同步过去，启动校验必然失败；② 输入框只有展示、没有写回绑定，点启动整卡重渲染即被清空。现输入实时保存并持久化，启动前把最新配置一并传给主进程，链路三层打通。',
+      '修复：骰娘通道启动报「WebSocket is not defined」——QQ 官方 / OneBot 网关在主进程（Node 环境）建立连接，而主进程没有全局 WebSocket。现启动早期自动注入可用实现（内置 undici，零新增依赖），通道启动不再受此阻断。'
+    ]},
+    { version: '3.1.0', date: '2026-09-28', type: '正式版', items: [
+      '新增：运行记录（持续记录，不只报错）——侧栏「更多工具 → 运行记录」可随时查看 / 按日期·等级·关键词筛选 / 一键打开日志文件夹 / 一键导出；界面与主进程的全部未处理异常都会自动写入，并记录每次进入的界面，形成完整操作时间线，便于遇到问题时快速定位。',
+      '新增：运行记录文件直接落盘到 data/runlog/ 文件夹——latest.log（固定路径，每次启动重新生成、只保留本次运行全过程，最容易找）＋ 按天 YYYY-MM-DD.log（保留 14 天自动清理）＋ latest.json（最近一次启动信息）。',
+      '新增：侧栏结构调整——「骰娘」升级为与「工作台」平级的独立大板块（连 QQ 骰娘 / 本地掷骰 / 骰娘工作台），不再隐藏在「更多工具」折叠内，入口更直观。'
+    ]},
     { version: '3.0.0', date: '2026-09-23', type: '正式版', items: [
       '新增：骰娘板块升级为「骰娘工作台」——六分区（投骰台 / 连接中心 / 指令日志 / 文案与人设 / 插件工坊 / 测试通道），本地投骰与群指令共用同一套自研 dice-core 引擎（规则插件对两端同时生效）。',
       '新增：插件工坊 + AI 生成向导——喂规则文本 → 生成 → 测试通道试跑 → 确认安装（两道闸，装坏可一键回滚，可导出分享）。',
@@ -414,6 +432,27 @@
       const cb = q('aiBusyCancel'); if (cb) cb.hidden = true;
     }
   }
+  /* 大文件 AI 分析整理进度：主进程按 digest/merge 阶段广播，这里渲染一个浮动进度条 */
+  let _importProgEl = null;
+  function importProgressSet(p) {
+    if (!p) return;
+    const create = () => {
+      const d = document.createElement('div');
+      d.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);width:min(440px,86vw);background:var(--panel-bg,#fff);border:1px solid var(--line,#dfe3ea);border-radius:10px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.22);z-index:9999;font-size:13px;color:var(--ink,#222)';
+      d.innerHTML = '<div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:6px"><span id="importProgText"></span><span id="importProgPct"></span></div><div style="height:6px;background:var(--line,#dfe3ea);border-radius:3px;overflow:hidden"><div id="importProgBar" style="height:100%;width:0;background:#4f7cff;transition:width .25s"></div></div>';
+      return d;
+    };
+    if (!_importProgEl || !document.body.contains(_importProgEl)) { _importProgEl = create(); document.body.appendChild(_importProgEl); }
+    const tx = _importProgEl.querySelector('#importProgText');
+    const pct = _importProgEl.querySelector('#importProgPct');
+    const bar = _importProgEl.querySelector('#importProgBar');
+    if (tx) tx.textContent = p.text || (p.phase === 'merge' ? '合并提纲…' : '抽取段落提纲…');
+    if (pct) pct.textContent = (p.percent != null ? p.percent + '%' : ((typeof p.done === 'number' && p.total) ? p.done + ' / ' + p.total : ''));
+    if (bar) bar.style.width = (typeof p.percent === 'number' ? p.percent : 0) + '%';
+    if (p.phase === 'done' || p.phase === 'error') {
+      setTimeout(() => { if (_importProgEl && document.body.contains(_importProgEl)) { _importProgEl.remove(); _importProgEl = null; } }, p.phase === 'error' ? 2500 : 900);
+    }
+  }
   /* 取消当前在飞的 AI 任务：有明确组就按组取消，否则取消全部；取消完成后由 preload 广播提示 */
   async function aiCancelCurrent() {
     if (!_aiGroups.length) return;
@@ -665,7 +704,7 @@
     navPush(view);
     document.querySelectorAll('#sidebar .nav').forEach(n => n.classList.toggle('active', n.dataset.view === view));
     const snav = document.querySelector('#sidebar details.snav');
-    if (snav && ['relations', 'tags', 'rawtext', 'encounter', 'stats', 'maps', 'polish', 'ai', 'persona', 'aiconf', 'dicehost', 'dice', 'dicework'].includes(view)) snav.open = true;
+    if (snav && ['relations', 'tags', 'rawtext', 'encounter', 'stats', 'maps', 'polish', 'ai', 'persona', 'aiconf', 'runlog'].includes(view)) snav.open = true;
     if (view === 'dash') renderDash();
     else if (view === 'search') renderGlobalSearch();
     else if (S.data.entities[view]) renderDataView(view);
@@ -685,6 +724,7 @@
     else if (view === 'dicehost') renderDiceHost();
     else if (view === 'dicework') renderDiceWork();
     else if (view === 'stats') renderStats();
+    else if (view === 'runlog') renderRunlog();
   }
 
   /* 根据可自定义的主题名刷新品牌区与窗口标题 */
@@ -3549,6 +3589,77 @@
     html += `<div class="setcard"><h4>数据活跃曲线 <span class="hint">近 ${act.days} 天累计投骰/事件数（投骰越多、团越活跃）</span></h4>${act.html}</div>`;
     contentInner(html);
   }
+
+  /* ========== 运行记录（RunLog）========== */
+  const RUNLOG_LEVELS = ['INFO', 'WARN', 'ERROR'];
+  const _runlog = { day: '', level: '', query: '', buf: [] };
+  async function renderRunlog() {
+    let html = `<div class="page-title"><h2>📜 运行记录</h2><span class="hint">软件持续记录全过程（不只报错）。遇到问题时可在此查看，或一键导出发给我，即可快速定位。</span>
+      <span style="flex:1"></span>
+      <button onclick="WB.runlogExport()" class="ghost" id="rlExport">⬇ 导出记录</button>
+      <button onclick="WB.runlogOpen()" class="ghost" title="在文件夹中查看原始日志">🗔 打开日志文件夹</button>
+      <button onclick="WB.runlogRefresh()" class="ghost">↻ 刷新</button></div>`;
+    // 日志文件夹位置提示（用户可直接到该文件路径自己找，也能发给你）
+    const fp = (await window.api.runlog.folder().catch(() => null));
+    if (fp && fp.path) {
+      html += `<div class="setcard" style="margin-bottom:10px"><b>保存位置：</b><code style="word-break:break-all">${esc(fp.path)}</code>
+        <span class="hint" style="display:block;margin-top:4px">每次运行都写入 <b>latest.log</b>（最近运行记录，固定路径）；按天另存为 2026-09-28.log 等文件。发生问题时可到该文件夹直接取出，或点「⬇ 导出记录」打包给我。</span></div>`;
+    }
+    // 过滤器
+    html += `<div class="toolbar" style="margin-bottom:10px;flex-wrap:wrap;gap:6px">
+      <span class="hint">日期：</span><select id="rlDay" onchange="WB.runlogPickDay(this.value)" style="max-width:160px"></select>
+      <span class="hint">等级：</span><select id="rlLevel" onchange="WB.runlogFilter()"><option value="">全部</option>${RUNLOG_LEVELS.map(l => `<option${_runlog.level === l ? ' selected' : ''}>${l}</option>`).join('')}</select>
+      <input id="rlQuery" value="${esc(_runlog.query)}" placeholder="关键词过滤…" style="max-width:220px" onkeydown="if(event.key==='Enter')WB.runlogFilter()">
+      <button class="ghost" onclick="WB.runlogFilter()">筛选</button>
+      <button class="ghost" onclick="WB.runlogClearFilter()">清除</button>
+      <span class="grow"></span><span class="hint" id="rlCount"></span></div>`;
+    html += `<div class="setcard" style="padding:0;overflow:hidden"><pre id="rlBody" class="runlog-body">加载中…</pre></div>`;
+    contentInner(html);
+    // 填充日期下拉 + 读取日志
+    const dayList = (await window.api.runlog.list().catch(() => [])) || [];
+    // 默认展示“最近运行（latest.log）”，用户一进来就能看到本次运行的过程
+    if (!_runlog.day) { if (dayList.some(d => d.day === 'latest')) _runlog.day = 'latest'; else if (dayList.length) _runlog.day = dayList[0].day; }
+    const daySel = document.getElementById('rlDay');
+    if (daySel) {
+      daySel.innerHTML = `<option value="">全部 (含每日文件)</option>` + dayList.map(d => `<option value="${d.day}"${_runlog.day === d.day ? ' selected' : ''}>${d.label || d.day}</option>`).join('');
+      if (_runlog.day && !dayList.some(d => d.day === _runlog.day)) _runlog.day = '';
+    }
+    await loadRunlogBody();
+  }
+  async function loadRunlogBody() {
+    const body = document.getElementById('rlBody');
+    const cnt = document.getElementById('rlCount');
+    if (!body) return;
+    body.textContent = '加载中…';
+    const r = await window.api.runlog.read({ day: _runlog.day || undefined, level: _runlog.level || undefined, query: _runlog.query || undefined }).catch(() => null) || { lines: [], days: [] };
+    const lines = r.lines || [];
+    body.innerHTML = lines.length
+      ? lines.map(l => `<div>[<span class="rl-t">${esc(l.t)}</span>] [<b class="rl-${l.lv.toLowerCase()}">${l.lv}</b>] <span class="hint">${esc(_runlog.day ? '' : l.day)}</span>${esc(l.msg)}</div>`).join('\n')
+      : '<span class="hint">（当前筛选条件下暂无记录）</span>';
+    if (cnt) cnt.textContent = `共 ${lines.length} 条`;
+  }
+  function runlogRefresh() { loadRunlogBody(); }
+  function runlogFilter() {
+    const q = document.getElementById('rlQuery'); if (q) _runlog.query = q.value.trim();
+    const lv = document.getElementById('rlLevel'); if (lv) _runlog.level = lv.value;
+    loadRunlogBody();
+  }
+  function runlogPickDay(v) { _runlog.day = v || ''; loadRunlogBody(); }
+  function runlogClearFilter() {
+    _runlog.day = ''; _runlog.level = ''; _runlog.query = '';
+    const q = document.getElementById('rlQuery'); if (q) q.value = '';
+    const lv = document.getElementById('rlLevel'); if (lv) lv.value = '';
+    renderRunlog();
+  }
+  async function runlogExport() {
+    const btn = document.getElementById('rlExport'); if (btn) { btn.disabled = true; btn.textContent = '导出中…'; }
+    const r = await window.api.runlog.export().catch(e => ({ ok: false, error: String(e && e.message || e) }));
+    if (btn) { btn.disabled = false; btn.textContent = '⬇ 导出记录'; }
+    if (r && r.canceled) return;
+    if (r && r.ok) toast('运行记录已导出：' + r.path, 'ok');
+    else toast((r && r.error) || '导出失败', 'err');
+  }
+  function runlogOpen() { window.api.runlog.open(); }
   /* 数据构成：横向条形（SVG/纯 HTML 均可读） */
   function stsComposition(comp, tots) {
     if (!tots) return `<div class="empty">暂无资料，先到各类型页新增内容即可看到占比。</div>`;
@@ -3865,6 +3976,7 @@
       h += `<div class="setcard"><h4>字段自定义</h4><div id="fieldEditor"></div></div>`;
     } else if (tab === 'prompts') {
       h += `<div class="setcard" id="promptCard"><div class="note">加载提示词模板…</div></div>
+        <div class="setcard" id="promptHubCard"><div class="note">加载提示词中枢（总提示词 / 各场景 / 分场景记忆）…</div></div>
         <div class="setcard"><h4>内容安全过滤（可编辑）</h4>
           <label class="toggle-row" style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
             <input type="checkbox" id="mod_master" ${(S.settings.ai && S.settings.ai.moderate !== false) ? 'checked' : ''} onchange="WB.setAiFlag('moderate', this.checked)">
@@ -3916,6 +4028,7 @@
     if (tab === 'fields') { S.editFieldKind = 'pcs'; paintFieldEditor('pcs'); }
     if (tab === 'prompts') {
       loadPromptEditor();
+      loadPromptHub();
       paintModRules();
       if (_modRuleSeed === null && !(S.settings.ai && Array.isArray(S.settings.ai.modRules) && S.settings.ai.modRules.length)) {
         window.api.modRuleDefaults().then(r => { _modRuleSeed = (r && Array.isArray(r.rules)) ? r.rules : []; paintModRules(); }).catch(() => { _modRuleSeed = []; });
@@ -3993,6 +4106,97 @@
     }).filter(r => true);
     if (mr.length) S.settings.ai = Object.assign({}, S.settings.ai || {}, { modRules: mr });
     persist(); const n = changed.length; toast(n ? ('AI 提示词已保存，' + n + ' 项有改动并录入历史版本' ) : 'AI 提示词已保存（无改动）', 'ok'); renderSettings();
+  }
+  /* ---- 提示词中枢：总提示词 + 各场景可编辑提示词 + 分场景记忆文件（AI 每次运行都会注入总提示词+本场景记忆） ---- */
+  async function loadPromptHub() {
+    const box = q('promptHubCard'); if (!box || !window.api.promptHubListScenes) return;
+    try {
+      const [scenes, masterInfo, memories] = await Promise.all([
+        window.api.promptHubListScenes(),
+        window.api.promptHubMaster(),
+        window.api.promptHubListMemories().catch(() => [])
+      ]);
+      S._hubScenes = Array.isArray(scenes) ? scenes : [];
+      S._hubMasterDefault = (masterInfo && masterInfo.default) || ''; // 供「恢复默认」填入
+      const masterVal = (S.settings.prompts && S.settings.prompts.master) || (masterInfo && masterInfo.master) || '';
+      const memMap = {};
+      (Array.isArray(memories) ? memories : []).forEach(m => { memMap[m.key] = m; });
+      S._hubMemories = memMap;
+      let h = `<h4>总提示词（每次 AI 运行都会注入）</h4>
+        <div class="note" style="margin-bottom:8px">以下为总则，出现在<strong>每一次</strong> AI 调用（工作台助手、资料生成、剧本解析、骰娘对话/优化/插话、KP 建议）的最前面。留空则使用内置默认。</div>
+        <textarea id="hubMaster" rows="4" placeholder="${esc((masterInfo && masterInfo.default) || '')}">${esc(masterVal)}</textarea>
+        <div style="margin-top:6px"><button class="ghost small" onclick="WB.hubResetMaster()">恢复默认</button></div>
+        <h4 style="margin-top:20px">各场景提示词</h4>
+        <div class="note" style="margin-bottom:8px">每个使用 AI 的地方对应一个场景。留空 = 使用内置模板；修改后点下方「保存总提示词 + 场景提示词」生效。占位符（如 {world}、{label}）运行时会自动替换。</div>`;
+      for (const sc of S._hubScenes) {
+        const ov = (S.settings.prompts && S.settings.prompts.scenes && S.settings.prompts.scenes[sc.key]) || {};
+        const val = (typeof ov.sys === 'string' && String(ov.sys).trim()) ? ov.sys : (sc.sys || '');
+        h += `<div class="row full" style="margin-top:8px">
+          <label>${esc(sc.label)}<span style="font-size:11px;color:var(--ink-faint);margin-left:6px">场景 ${esc(sc.key)} · 记忆文件 ${esc(sc.mem || (sc.key + '.md'))}</span></label>
+          <textarea id="hub_${sc.key}" rows="${(sc.key === 'chat' ? 3 : 4)}" placeholder="${esc(sc.label + '（留空用内置模板）')}">${esc(val)}</textarea>
+          <div style="margin-top:6px"><button class="ghost small" onclick="WB.hubResetScene('${sc.key}')">恢复默认</button>
+          ${memMap[sc.key] && memMap[sc.key].exists ? `<button class="ghost small" onclick="WB.hubViewMemory('${sc.key}')">📄 本场景记忆（${memMap[sc.key].chars} 字节）</button>` : `<button class="ghost small" onclick="WB.hubViewMemory('${sc.key}')">📄 本场景记忆（空）</button>`}</div>
+        </div>`;
+      }
+      h += `<div style="margin-top:12px"><button onclick="WB.hubSave()">💾 保存总提示词 + 场景提示词</button>
+        <span class="hint" style="margin-left:8px">留空场景自动用内置模板；记忆文件另有入口单独编辑。</span></div>`;
+      box.innerHTML = h;
+      if (S._hubMasterLoaded) { /* 已在输入框填过则不动 */ }
+    } catch (_) {
+      box.innerHTML = `<div class="note">提示词中枢加载失败：${esc((_.message) || _)}</div>`;
+    }
+  }
+  function hubResetMaster() {
+    const ta = q('hubMaster'); if (!ta) return;
+    const def = (S._hubMasterDefault) || '';
+    ta.value = def;
+    toast('已填入默认总提示词（可再编辑后保存）');
+  }
+  function hubResetScene(key) {
+    const ta = q('hub_' + key); if (!ta) return;
+    const sc = (S._hubScenes || []).find(s => s.key === key);
+    ta.value = (sc && sc.sys) || '';
+    toast('已恢复「' + ((sc && sc.label) || key) + '」内置模板（保存后生效）');
+  }
+  async function hubSave() {
+    const scenes = {};
+    for (const sc of (S._hubScenes || [])) {
+      const ta = q('hub_' + sc.key); if (!ta) continue;
+      scenes[sc.key] = { sys: ta.value.trim() };
+    }
+    const masterTa = q('hubMaster');
+    const master = masterTa ? masterTa.value.trim() : '';
+    try {
+      await window.api.promptHubSave({ master, scenes });
+      S.settings.prompts = S.settings.prompts || {};
+      S.settings.prompts.master = master;
+      S.settings.prompts.scenes = Object.assign(S.settings.prompts.scenes || {}, scenes);
+      toast('提示词中枢已保存（总提示词 + 各场景提示词）', 'ok');
+    } catch (e) { toast('保存失败：' + ((e && e.message) || e), 'bad'); }
+  }
+  async function hubViewMemory(key) {
+    const sc = (S._hubScenes || []).find(s => s.key === key);
+    const label = (sc && sc.label) || key;
+    let raw = '';
+    try { raw = await window.api.promptHubRawMemory(key); } catch (_) {}
+    const mask = q('modalMask'); const box = q('modalBox');
+    box.innerHTML = `<h3>📄 ${esc(label)} · 本场景记忆</h3>
+      <div class="note">此场景每次 AI 运行都会把「本场景记忆」的尾部注入，帮助 AI 保持连贯、无需通读全量上下文。运行中神经会自动追加要点；也可在此手动查看 / 写入 / 清空。</div>
+      <textarea id="hubMemEdit" rows="12" style="width:100%;box-sizing:border-box" placeholder="为空表示尚无记忆。手动写入要点（每行一条），保存即覆盖。">${esc(raw)}</textarea>
+      <div class="foot" style="margin-top:10px">
+        <button onclick="WB.hubSaveMemory('${key}')">💾 保存记忆</button>
+        <button class="danger" onclick="WB.hubClearMemory('${key}')">🗑 清空记忆</button>
+        <button class="ghost" onclick="WB.closeModal()">关闭</button>
+      </div>`;
+    mask.hidden = false;
+  }
+  async function hubSaveMemory(key) {
+    const ta = q('hubMemEdit'); if (!ta) return;
+    const text = ta.value;
+    try { await window.api.promptHubWriteMemory(key, text); toast('本场景记忆已保存', 'ok'); loadPromptHub(); closeModal(); } catch (e) { toast('保存失败：' + ((e && e.message) || e), 'bad'); }
+  }
+  async function hubClearMemory(key) {
+    try { await window.api.promptHubClearMemory(key); toast('本场景记忆已清空', 'ok'); loadPromptHub(); closeModal(); } catch (e) { toast('清空失败', 'bad'); }
   }
   /* 查看某模板的历史版本：时间 + 改动摘要 + 内容预览，可对相邻两版做差异对比 */
   function promptVersionList(key) {
@@ -6974,6 +7178,15 @@
         }
       } catch (_) {}
     }
+    // 输入框：实时写回配置并持久化。这是关键——否则用户填写后一重渲染就被清空，启动也读不到值（旧 bug：点启动内容消失 + 提示缺少 appId/clientSecret）。
+    el.querySelectorAll('[data-channel]').forEach((card) => {
+      const ch = card.getAttribute('data-channel');
+      if (!cfg[ch]) cfg[ch] = {};
+      card.querySelectorAll('input[data-field]').forEach((inp) => {
+        const f = inp.getAttribute('data-field');
+        inp.addEventListener('input', () => { cfg[ch][f] = inp.value; persist(); });
+      });
+    });
     el.querySelectorAll('button[data-act]').forEach((btn) => {
       btn.onclick = async () => {
         const card = btn.closest('[data-channel]'); if (!card) return;
@@ -6982,7 +7195,14 @@
         const api = dwApi();
         if (!api) { toast('当前环境未暴露骰娘接口', ''); return; }
         try {
-          await (act === 'start' ? api.diceNet.start(ch) : api.diceNet.stop(ch));
+          let patch;
+          if (act === 'start' && cfg[ch]) {
+            // 启动前把该卡当前输入收集进配置，并作为最新配置传给主进程（主进程据此合并后 start）
+            card.querySelectorAll('input[data-field]').forEach((inp) => { cfg[ch][inp.getAttribute('data-field')] = inp.value; });
+            patch = Object.assign({}, cfg[ch]);
+            persist();
+          }
+          await (act === 'start' ? api.diceNet.start(ch, patch) : api.diceNet.stop(ch));
           toast((act === 'start' ? '已启动 ' : '已停止 ') + ch + ' 通道', 'ok');
         } catch (e) { toast('操作失败：' + ((e && e.message) || e), 'err'); }
         refreshConnCenter();
@@ -7422,7 +7642,9 @@
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAllMenus(); });
 
-  window.WB = {
+  /* 合并而非整对象替换：保证此前已通过「window.WB.xxx =」挂载的运行时方法（骰娘 AI 开关、
+   * 表情包库管理）不被覆盖、加载期不抛错。 */
+  window.WB = Object.assign(window.WB, {
     go, search, add, edit, del, closeModal, saveEdit, setTheme, aiSend, aiGen, aiClear: () => { CH.length = 0; S.pendFiles = []; renderPendStrip(); if (S.settings) { S.settings.chat = []; S.settings.chatSumAt = 0; } refreshChat(); persist(); },
     setViewSort, setViewSrc, setViewTpl, editSetTpl,
     aiUpload, aiExportLast, addLongMemory, delLongMemory, saveMemoModal, addModRule, delModRule,
@@ -7431,6 +7653,7 @@
     setAiGenType, aiGenForType, globalSearch, setGType, goToEntity,
     importContent, doImport, doImportAndIntegrate, aiIntegrate, aiGenForView, doSplitRegister,
     savePrompts, resetPrompt, promptVersionList, promptCompare, promptRestoreVersion,
+    hubResetMaster, hubResetScene, hubSave, hubViewMemory, hubSaveMemory, hubClearMemory,
     runAudit,
     createArchive, createArchiveHome, switchArchive, switchHome: switchArchive, dupArchive, delArchive, restoreBackup, restoreSnapshot,
     setSettingsTab, setAiFlag, saveAutoBackup,
@@ -7466,8 +7689,9 @@
     encNew, encOpen, closeEnc, encDel, encSetFlow, encPull, encAddManual, encDelUnit, encHp, encToggleStatus,
     encNext, encPrev, encNextTo, encGoRef, encSettle,
     polishLogs, aiWriteScript, saveNarrStyle,
-    statsExport, statsCopy
-  };
+    statsExport, statsCopy,
+    runlogRefresh, runlogFilter, runlogPickDay, runlogClearFilter, runlogExport, runlogOpen
+  });
 
   let _selSeq = 0;
   function _newKey() { _selSeq++; return 'field' + _selSeq; }
@@ -8223,8 +8447,21 @@
 
   /* ---------- 启动 ---------- */
   document.addEventListener('DOMContentLoaded', () => {
+    /* 运行记录（RunLog）：把界面层未捕获的异常 / 未处理 Promise 拒绝也持续上报到主进程日志，
+     * 遇到报错时即便不弹红字，也会一并进入「运行记录」，方便事后定位。 */
+    if (window.api && window.api.runlog && window.api.runlog.write) {
+      window.addEventListener('error', (e) => {
+        window.api.runlog.write({ level: 'error', msg: '界面异常: ' + (e && e.message || '未知'), meta: { line: e && e.lineno, col: e && e.colno, file: e && e.filename, stack: e && e.error && e.error.stack } });
+      });
+      window.addEventListener('unhandledrejection', (e) => {
+        const r = e && e.reason;
+        window.api.runlog.write({ level: 'error', msg: '界面未处理 Promise 拒绝', meta: { stack: (r && (r.stack || r.message)) || String(r) } });
+      });
+    }
     /* 「AI 处理中」提示：每项 AI 请求的开始/结束由 preload 广播过来（界面只负责显示） */
     if (window.api && window.api.aiStatus && window.api.aiStatus.on) window.api.aiStatus.on(aiBusySet);
+    /* 大文件 AI 分析整理进度：浮动进度条 */
+    if (window.api && window.api.onImportProgress) window.api.onImportProgress(importProgressSet);
     /* AI 取消完成提示：当某任务被取消后广播过来，清掉繁忙态并明确告知，避免误以为还在执行 */
     if (window.api && window.api.aiCancelled && window.api.aiCancelled.on) window.api.aiCancelled.on((v) => {
       const n = (v && v.hit) || 0;
@@ -8233,6 +8470,7 @@
     document.querySelectorAll('#sidebar .nav').forEach(n => n.addEventListener('click', () => {
       const v = n.dataset.view;
       if (v === S.view) return; // 重复点击当前视图不整体重建（数据刷新走显式 switchView，不受影响）
+      if (window.api && window.api.runlog && window.api.runlog.write) window.api.runlog.write({ level: 'info', msg: '进入界面：' + v });
       switchView(v);
     }));
     q('themeSelect').addEventListener('change', () => setTheme(q('themeSelect').value));

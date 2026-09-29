@@ -120,6 +120,8 @@ contextBridge.exposeInMainWorld('api', {
   relationsSuggest: (...a) => aiGuard('relationsSuggest', () => ipcRenderer.invoke('ai:relationsSuggest', ...a))(),
   splitImport: (...a) => aiGuard('splitImport', () => ipcRenderer.invoke('file:splitImport', ...a))(),
   analyzeImport: (...a) => aiGuard('analyzeImport', () => ipcRenderer.invoke('file:analyzeImport', ...a))(),
+  /* 大文件 AI 分析整理进度广播：渲染层用于显示分块/合并进度条 */
+  onImportProgress: (cb) => { ipcRenderer.on('import:progress', (_e, v) => cb(v)); },
   /* AI 忙闲广播：渲染层据此显示/隐藏「AI 处理中」提示（含当前在飞的任务类型） */
   aiStatus: {
     on: (cb) => { ipcRenderer.on('ai:busy', (_e, v) => cb(v)); }
@@ -136,6 +138,14 @@ contextBridge.exposeInMainWorld('api', {
   aiCancelled: {
     on: (cb) => { ipcRenderer.on('ai:cancelled', (_e, v) => cb(v)); }
   },
+  /* 提示词中枢（总提示词 + 各场景可编辑提示词 + 分场景记忆文件） */
+  promptHubListScenes: () => ipcRenderer.invoke('promptHub:listScenes'),
+  promptHubMaster: () => ipcRenderer.invoke('promptHub:masterOf'),
+  promptHubSave: (prompts) => ipcRenderer.invoke('promptHub:savePrompts', prompts),
+  promptHubListMemories: () => ipcRenderer.invoke('promptHub:listMemories'),
+  promptHubRawMemory: (sceneKey) => ipcRenderer.invoke('promptHub:rawMemory', sceneKey),
+  promptHubWriteMemory: (sceneKey, text) => ipcRenderer.invoke('promptHub:writeMemory', sceneKey, text),
+  promptHubClearMemory: (sceneKey) => ipcRenderer.invoke('promptHub:clearMemory', sceneKey),
   promptDefaults: () => ipcRenderer.invoke('ai:promptDefaults'),
   modRuleDefaults: () => ipcRenderer.invoke('modRuleDefaults'),
   openFile: () => ipcRenderer.invoke('file:open'),
@@ -146,6 +156,15 @@ contextBridge.exposeInMainWorld('api', {
   saveMarkdown: (filename, content) => ipcRenderer.invoke('store:saveMarkdown', filename, content),
   saveImage: (filename, dataUrl) => ipcRenderer.invoke('store:saveImage', filename, dataUrl),
   exportDoc: (payload) => ipcRenderer.invoke('store:exportDoc', payload),
+  /* 运行记录（RunLog）：持续记录 + 查看 / 导出 / 上报界面事件 */
+  runlog: {
+    list: () => ipcRenderer.invoke('runlog:list'),
+    read: (opts) => ipcRenderer.invoke('runlog:read', opts || {}),
+    folder: () => ipcRenderer.invoke('runlog:folder'),
+    export: () => ipcRenderer.invoke('runlog:export'),
+    open: () => ipcRenderer.invoke('runlog:open'),
+    write: (payload) => { try { ipcRenderer.invoke('runlog:write', payload || {}).catch(() => {}); } catch (_) {} }
+  },
   archives: {
     list: () => ipcRenderer.invoke('archive:list'),
     create: (name) => ipcRenderer.invoke('archive:create', name),
@@ -209,7 +228,7 @@ contextBridge.exposeInMainWorld('api', {
     /* 骰娘工作台（分区 2/3/4/6），自旧 dice.* 迁移，通道不变 */
     diceNet: {
       list: () => ipcRenderer.invoke('diceNet:list'),
-      start: (id) => ipcRenderer.invoke('diceNet:start', id),
+      start: (id, cfg) => ipcRenderer.invoke('diceNet:start', id, cfg),
       stop: (id) => ipcRenderer.invoke('diceNet:stop', id),
       status: (id) => ipcRenderer.invoke('diceNet:status', id)
     },

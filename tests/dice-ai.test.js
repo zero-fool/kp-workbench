@@ -54,3 +54,23 @@ test('放行：真正调用供应商并返回文本', async () => {
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.text, '骰娘回应');
 });
+
+test('记忆自动回写：成功后有 remember 钩子则调用并携带 feature 与文本', async () => {
+  const remembered = [];
+  const ctx = makeCtx({ enabled: true });
+  ctx.getContext = (feature) => ({ enabled: true, cfg: ctx._o.cfg, buildSystem: () => 's', remember: (f, t) => remembered.push([f, t]) });
+  const port = createDiceAi(ctx);
+  const r = await port.chat({ feature: 'kpAdvice' }, []);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(remembered.length, 1);
+  assert.strictEqual(remembered[0][0], 'kpAdvice');
+  assert.strictEqual(remembered[0][1], '骰娘回应');
+});
+
+test('记忆回写不是硬依赖：未提供 remember 钩子也照常返回（不抛错）', async () => {
+  const ctx = makeCtx({ enabled: true, withBuildSystem: true });
+  const port = createDiceAi(ctx);
+  const r = await port.chat({ feature: 'dice' }, []);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.text, '骰娘回应');
+});

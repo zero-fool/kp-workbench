@@ -17,7 +17,7 @@ function createDiceRuntime(deps) {
 
   // 会话状态盒（logs/persona/sessions/users）与调度中枢
   const stateBox = createStateBox();
-  const hub = createHub({ store });
+  const hub = createHub({ store, ai: o.ai, transformReplies: o.transformReplies });
 
   // 三通道装配（Tasks 2/5/6 已完成真实实现），统一接入 hub
   const adapters = createChannelAdapters({ state: stateBox, cfg, store, hub });
@@ -75,7 +75,7 @@ function createDiceRuntime(deps) {
   }
 
   // 测试通道 send：构造 MessageIn 经 hub 统一口径 → 返回拉平回复文本；日志由 hub 事件自动写入
-  function simSend({ text, userId, userName } = {}) {
+  async function simSend({ text, userId, userName } = {}) {
     const t = String(text || '').trim();
     if (!t) return '';
     const u = String(userId || 'sim-user').trim();
@@ -87,12 +87,19 @@ function createDiceRuntime(deps) {
     const sim = adapters.find((a) => a && a.id === 'sim');
     if (!sim) return '';
     if (sim.status().state !== 'running') { try { sim.start(); } catch (_) {} }
-    const replies = hub.handleInbound(sim, msg);
+    const replies = await hub.handleInbound(sim, msg);
     return flattenReplies(replies);
   }
 
-  // 连接中心：启停/状态
-  async function netStart(id) { const a = adapters.find((x) => x.id === id); if (a) await a.start(); return status(id); }
+  // 连接中心：启停/状态。
+  // netStart 接收界面传入的最新通道配置 patch：start 前先合并进运行时 cfg[id]（适配器持有的是同一对象引用，
+  // 故 start 时能读到用户刚填写的 appId/clientSecret 等值，而不是启动时刻的空快照）。sim 无配置，直接忽略对象合并。
+  async function netStart(id, patch) {
+    const a = adapters.find((x) => x.id === id);
+    if (a && patch && typeof patch === 'object' && cfg[id] && cfg[id] !== patch) Object.assign(cfg[id], patch);
+    if (a) await a.start();
+    return status(id);
+  }
   async function netStop(id) { const a = adapters.find((x) => x.id === id); if (a) await a.stop(); return status(id); }
   function status(id) { const a = adapters.find((x) => x.id === id) || { status: () => ({ state: 'stopped' }) }; return a.status(); }
   function netList() { return adapters.map((a) => ({ id: a.id, status: a.status() })); }

@@ -1,4 +1,4 @@
-// tests/build-config.test.js —— 打包配置与版本 3.0.0 守卫
+// tests/build-config.test.js —— 打包配置与版本守卫
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
@@ -7,9 +7,11 @@ const ROOT = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const appJs = fs.readFileSync(path.join(ROOT, 'src', 'renderer', 'app.js'), 'utf8');
 
-test('版本：package.json 与界面 APP_VERSION 均为 3.0.0', () => {
-  assert.equal(pkg.version, '3.0.0');
-  assert.match(appJs, /APP_VERSION\s*=\s*'3\.0\.0'/);
+test('版本：界面 APP_VERSION 与 package.json 版本一致（不硬编码具体版本号）', () => {
+  const m = appJs.match(/APP_VERSION\s*=\s*'([^']+)'/);
+  assert.ok(m, 'app.js 应定义 APP_VERSION 常量');
+  assert.equal(m[1], pkg.version, 'APP_VERSION 必须与 package.json 版本保持一致');
+  assert.match(pkg.version, /^\d+\.\d+\.\d+/, '版本号应形如 x.y.z');
 });
 
 test('打包：build.files 不含 bridge（旧桥插件已退役）且保留 src', () => {

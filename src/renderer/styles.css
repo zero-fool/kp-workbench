@@ -170,6 +170,11 @@ button.ghost.small{padding:6px 8px}
 
 /* 通用 */
 .empty{color:var(--ink-faint);padding:30px;text-align:center}
+.runlog-body{max-height:56vh;overflow:auto;margin:0;padding:12px 14px;font:12px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.18)}
+.runlog-body .rl-t{color:var(--ink-faint)}
+.runlog-body .rl-info{color:var(--ink-soft)}
+.runlog-body .rl-warn{color:var(--accent)}
+.runlog-body .rl-error{color:var(--danger,#e0525a);font-weight:600}
 .page-title{display:flex;align-items:baseline;gap:10px;margin:2px 0 18px}
 .page-title h2{font-family:var(--serif);margin:0;font-size:22px;color:var(--accent2)}
 .page-title .hint{color:var(--ink-faint);font-size:12px}

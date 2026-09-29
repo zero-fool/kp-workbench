@@ -37,16 +37,29 @@ badApi.length ? bad('渲染层调用了未暴露的 api.' + badApi.join(', ')) :
 
 /* ---------- 3. WB 处理器 ---------- */
 title('3. window.WB：定义 vs 引用');
-const s = appJs.indexOf('window.WB = {');
-const e = appJs.indexOf('\n  };', s);
-const wbBody = appJs.slice(s, e) + '}';
+/* 支持两种写法：整对象字面量「window.WB = {…};」与「window.WB = Object.assign(window.WB, {…});」
+ * 后者为合并挂载（保留文件运行期以「window.WB.x = fn」预先挂载的方法），两者都是 WB 的真实定义。 */
+const assignM = /window\.WB\s*=\s*Object\.assign\(\s*window\.WB\s*,\s*\{/.exec(appJs);
+let s, e, wbBody;
+if (assignM) {
+  s = assignM.index + assignM[0].length - 1;          // 指向开头的 {
+  e = appJs.indexOf('\n  });', s);                    // 指向合并块的 ); 收尾
+  wbBody = appJs.slice(s + 1, e + 4);                 // 到 ])) 的 } 为止
+} else {
+  s = appJs.indexOf('window.WB = {');
+  e = appJs.indexOf('\n  };', s);
+  wbBody = appJs.slice(s, e) + '}';
+}
 if (s < 0 || e < 0) bad('未找到 window.WB 定义');
 const refs = uniq([
   ...[...appJs.matchAll(/WB\.([a-zA-Z_$][\w$]*)/g)].map(m => m[1]),
   ...[...html.matchAll(/WB\.([a-zA-Z_$][\w$]*)/g)].map(m => m[1])
 ]);
 const inside = name => new RegExp('(^|[\\s{,]|\\b)' + name.replace(/\$/g, '\\$') + '\\s*(?=[,}:])', 'm').test(wbBody);
-const missing = refs.filter(r => !inside(r));
+/* 除「window.WB = {…}」对象字面量外，还允许「window.WB.x = function…」在运行期挂载的方法：
+ * 这些同样在 window.WB 上真实存在、可被点击调用，只是不属于字面量块。 */
+const runtimeWB = new Set([...appJs.matchAll(/window\.WB\.([a-zA-Z_$][\w$]*)\s*=/g)].map(m => m[1]));
+const missing = refs.filter(r => !inside(r) && !runtimeWB.has(r));
 const keys = uniq([...wbBody.matchAll(/([a-zA-Z_$][\w$]*)\s*(?=[,}:])/g)].map(m => m[1]));
 const hasDef = k => new RegExp('function\\s+' + k + '\\s*\\(').test(appJs) ||
   new RegExp('(?:const|let|var)\\s+' + k + '\\s*=').test(appJs) ||
@@ -70,7 +83,9 @@ dupId.length ? bad('index.html 重复 id: ' + dupId.join(', ')) : ok('index.html
 const allIds = new Set([
   ...htmlIds,
   ...[...appJs.matchAll(/\bid\s*=\s*["'`]([a-zA-Z_$][\w$-]*)["'`]/g)].map(m => m[1]),
-  ...[...appJs.matchAll(/\bid=\\?["'`]([a-zA-Z_$][\w$-]*)/g)].map(m => m[1])
+  ...[...appJs.matchAll(/\bid=\\?["'`]([a-zA-Z_$][\w$-]*)/g)].map(m => m[1]),
+  /* row(id, label, val, min, max) 渲染帮手：首参会写进 id 属性（如骰娘开关 int 输入框），运行时才存在 */
+  ...[...appJs.matchAll(/\brow\(\s*['"]([a-zA-Z_$][\w$-]*)['"]/g)].map(m => m[1])
 ]);
 const qRefs = uniq([...appJs.matchAll(/\bq\(\s*'([^']+)'\s*\)/g)].map(m => m[1]));
 const qMiss = qRefs.filter(id => !allIds.has(id));

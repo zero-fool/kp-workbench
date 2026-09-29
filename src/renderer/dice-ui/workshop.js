@@ -1,8 +1,9 @@
 // src/renderer/dice-ui/workshop.js —— 分区 5 插件工坊：纯渲染函数
 // 双环境：node:test 走 module.exports；renderer 走 <script> 挂 window.DiceUI
+// 注意：wizard.js 同样挂 window.DiceUI，两者必须「合并」而非覆盖（否则后加载者会抹掉前者的方法）。
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.DiceUI = factory();
+  else root.DiceUI = Object.assign(root.DiceUI || {}, factory());
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
   function esc(s) {

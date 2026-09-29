@@ -222,10 +222,12 @@ check('开团向导：wizardHTML 定义 5 步（建档案→配AI→素材→拆
 });
 check('开团向导：可折叠（toggleWizard 持久化 layout.wizardHidden）且渲染进总览', () =>
   (/function\s+toggleWizard/.test(src) && /wizardHidden/.test(src) && /wizardHTML\(\)/.test(src) && /🚀\s*开团向导/.test(src)) ? true : '向导折叠/渲染缺失');
-check('版本与变更日志：3.0.0 已记录本次改动，且旧版本条目仍在', () => {
+check('版本与变更日志：最新条目与 APP_VERSION 同步、含本次改动，且旧版本条目仍在', () => {
   const i = src.indexOf('const CHANGELOG');
   const cl = src.slice(i, i + 26000);
-  return (/APP_VERSION\s*=\s*'3\.0\.0'/.test(src)
+  const vm = /version:\s*'([0-9]+\.[0-9]+\.[0-9]+)'/.exec(cl);
+  const verOk = vm && new RegExp('APP_VERSION\\s*=\\s*\'' + vm[1].replace(/\./g, '\\.') + '\'').test(src);
+  return (verOk && /运行记录/.test(cl)
     && /骰娘内核/.test(cl) && /\/kp 数据桥端口/.test(cl) && /自动拉起内置骰娘内核/.test(cl) && /encNormOrder 归一化/.test(cl) && /轮次错乱/.test(cl)
     && /按钮高亮态未同步/.test(cl) && /保留未保存输入/.test(cl)
     && /存活\/倒下统计更严谨/.test(cl) && /回合顺序渲染前自动过滤失效 id/.test(cl) && /Ctrl\+E 进入临场战斗/.test(cl) && /未使用的热力图构建调用/.test(cl)
@@ -364,7 +366,17 @@ const S_prog = { settings: {} };
 const scriptProgRead = load('scriptProgRead', { S: S_prog, scriptSig });
 const scriptProgBox = load('scriptProgBox', { S: S_prog, scriptSig });
 const wbStart = src.indexOf('window.WB = {');
-const wbSrc = wbStart < 0 ? '' : src.slice(wbStart, src.indexOf('\n  };', wbStart));
+/* 渲染层 WB 现以「window.WB = Object.assign(window.WB, {…});」合并挂载（保留运行期预先
+ * 挂载的方法）。两种写法都要能从中读出字面量块，否则下面的 WB 导出断言会误判未导出。 */
+const wbAssignM = /window\.WB\s*=\s*Object\.assign\(\s*window\.WB\s*,\s*\{/.exec(src);
+let wbSrc;
+if (wbAssignM) {
+  const bs = wbAssignM.index + wbAssignM[0].length - 1;
+  const be = src.indexOf('\n  });', bs);
+  wbSrc = src.slice(bs + 1, be + 4);
+} else {
+  wbSrc = wbStart < 0 ? '' : src.slice(wbStart, src.indexOf('\n  };', wbStart));
+}
 
 function mkScript() {
   return {
@@ -656,8 +668,10 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     if (!fn) return 'bindCardDrag 未找到';
     return (/\bq\('cardgrid'\)/.test(fn[0]) && !/\bq\('\.cardgrid'\)/.test(fn[0])) ? true : '仍在使用类名查询';
   });
-  check('T15 网格元素确实带 id="cardgrid"', () =>
-    /<div class="cardgrid" id="cardgrid">/.test(src) ? true : '数据视图网格缺少 id');
+  check('T15 网格元素确实带 id="cardgrid"', () => {
+    const m = /<div[^>]*\bid="cardgrid"[^>]*>/.exec(src);
+    return m ? true : '数据视图网格缺少 id';
+  });
   (function () {
     /* 2) 全项目扫描：任何 q('.x') / q('#x') 都是同一类错误，必须为零 */
     const bad = src.match(/\bq\(\s*['"][.#][^'"]*['"]\s*\)/g);
@@ -1550,8 +1564,11 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
   const M3cl = src.slice(src.indexOf('const CHANGELOG'), src.indexOf('const CHANGELOG') + 4000);
   const M3pre = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'preload.js'), 'utf8');
   const M3main = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.js'), 'utf8');
-  check('M3 版本号：package.json version=3.0.0 且界面 APP_VERSION 同步', () => {
-    return (M3pkg.version === '3.0.0' && /APP_VERSION\s*=\s*'3\.0\.0'/.test(src)) ? true : '版本未同步到 3.0.0';
+  check('M3 版本号：package.json / CHANGELOG 最新条目 / 界面 APP_VERSION 三处一致', () => {
+    const m = /version:\s*'([0-9]+\.[0-9]+\.[0-9]+)'/.exec(M3cl);
+    const v = m && m[1];
+    const escV = (s) => s.replace(/\./g, '\\.');
+    return (v && M3pkg.version === v && new RegExp('APP_VERSION\\s*=\\s*\'' + escV(v) + '\'').test(src)) ? true : '版本未同步（package.json / CHANGELOG / APP_VERSION 不一致）';
   });
   check('M3 CHANGELOG：含 v3.0 条目（骰娘工作台/插件工坊/AI 生成向导/退役/70MB）', () => {
     return (/version:\s*'3\.0\.0'/.test(M3cl) && /插件工坊/.test(M3cl) && /AI 生成向导/.test(M3cl) && /退役/.test(M3cl) && /70MB/.test(M3cl)) ? true : 'CHANGELOG 缺 v3.0 条目';

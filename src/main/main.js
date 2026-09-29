@@ -49,14 +49,17 @@ function autoMigrateLegacyData(target) {
 
 const { DataStore } = require('./store');
 const ai = require('./ai');
+const promptHub = require('./prompt-hub');
 const exporter = require('./exporter');
 const { createMainStorePort } = require('./dice-state-store');
+const runlog = require('./runlog');
 const { createPluginHost } = require('../dice-core/plugin/host');
 const { validatePlugin } = require('../dice-core/plugin/validate');
 const { createWizard } = require('../dice-core/plugin/wizard');
 
 let win = null;
 const dataDir = resolveDataDir();
+runlog.init(dataDir);
 autoMigrateLegacyData(dataDir);
 const store = new DataStore(dataDir);
 let doc = store.load();
@@ -82,7 +85,51 @@ if (!Array.isArray(doc.settings.templates)) doc.settings.templates = [];
   if (doc.settings.ai.memeProb === undefined) doc.settings.ai.memeProb = 25;              // 插话时附带“偷来的表情”的概率(%)
   if (doc.settings.ai.optimizePrompt === undefined) doc.settings.ai.optimizePrompt = '';    // 骰点优化附加提示词
 }
+/* 提示词中枢：settings.prompts.master(总提示词，每次 AI 运行都会注入) + settings.prompts.scenes(各场景覆盖) */
+{
+  if (!doc.settings.prompts) doc.settings.prompts = {};
+  const sp = doc.settings.prompts;
+  if (typeof sp.master !== 'string') sp.master = '';
+  if (!sp.scenes || typeof sp.scenes !== 'object') sp.scenes = {};
+  for (const key of Object.keys(promptHub.defaultScenes())) {
+    if (!sp.scenes[key] || typeof sp.scenes[key] !== 'object') sp.scenes[key] = {};
+  }
+}
+/* 分场景记忆文件目录：data/memories/<scene>.md，供每次 AI 运行按场景注入"本场景"记忆尾部 */
+const memoryDirPath = promptHub.memoryDir(dataDir);
+fs.mkdirSync(memoryDirPath, { recursive: true });
 store.save(doc);
+function dayStamp() { const d = new Date(); const p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
+
+/* ---- 运行记录（RunLog）：持续记录全过程，不只记报错 ----
+ * 启动即登记信息；此后主进程关键操作 / AI / 数据读写 / 异常均持续落盘。
+ * 全局未捕获异常/未处理 Promise 拒绝也会写入 ERROR，方便事后定位。 */
+runlog.boot({ dataDir, recovered: !!store._recoveredFrom });
+const removedLogs = runlog.cleanup();
+runlog.info('数据目录就绪', { dataDir, archived: removedLogs });
+
+/* ---- 主进程 WebSocket 兜底：渲染进程有 WebSocket，但主进程(Node)运行环境无全局 WebSocket。
+ * QQ官方 / OneBot 网关均在主进程建立连接，须在早期装上一个可用实现（否则报 WebSocket is not defined）。
+ * 优先级：全局 → Node 内置 undici → ws 依赖 → 项目自带零依赖客户端（src/dice-net/ws/client.js）。
+ * 最后一个必然可用，因此打包后（Electron/Node 20）也能连上网关。 */
+function ensureGlobalWebSocket() {
+  if (typeof globalThis.WebSocket === 'function') { runlog.info('主进程已具备全局 WebSocket'); return; }
+  let WS = null, from = '';
+  try { ({ WebSocket: WS } = require('undici')); from = 'undici'; } catch (_) { WS = null; }
+  if (typeof WS !== 'function') { try { ({ WebSocket: WS } = require('ws')); from = 'ws'; } catch (_) { WS = null; } }
+  if (typeof WS !== 'function') { try { WS = require('../dice-net/ws/client').WsClient; from = '内置零依赖客户端'; } catch (_) { WS = null; } }
+  if (typeof WS === 'function') { globalThis.WebSocket = WS; runlog.info('主进程已注入 WebSocket 实现', { from }); return; }
+  runlog.error('当前运行环境缺少 WebSocket，QQ官方 / OneBot 网关无法连接');
+}
+ensureGlobalWebSocket();
+process.on('uncaughtException', (err) => {
+  runlog.error('主进程未捕获异常', { stack: err && err.stack || String(err) });
+  // 记录后让 node 走默认的致命退出，避免吞掉真正的崩溃
+  process.nextTick(() => { throw err; });
+});
+process.on('unhandledRejection', (reason) => {
+  runlog.error('主进程未处理的 Promise 拒绝', { stack: reason && reason.stack || String(reason) });
+});
 
 /* ---- 崩溃会话心跳（B2）：运行中每 30s 落一个「在线标记」；正常退出(will-quit)会清除它，
  * 崩溃/被杀进程则保留，下次启动据此提示「上次可能未正常退出，此前数据已保留」。 */
@@ -201,6 +248,7 @@ function registerIpc() {
   ipcMain.handle('store:getAll', () => {
     let sessionRecovered = false;
     try { sessionRecovered = fs.existsSync(_sessionFile()); _clearSession(); } catch (_) {}
+    if (sessionRecovered) runlog.warn('检测到上次未正常退出，数据已保留', {});
     const out = {
       data: doc,
       fields: ai.effectiveFields(doc),
@@ -249,14 +297,21 @@ function registerIpc() {
     try {
       store.save(doc);
     } catch (err) {
+      runlog.error('数据保存失败', { error: (err && err.message) || String(err) });
       return { ok: false, error: (err && err.message) || String(err), meta: store.meta() };
     }
     const werr = store.lastWriteError();
+    if (werr && !werr.ok) runlog.error('数据写入异常', { error: werr.error });
     return { ok: !!werr && !werr.ok ? false : true, error: (werr && !werr.ok) ? werr.error : null, meta: store.meta() };
   });
-  ipcMain.handle('store:backup', () => store.backup());
+  ipcMain.handle('store:backup', () => {
+    const r = store.backup();
+    runlog.info('手动备份', { ok: !!r, at: store.lastBackupAt && store.lastBackupAt() || null });
+    return r;
+  });
   ipcMain.handle('store:openFolder', () => {
     shell.openPath(store.folder);
+    runlog.info('打开数据文件夹', { folder: store.folder });
     return { ok: true };
   });
   /* 一键迁移：从用户选定的旧版 data 文件夹（如绿色版 data）把数据并入当前数据目录。
@@ -284,8 +339,12 @@ function registerIpc() {
     portable: !!process.env.PORTABLE_EXECUTABLE_DIR && app.isPackaged
   }));
   ipcMain.handle('ai:chat', async (e, messages) => {
-    const opts = Object.assign(aiOpFlags(), { loreText: buildLoreText(), memoryText: memoryText(), userPrefsText: userPrefsText(), toolContext: { entities: doc.entities || {}, uploads: recentUploads.slice(-20), relations: doc.relations || { nodes: [], edges: [] } } });
+    const opts = Object.assign(aiOpFlags(), { settings: doc.settings, loreText: buildLoreText(), memoryText: memoryText(), userPrefsText: userPrefsText(), toolContext: { entities: doc.entities || {}, uploads: recentUploads.slice(-20), relations: doc.relations || { nodes: [], edges: [] } } });
     const reply = await ai.chat(currentProfile(), messages || [], ai.effectiveFields(doc), aiCfg('chat', 'AI 对话'), worldName(), opts);
+    // 记忆自动回写：工作台对话成功 → 写入 chat 场景记忆，供后续对话减少全量上下文阅读
+    if (reply && reply.ok && reply.text) {
+      try { promptHub.appendMemory(dataDir, 'chat', String(reply.text).slice(0, 400)); } catch (_) {}
+    }
     return reply;
   });
   ipcMain.handle('ai:parse', async (e, text, opts) => {
@@ -296,7 +355,9 @@ function registerIpc() {
   /* C1/C3：一键剧情要点总结 → 长期记忆条目 */
   ipcMain.handle('ai:plotSummary', async (e, content, memoryText) => {
     try {
-      return await ai.plotSummary(aiCfg('chat', 'AI 提炼剧情要点'), String(content || ''), String(memoryText || ''));
+      const r = await ai.plotSummary(aiCfg('chat', 'AI 提炼剧情要点'), String(content || ''), String(memoryText || ''));
+      if (r && r.ok && r.memoryText) { try { promptHub.appendMemory(dataDir, 'plotSummary', String(r.memoryText).slice(0, 500)); } catch (_) {} }
+      return r;
     } catch (err) {
       return { ok: false, error: String((err && err.message) || err) };
     }
@@ -734,11 +795,15 @@ function registerIpc() {
     return ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 拆分导入资料'), existing, { settings: doc.settings, strict: args.strict !== false, excludePC: args.excludePC === true });
   });
   /* 大文件的分块 AI 分析整理：先并行抽取每段独立摘要(并发受控)，再顺序合并为完整提纲。
-   * 相比旧版逐段串行合并：并行占满空闲连接、缩短墙钟时长；合并阶段小步串行保证连贯与命中率。 */
+   * 相比旧版逐段串行合并：并行占满空闲连接、缩短墙钟时长；合并阶段小步串行保证连贯与命中率。
+   * 全程通过 import:progress 广播阶段/进度，渲染层显示进度条与剩余估算。 */
   ipcMain.handle('file:analyzeImport', async (e, { path: p, title }) => {
     try {
       if (!p || !ensureUploadPath(p) || !fs.existsSync(p)) return { ok: false, error: '找不到已抽取的导入文本，请重新导入。' };
-      const maxChunk = 25000, overlap = 1400, MAX_CHUNKS = 600;
+      const sendProgress = (phase, done, total, text) => {
+        try { if (win) win.webContents.send('import:progress', { phase, done, total, percent: total ? Math.min(100, Math.round(done * 100 / total)) : 0, text }); } catch (_) {}
+      };
+      const maxChunk = 26000, overlap = 1600, MAX_CHUNKS = 1200;
       const chunks = [];
       const ALL = fs.readFileSync(p, 'utf8'); // 工作副本已封顶(WORK_CAP)
       let i = 0;
@@ -753,8 +818,8 @@ function registerIpc() {
 
       // 阶段一：逐块并行抽取独立摘要（并发上限兜底，避免打爆连接/限流）
       const digests = new Array(chunks.length);
-      let cursor = 0;
-      const CONC = 8; // 并发摘要：在连接余量内尽可能多占空闲，明显缩短大文件墙钟时长。
+      let cursor = 0, doneDigests = 0;
+      const CONC = 10; // 并发摘要：在连接余量内尽可能多占空闲，明显缩短大文件墙钟时长。
       async function worker() {
         while (true) {
           const k = cursor++;
@@ -767,6 +832,8 @@ function registerIpc() {
             const res = await ai.chat(profile, [{ role: 'user', content: prompt }], fields, cfg, wn);
             digests[k] = String((res && res.content) || '').trim();
           } catch (_) { digests[k] = ''; }
+          doneDigests++;
+          sendProgress('digest', doneDigests, chunks.length, `正在抽取第 ${doneDigests} / ${chunks.length} 段提纲…`);
         }
       }
       await Promise.all(Array.from({ length: Math.min(CONC, chunks.length) }, worker));
@@ -777,15 +844,18 @@ function registerIpc() {
       let digest = sig[0];
       for (let k = 1; k < sig.length; k++) {
         const left = digest.slice(-9000), right = sig[k];
-        const prompt = `你在整理导入资料《${name0}》的结构化中文提纲。请把「已有提纲」与「又一片段摘要」合并为更完整的一份(涵盖：核心设定/规则要点/人物角色/地点/通关或剧情关键点)。删除重复，保留全部未重复的关键信息(人名/地名/称号/数值勿省)，按条目列出，控制在 1400 字内。\n【已有提纲】\n${left}\n【新片段摘要】\n${right}`;
+        const prompt = `你在整理导入资料《${name0}》的结构化中文提纲。请把「已有提纲」与「又一片段摘要」合并为更完整的一份(涵盖：核心设定/规则要点/人物角色/地点/通关/剧情关键点)。删除重复，保留全部未重复的关键信息(人名/地名/称号/数值勿省)，按条目列出，控制在 1400 字内。\n【已有提纲】\n${left}\n【新片段摘要】\n${right}`;
+        sendProgress('merge', k - 1, Math.max(1, sig.length - 1), `正在合并第 ${k} / ${sig.length - 1} 次提纲…`);
         try {
           const res = await ai.chat(profile, [{ role: 'user', content: prompt }], fields, cfg, wn);
           const merged = String((res && res.content) || '').trim();
           if (merged) digest = merged;
         } catch (_) { digest = digest + '\n' + right; }
       }
+      sendProgress('done', 1, 1, '分析完成');
       return { ok: true, digest, chunks: chunks.length };
     } catch (e) {
+      try { if (win) win.webContents.send('import:progress', { phase: 'error', percent: 0, text: '分析失败' }); } catch (_) {}
       return { ok: false, error: 'AI 分析失败：' + String((e && e.message) || e) };
     }
   });
@@ -937,6 +1007,47 @@ function registerIpc() {
   ipcMain.handle('win:isMax', () => ({ maximized: !!(win && win.isMaximized()) }));
   ipcMain.handle('win:close', () => { try { store.backup(); } catch (_) {} if (win) win.close(); return { ok: true }; });
 
+  /* ---- 运行记录（RunLog）查询 / 导出 / 渲染层上报 ----
+   * runlog:list     → 列出所有按天日志
+   * runlog:read     → 读取日志行（可按日期/等级/关键词过滤、可只取末尾 N 条）
+   * runlog:export   → 弹出保存对话框，把日志合并写到一个文件，返回路径
+   * runlog:write    → 渲染层主动上报一条记录（把界面层事件也纳入持续记录）
+   * runlog:open      → 打开日志所在文件夹 */
+  ipcMain.handle('runlog:list', () => runlog.listDays());
+  ipcMain.handle('runlog:read', (e, opts) => runlog.read(opts || {}));
+  ipcMain.handle('runlog:folder', () => ({ path: runlog.folder() || path.join(dataDir, 'runlog') }));
+  ipcMain.handle('runlog:write', (e, payload) => {
+    payload = payload || {};
+    const lv = ['info', 'warn', 'error'].includes(payload.level) ? payload.level : 'info';
+    runlog.write(lv, payload.msg, payload.meta);
+    return { ok: true };
+  });
+  ipcMain.handle('runlog:open', () => { try { shell.openPath(path.join(dataDir, 'runlog')); return { ok: true }; } catch (e) { return { ok: false, error: String(e && e.message || e) }; } });
+  ipcMain.handle('runlog:export', async () => {
+    const days = runlog.listDays();
+    if (!days.length) return { ok: false, error: '没有可导出的日志。' };
+    try {
+      const r = await dialog.showSaveDialog(win, {
+        title: '导出运行记录', defaultPath: 'kp-runlog-' + dayStamp() + '.log',
+        filters: [{ name: '日志文件', extensions: ['log', 'txt'] }]
+      });
+      if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+      const parts = [];
+      parts.push('KP 跑团工作台 · 运行记录导出');
+      parts.push('数据目录: ' + (runlog.folder() || dataDir));
+      for (const d of days.filter(x => x.day !== 'latest')) {
+        parts.push('');
+        parts.push('========== ' + (d.label || d.day) + ' ==========');
+        parts.push(runlog.read({ day: d.day }).lines.map(l => `[${l.t}] [${l.lv}] ${l.msg}`).join('\n'));
+      }
+      fs.writeFileSync(r.filePath, parts.join('\n\n') + '\n', 'utf8');
+      runlog.info('运行记录已导出', { path: r.filePath });
+      return { ok: true, path: r.filePath };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message || e) };
+    }
+  });
+
   /* ---- 自动更新（electron-updater）----
    * 更新源地址在打包时由 package.json 的 publish.url 写入应用（安装版有效，便携版忽略）。
    * 版本比较基于 package.json 的 version 字段与更新源 latest.yml / 版本号。 */
@@ -999,6 +1110,32 @@ function registerIpc() {
     const a = (doc.settings && doc.settings.ai) || {};
     return { enabled: a.enabled !== false, features: Object.assign({ dice: true, optimize: true, interject: false, meme: true, kpAdvice: true }, a.features || {}), interjectProb: Number.isFinite(a.interjectProb) ? a.interjectProb : 15, memeProb: Number.isFinite(a.memeProb) ? a.memeProb : 25, optimizePrompt: String(a.optimizePrompt || '') };
   });
+
+  /* ---- 提示词中枢（promptHub）：总提示词 + 各场景可编辑提示词 + 分场景记忆文件 ---- */
+  ipcMain.handle('promptHub:listScenes', () => (promptHub.list() || []).map(s => Object.assign({}, s, promptHub.effective(s.key, doc.settings))));
+  ipcMain.handle('promptHub:masterOf', () => ({ master: promptHub.masterOf(doc.settings), default: promptHub.DEFAULT_MASTER }));
+  ipcMain.handle('promptHub:savePrompts', (e, prompts) => {
+    prompts = prompts || {};
+    if (!doc.settings.prompts) doc.settings.prompts = {};
+    if (typeof prompts.master === 'string') doc.settings.prompts.master = prompts.master;
+    const sc = doc.settings.prompts.scenes || (doc.settings.prompts.scenes = {});
+    if (prompts.scenes && typeof prompts.scenes === 'object') {
+      for (const key of Object.keys(prompts.scenes)) {
+        const ov = prompts.scenes[key] || {};
+        sc[key] = sc[key] || {};
+        if (typeof ov.sys === 'string') sc[key].sys = ov.sys;
+        if (typeof ov.user === 'string') sc[key].user = ov.user;
+      }
+      for (const key of Object.keys(promptHub.defaultScenes())) if (!sc[key] || typeof sc[key] !== 'object') sc[key] = {};
+    }
+    store.save(doc);
+    doc = store.load();
+    return { ok: true };
+  });
+  ipcMain.handle('promptHub:listMemories', () => promptHub.listMemories(dataDir));
+  ipcMain.handle('promptHub:rawMemory', (e, sceneKey) => promptHub.rawMemory(dataDir, sceneKey));
+  ipcMain.handle('promptHub:writeMemory', (e, sceneKey, text) => promptHub.writeMemory(dataDir, sceneKey, text));
+  ipcMain.handle('promptHub:clearMemory', (e, sceneKey) => promptHub.clearMemory(dataDir, sceneKey));
 
   /* ---- AI 数据一致性审查 ---- */
   ipcMain.handle('ai:audit', async () => {
@@ -1181,11 +1318,19 @@ function registerIpc() {
         enabled: a.enabled !== false && (a.features ? a.features[feature] !== false : true),
         cfg,
         buildSystem(f) {
-          const sys = '你是跑团群里的「骰娘」，负责掷骰、判定与引导剧情推进。请用活泼、亲切、适合 TRPG 玩家阅读的'
+          // 该 feature 对应的提示词中枢场景：dice→dice / optimize→optimize / interject→interject；其余回退 dice 场景
+          const scene = (f === 'optimize' || f === 'interject' || f === 'kpAdvice') ? f : 'dice';
+          let sys = promptHub.systemFor(scene, doc.settings, {}, promptHub.readMemory(dataDir, scene, 2200));
+          sys = sys + '\n\n你是跑团群里的「骰娘」，负责掷骰、判定与引导剧情推进。请用活泼、亲切、适合 TRPG 玩家阅读的'
             + (f === 'dice' ? '口吻直接回答玩家的问题，涉及检定结果时不要改动数值本身，只做带剧情的润色。' : '口吻辅助。')
             + '\n\n感谢用户记得你所在团的世界观：\n' + buildLoreText()
             + (userPrefsText() ? '\n\n【KP 偏好】\n' + userPrefsText() : '');
           return String(sys).slice(0, 6000);
+        },
+        // 记忆自动回写：feature→场景记忆文件，成功后由 dice-ai 调用，把本次关键内容追加
+        remember(f, content) {
+          const scene = (f === 'optimize' || f === 'interject' || f === 'kpAdvice') ? f : 'dice';
+          promptHub.appendMemory(dataDir, scene, content);
         }
       };
     }
@@ -1235,7 +1380,7 @@ function registerIpc() {
 
   // 连接中心（分区 2）
   ipcMain.handle('diceNet:list', () => diceWorkbench.netList());
-  ipcMain.handle('diceNet:start', async (e, id) => diceWorkbench.netStart(id));
+  ipcMain.handle('diceNet:start', async (e, id, cfg) => diceWorkbench.netStart(id, cfg));
   ipcMain.handle('diceNet:stop', async (e, id) => diceWorkbench.netStop(id));
   ipcMain.handle('diceNet:status', (e, id) => diceWorkbench.status(id));
   // 指令日志（分区 3）
@@ -1276,12 +1421,15 @@ function createWindow() {
   win.on('unmaximize', () => { try { win.webContents.send('win:maximized', false); } catch (_) {} });
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  runlog.info('主窗口已创建', { id: win.id });
 }
 
 app.whenReady().then(() => {
   registerIpc();
   // 启动时对已有明文 API Key 做一次加密迁移
   if (hardenAiKeyIfNeeded()) store.save(doc);
+  // 向 AI 层注入提示词中枢上下文：dataDir 用于分场景记忆读写；此后各 AI 调用自动注入总提示词+本场景记忆
+  ai.setHubContext({ dataDir });
   createWindow();
   // 自动备份：按用户配置的间隔（默认 30 分钟）+ 退出前各一次。
   // 用分钟级轮询实现，方便用户在设置里改间隔后即时生效。

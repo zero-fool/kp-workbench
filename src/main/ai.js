@@ -1,7 +1,32 @@
 'use strict';
 /* AI 层：角色卡(人设/话风/设定) 组装 + OpenAI 兼容接口调用 + 剧本→工作台结构化解析 */
 
+const promptHub = require('./prompt-hub'); // 统一提示词 + 分场景记忆中枢
 const _K = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
+
+/* 提示词中枢上下文：由主进程注入 dataDir，AI 各调用按场景注入「总提示词(master) + 本场景记忆尾部」。
+ * 未注入时(单测/离线)任何 hub 注入都是空，完全不影响既有行为。 */
+let _hub = { dataDir: '' };
+function setHubContext(ctx) { if (ctx && typeof ctx === 'object') _hub = Object.assign({}, _hub, ctx); }
+function hubDataDir() { return _hub.dataDir || ''; }
+/* 通用注入：给定场景 + settings，返回(总则 + 本场景记忆)；无配置/无记忆时返回空字符串 */
+function hubPrefix(sceneKey, settings, vars) {
+  const dd = hubDataDir();
+  if (!dd || !settings) return '';
+  try {
+    const mem = promptHub.readMemory(dd, sceneKey, 2200);
+    const parts = [];
+    const master = promptHub.masterOf(settings);
+    if (master.trim()) parts.push('【总则】' + master.trim());
+    if (mem.trim()) parts.push(mem);
+    return parts.join('\n\n');
+  } catch (_) { return ''; }
+}
+/* 服务式：把「总则+场景记忆」拼到现有 system 之前；未注入则原样返回以防破坏既有提示词 */
+function hubSystem(sceneKey, settings, ownSys, vars) {
+  const pre = hubPrefix(sceneKey, settings, vars);
+  return pre ? String(pre) + '\n\n' + String(ownSys === undefined ? '' : ownSys) : (ownSys === undefined ? '' : String(ownSys));
+}
 
 /* 内置默认字段 schema（用户未自定时使用；type: text|textarea|number|select|tags|sep） */
 const DEFAULT_FIELDS = {
@@ -147,6 +172,10 @@ function systemForChat(profile, fields, world, opts) {
     s += '\n\n（工具调用未开启：请仅以纯文本对话形式辅助，不执行任何结构化/文件类操作。）';
   }
   s += '\n\n若用户要求生成/改写资料卡，请直接以自然语言给出可直接采用的文本，可含编号或要点。';
+  // 提示词中枢注入（总则 + 本场景记忆）；opts.settings 存在且已注入 dataDir 时才会接管
+  if (opts.settings && hubDataDir()) {
+    return hubSystem('chat', opts.settings, s, { world: w });
+  }
   return s;
 }
 
@@ -1035,7 +1064,7 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
   opts = opts || {};
   const prompts = effectivePrompts(opts.settings);
   const strict = opts.strict !== false; // 默认严格：未经使用者确认不允许增编
-  const sys = '你是一个 TRPG 跑团剧本拆分登记助手，只输出 JSON，不要输出任何解释文字。';
+  const sys = hubSystem('registration', opts.settings, '你是一个 TRPG 跑团剧本拆分登记助手，只输出 JSON，不要输出任何解释文字。');
   const EXISTING = existing || {};
   // 分片：超过阈值时按行切分为多个可单独解析的片段，逐段调用后合并，避免长文本尾部信息丢失
   const SEG = 20000, OVERLAP = 400;
@@ -1630,4 +1659,4 @@ async function breakdownScenario(cfg, text, settings) {
   return result;
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, usageLog, resetUsage, cancelGroup, recordUsage };
+module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, usageLog, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem };

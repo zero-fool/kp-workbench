@@ -50,6 +50,10 @@ function createDiceAi(ctx) {
 
     const res = await ctx.ai.chatRaw(cfg, msgs, { timeoutMs: params && params.timeoutMs });
     const text = (res && (res.text !== undefined ? res.text : res.content)) || '';
+    // 记忆自动回写：成功后把本次关键内容追加到对应场景记忆文件，供后续注入，减少全量上下文阅读
+    if (j.remember && text) {
+      try { j.remember(feature, String(text).slice(0, 400)); } catch (_) {}
+    }
     return { ok: true, text: String(text) };
   }
 
