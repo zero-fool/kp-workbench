@@ -1,0 +1,1045 @@
+{
+  "version": 3,
+  "entities": {
+    "pcs": [],
+    "npcs": [],
+    "regions": [],
+    "logs": [],
+    "mobs": [],
+    "rules": [],
+    "lore": [],
+    "encounters": []
+  },
+  "fields": {
+    "pcs": [
+      {
+        "k": "name",
+        "l": "姓名",
+        "t": "text"
+      },
+      {
+        "k": "player",
+        "l": "玩家",
+        "t": "text"
+      },
+      {
+        "k": "path",
+        "l": "路径",
+        "t": "text"
+      },
+      {
+        "k": "subtitle",
+        "l": "称号",
+        "t": "text"
+      },
+      {
+        "k": "level",
+        "l": "等级",
+        "t": "number"
+      },
+      {
+        "k": "attribute",
+        "l": "属性速写",
+        "t": "textarea"
+      },
+      {
+        "k": "hp",
+        "l": "生命值",
+        "t": "number"
+      },
+      {
+        "k": "body",
+        "l": "体质",
+        "t": "number"
+      },
+      {
+        "k": "agi",
+        "l": "敏捷",
+        "t": "number"
+      },
+      {
+        "k": "wil",
+        "l": "意志",
+        "t": "number"
+      },
+      {
+        "k": "per",
+        "l": "感知",
+        "t": "number"
+      },
+      {
+        "k": "skill",
+        "l": "技能",
+        "t": "tags"
+      },
+      {
+        "k": "wound",
+        "l": "伤势",
+        "t": "select",
+        "opts": [
+          "健康",
+          "负伤",
+          "重伤",
+          "倒地",
+          "死亡"
+        ]
+      },
+      {
+        "k": "status",
+        "l": "状态",
+        "t": "select",
+        "opts": [
+          "在队",
+          "失踪",
+          "退团",
+          "死亡"
+        ]
+      },
+      {
+        "k": "note",
+        "l": "备注",
+        "t": "textarea"
+      }
+    ],
+    "npcs": [
+      {
+        "k": "name",
+        "l": "名称",
+        "t": "text"
+      },
+      {
+        "k": "role",
+        "l": "身份/职业",
+        "t": "text"
+      },
+      {
+        "k": "faction",
+        "l": "阵营/组织",
+        "t": "text"
+      },
+      {
+        "k": "location",
+        "l": "所在地",
+        "t": "text"
+      },
+      {
+        "k": "rel",
+        "l": "角色关系",
+        "t": "select",
+        "opts": [
+          "友好",
+          "中立",
+          "敌对",
+          "未知"
+        ]
+      },
+      {
+        "k": "etype",
+        "l": "类型",
+        "t": "select",
+        "opts": [
+          "普通",
+          "精英",
+          "Boss"
+        ]
+      },
+      {
+        "k": "lv",
+        "l": "等级",
+        "t": "number"
+      },
+      {
+        "k": "hp",
+        "l": "生命值",
+        "t": "number"
+      },
+      {
+        "k": "personality",
+        "l": "性格",
+        "t": "textarea"
+      },
+      {
+        "k": "appearance",
+        "l": "外貌",
+        "t": "textarea"
+      },
+      {
+        "k": "secret",
+        "l": "秘密/动机",
+        "t": "textarea"
+      },
+      {
+        "k": "status",
+        "l": "状态",
+        "t": "select",
+        "opts": [
+          "活跃",
+          "失踪",
+          "死亡",
+          "退场"
+        ]
+      },
+      {
+        "k": "note",
+        "l": "备注",
+        "t": "textarea"
+      }
+    ],
+    "regions": [
+      {
+        "k": "name",
+        "l": "名称",
+        "t": "text"
+      },
+      {
+        "k": "type",
+        "l": "类型",
+        "t": "select",
+        "opts": [
+          "城市",
+          "村镇",
+          "荒野",
+          "地下城",
+          "据点",
+          "异界",
+          "海域"
+        ]
+      },
+      {
+        "k": "area",
+        "l": "区域/规模",
+        "t": "text"
+      },
+      {
+        "k": "danger",
+        "l": "危险度",
+        "t": "select",
+        "opts": [
+          "安全",
+          "低",
+          "中",
+          "高",
+          "极危"
+        ]
+      },
+      {
+        "k": "env",
+        "l": "环境",
+        "t": "select",
+        "opts": [
+          "普通",
+          "雾蚀带",
+          "灰区"
+        ]
+      },
+      {
+        "k": "dist",
+        "l": "距离圈",
+        "t": "select",
+        "opts": [
+          "近战",
+          "近距",
+          "中距",
+          "远距",
+          "极限"
+        ]
+      },
+      {
+        "k": "cover",
+        "l": "掩护",
+        "t": "select",
+        "opts": [
+          "无",
+          "轻掩护",
+          "重掩护"
+        ]
+      },
+      {
+        "k": "desc",
+        "l": "描述",
+        "t": "textarea"
+      },
+      {
+        "k": "food",
+        "l": "补给/资源",
+        "t": "text"
+      },
+      {
+        "k": "key",
+        "l": "关键地点/机关",
+        "t": "tags"
+      },
+      {
+        "k": "note",
+        "l": "备注",
+        "t": "textarea"
+      }
+    ],
+    "logs": [
+      {
+        "k": "name",
+        "l": "标题",
+        "t": "text"
+      },
+      {
+        "k": "when",
+        "l": "开团日期",
+        "t": "text"
+      },
+      {
+        "k": "summary",
+        "l": "剧情摘要",
+        "t": "textarea"
+      },
+      {
+        "k": "hook",
+        "l": "当前钩子/任务",
+        "t": "textarea"
+      },
+      {
+        "k": "polished",
+        "l": "润色稿（AI）",
+        "t": "textarea"
+      },
+      {
+        "k": "actors",
+        "l": "出场角色",
+        "t": "tags"
+      },
+      {
+        "k": "status",
+        "l": "状态",
+        "t": "select",
+        "opts": [
+          "已解决",
+          "进行中",
+          "待跟进"
+        ]
+      },
+      {
+        "k": "note",
+        "l": "备注",
+        "t": "textarea"
+      }
+    ],
+    "mobs": [
+      {
+        "k": "name",
+        "l": "名称",
+        "t": "text"
+      },
+      {
+        "k": "category",
+        "l": "类别",
+        "t": "select",
+        "opts": [
+          "暗灵",
+          "野兽",
+          "亡灵",
+          "构装体",
+          "人形",
+          "其他"
+        ]
+      },
+      {
+        "k": "tier",
+        "l": "层级",
+        "t": "select",
+        "opts": [
+          "普通",
+          "精英",
+          "Boss"
+        ]
+      },
+      {
+        "k": "lv",
+        "l": "等级",
+        "t": "number"
+      },
+      {
+        "k": "hp",
+        "l": "生命值",
+        "t": "number"
+      },
+      {
+        "k": "av",
+        "l": "护甲",
+        "t": "number"
+      },
+      {
+        "k": "dmg",
+        "l": "伤害",
+        "t": "text"
+      },
+      {
+        "k": "trait",
+        "l": "特性",
+        "t": "tags"
+      },
+      {
+        "k": "weak",
+        "l": "弱点",
+        "t": "text"
+      },
+      {
+        "k": "note",
+        "l": "备注",
+        "t": "textarea"
+      }
+    ],
+    "rules": [
+      {
+        "k": "name",
+        "l": "规则名称",
+        "t": "text"
+      },
+      {
+        "k": "scope",
+        "l": "适用范围",
+        "t": "select",
+        "opts": [
+          "通用",
+          "战斗",
+          "成长",
+          "物品",
+          "探索",
+          "其他"
+        ]
+      },
+      {
+        "k": "summary",
+        "l": "要点",
+        "t": "textarea"
+      },
+      {
+        "k": "detail",
+        "l": "详细内容",
+        "t": "textarea"
+      },
+      {
+        "k": "source",
+        "l": "来源/出处",
+        "t": "text"
+      },
+      {
+        "k": "tags",
+        "l": "标签",
+        "t": "tags"
+      },
+      {
+        "k": "note",
+        "l": "备注",
+        "t": "textarea"
+      }
+    ],
+    "lore": [
+      {
+        "k": "name",
+        "l": "标题",
+        "t": "text"
+      },
+      {
+        "k": "category",
+        "l": "类别",
+        "t": "select",
+        "opts": [
+          "地理",
+          "历史",
+          "设定",
+          "文化",
+          "组织",
+          "其他"
+        ]
+      },
+      {
+        "k": "summary",
+        "l": "概要",
+        "t": "textarea"
+      },
+      {
+        "k": "content",
+        "l": "正文",
+        "t": "textarea"
+      },
+      {
+        "k": "origin",
+        "l": "来源",
+        "t": "text"
+      },
+      {
+        "k": "tags",
+        "l": "标签",
+        "t": "tags"
+      },
+      {
+        "k": "note",
+        "l": "备注",
+        "t": "textarea"
+      }
+    ]
+  },
+  "profiles": [],
+  "relations": {
+    "nodes": [],
+    "edges": []
+  },
+  "settings": {
+    "templates": [
+      {
+        "id": "dnd",
+        "name": "DnD 5e 冒险者",
+        "note": "龙与地下城 5e · 六属性 + HP/AC/熟练/先攻/速度 · 高属性",
+        "builtin": true,
+        "fields": {
+          "pcs": [
+            {
+              "k": "name",
+              "l": "姓名",
+              "t": "text"
+            },
+            {
+              "k": "player",
+              "l": "玩家",
+              "t": "text"
+            },
+            {
+              "k": "race",
+              "l": "种族",
+              "t": "text"
+            },
+            {
+              "k": "klass",
+              "l": "职业",
+              "t": "text"
+            },
+            {
+              "k": "background",
+              "l": "背景",
+              "t": "text"
+            },
+            {
+              "k": "level",
+              "l": "等级",
+              "t": "number"
+            },
+            {
+              "k": "exp",
+              "l": "经验值",
+              "t": "number"
+            },
+            {
+              "k": "str",
+              "l": "力量",
+              "t": "number"
+            },
+            {
+              "k": "dex",
+              "l": "敏捷",
+              "t": "number"
+            },
+            {
+              "k": "con",
+              "l": "体质",
+              "t": "number"
+            },
+            {
+              "k": "int",
+              "l": "智力",
+              "t": "number"
+            },
+            {
+              "k": "wis",
+              "l": "感知",
+              "t": "number"
+            },
+            {
+              "k": "cha",
+              "l": "魅力",
+              "t": "number"
+            },
+            {
+              "k": "hp",
+              "l": "生命值 HP",
+              "t": "number"
+            },
+            {
+              "k": "ac",
+              "l": "护甲 AC",
+              "t": "number"
+            },
+            {
+              "k": "prof",
+              "l": "熟练加值",
+              "t": "number"
+            },
+            {
+              "k": "init",
+              "l": "先攻加值",
+              "t": "number"
+            },
+            {
+              "k": "speed",
+              "l": "速度",
+              "t": "text"
+            },
+            {
+              "k": "skill",
+              "l": "技能熟练",
+              "t": "tags"
+            },
+            {
+              "k": "feat",
+              "l": "专长",
+              "t": "tags"
+            },
+            {
+              "k": "spell",
+              "l": "法术",
+              "t": "tags"
+            },
+            {
+              "k": "equip",
+              "l": "装备",
+              "t": "textarea"
+            },
+            {
+              "k": "bk",
+              "l": "人物背景",
+              "t": "textarea"
+            },
+            {
+              "k": "note",
+              "l": "备注",
+              "t": "textarea"
+            }
+          ],
+          "npcs": [
+            {
+              "k": "name",
+              "l": "名称",
+              "t": "text"
+            },
+            {
+              "k": "race",
+              "l": "种族",
+              "t": "text"
+            },
+            {
+              "k": "klass",
+              "l": "职业",
+              "t": "text"
+            },
+            {
+              "k": "role",
+              "l": "身份",
+              "t": "text"
+            },
+            {
+              "k": "str",
+              "l": "力量",
+              "t": "number"
+            },
+            {
+              "k": "dex",
+              "l": "敏捷",
+              "t": "number"
+            },
+            {
+              "k": "con",
+              "l": "体质",
+              "t": "number"
+            },
+            {
+              "k": "int",
+              "l": "智力",
+              "t": "number"
+            },
+            {
+              "k": "wis",
+              "l": "感知",
+              "t": "number"
+            },
+            {
+              "k": "cha",
+              "l": "魅力",
+              "t": "number"
+            },
+            {
+              "k": "hp",
+              "l": "生命值 HP",
+              "t": "number"
+            },
+            {
+              "k": "ac",
+              "l": "护甲 AC",
+              "t": "number"
+            },
+            {
+              "k": "cr",
+              "l": "挑战等级",
+              "t": "number"
+            },
+            {
+              "k": "trait",
+              "l": "特性",
+              "t": "tags"
+            },
+            {
+              "k": "secret",
+              "l": "秘密/动机",
+              "t": "textarea"
+            },
+            {
+              "k": "note",
+              "l": "备注",
+              "t": "textarea"
+            }
+          ],
+          "mobs": [
+            {
+              "k": "name",
+              "l": "名称",
+              "t": "text"
+            },
+            {
+              "k": "mtype",
+              "l": "生物类型",
+              "t": "select",
+              "opts": [
+                "野兽",
+                "类人",
+                "亡灵",
+                "构装体",
+                "龙类",
+                "其他"
+              ]
+            },
+            {
+              "k": "cr",
+              "l": "挑战等级",
+              "t": "number"
+            },
+            {
+              "k": "str",
+              "l": "力量",
+              "t": "number"
+            },
+            {
+              "k": "dex",
+              "l": "敏捷",
+              "t": "number"
+            },
+            {
+              "k": "con",
+              "l": "体质",
+              "t": "number"
+            },
+            {
+              "k": "int",
+              "l": "智力",
+              "t": "number"
+            },
+            {
+              "k": "wis",
+              "l": "感知",
+              "t": "number"
+            },
+            {
+              "k": "cha",
+              "l": "魅力",
+              "t": "number"
+            },
+            {
+              "k": "hp",
+              "l": "生命值 HP",
+              "t": "number"
+            },
+            {
+              "k": "ac",
+              "l": "护甲 AC",
+              "t": "number"
+            },
+            {
+              "k": "dmg",
+              "l": "攻击/伤害",
+              "t": "textarea"
+            },
+            {
+              "k": "trait",
+              "l": "特性",
+              "t": "tags"
+            },
+            {
+              "k": "note",
+              "l": "备注",
+              "t": "textarea"
+            }
+          ]
+        }
+      },
+      {
+        "id": "coc",
+        "name": "CoC 7th 调查员",
+        "note": "克苏鲁的呼唤 7th · 八属性 + 理智SAN/魔法值/幸运 · 生命=(体型+体质)/10",
+        "builtin": true,
+        "fields": {
+          "pcs": [
+            {
+              "k": "name",
+              "l": "姓名",
+              "t": "text"
+            },
+            {
+              "k": "player",
+              "l": "玩家",
+              "t": "text"
+            },
+            {
+              "k": "occupation",
+              "l": "职业",
+              "t": "text"
+            },
+            {
+              "k": "age",
+              "l": "年龄",
+              "t": "number"
+            },
+            {
+              "k": "sex",
+              "l": "性别",
+              "t": "select",
+              "opts": [
+                "男",
+                "女",
+                "未知"
+              ]
+            },
+            {
+              "k": "res",
+              "l": "居住地",
+              "t": "text"
+            },
+            {
+              "k": "str",
+              "l": "力量 STR",
+              "t": "number"
+            },
+            {
+              "k": "con",
+              "l": "体质 CON",
+              "t": "number"
+            },
+            {
+              "k": "dex",
+              "l": "敏捷 DEX",
+              "t": "number"
+            },
+            {
+              "k": "app",
+              "l": "外貌 APP",
+              "t": "number"
+            },
+            {
+              "k": "int",
+              "l": "智力 INT",
+              "t": "number"
+            },
+            {
+              "k": "pow",
+              "l": "意志 POW",
+              "t": "number"
+            },
+            {
+              "k": "siz",
+              "l": "体型 SIZ",
+              "t": "number"
+            },
+            {
+              "k": "edu",
+              "l": "教育 EDU",
+              "t": "number"
+            },
+            {
+              "k": "hp",
+              "l": "生命值 HP",
+              "t": "number"
+            },
+            {
+              "k": "san",
+              "l": "理智 SAN",
+              "t": "number"
+            },
+            {
+              "k": "mp",
+              "l": "魔法值 MP",
+              "t": "number"
+            },
+            {
+              "k": "luck",
+              "l": "幸运",
+              "t": "number"
+            },
+            {
+              "k": "skill",
+              "l": "技能",
+              "t": "tags"
+            },
+            {
+              "k": "weapon",
+              "l": "武器",
+              "t": "textarea"
+            },
+            {
+              "k": "belongings",
+              "l": "随身物品",
+              "t": "textarea"
+            },
+            {
+              "k": "profile",
+              "l": "个人背景",
+              "t": "textarea"
+            },
+            {
+              "k": "note",
+              "l": "备注",
+              "t": "textarea"
+            }
+          ],
+          "npcs": [
+            {
+              "k": "name",
+              "l": "名称",
+              "t": "text"
+            },
+            {
+              "k": "role",
+              "l": "身份/职业",
+              "t": "text"
+            },
+            {
+              "k": "str",
+              "l": "力量 STR",
+              "t": "number"
+            },
+            {
+              "k": "con",
+              "l": "体质 CON",
+              "t": "number"
+            },
+            {
+              "k": "dex",
+              "l": "敏捷 DEX",
+              "t": "number"
+            },
+            {
+              "k": "pow",
+              "l": "意志 POW",
+              "t": "number"
+            },
+            {
+              "k": "siz",
+              "l": "体型 SIZ",
+              "t": "number"
+            },
+            {
+              "k": "hp",
+              "l": "生命值 HP",
+              "t": "number"
+            },
+            {
+              "k": "san",
+              "l": "理智 SAN",
+              "t": "number"
+            },
+            {
+              "k": "skill",
+              "l": "技能",
+              "t": "tags"
+            },
+            {
+              "k": "secret",
+              "l": "秘密/动机",
+              "t": "textarea"
+            },
+            {
+              "k": "note",
+              "l": "备注",
+              "t": "textarea"
+            }
+          ],
+          "mobs": [
+            {
+              "k": "name",
+              "l": "名称",
+              "t": "text"
+            },
+            {
+              "k": "etype",
+              "l": "类别",
+              "t": "select",
+              "opts": [
+                "怪物",
+                "人类",
+                "梦境生物",
+                "旧日支配者",
+                "其他"
+              ]
+            },
+            {
+              "k": "str",
+              "l": "力量 STR",
+              "t": "number"
+            },
+            {
+              "k": "con",
+              "l": "体质 CON",
+              "t": "number"
+            },
+            {
+              "k": "dex",
+              "l": "敏捷 DEX",
+              "t": "number"
+            },
+            {
+              "k": "pow",
+              "l": "意志 POW",
+              "t": "number"
+            },
+            {
+              "k": "siz",
+              "l": "体型 SIZ",
+              "t": "number"
+            },
+            {
+              "k": "hp",
+              "l": "生命值 HP",
+              "t": "number"
+            },
+            {
+              "k": "mp",
+              "l": "魔法值 MP",
+              "t": "number"
+            },
+            {
+              "k": "attack",
+              "l": "攻击/伤害",
+              "t": "textarea"
+            },
+            {
+              "k": "trait",
+              "l": "特性",
+              "t": "tags"
+            },
+            {
+              "k": "note",
+              "l": "备注",
+              "t": "textarea"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "audit": [],
+  "created": "2026-09-23T04:41:38.777Z"
+}

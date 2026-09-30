@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="ember">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+<title>KP 跑团工作台</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app" class="app">
+
+  <!-- 顶栏（无边框拖动区） -->
+  <header class="topbar" id="winBar">
+    <div class="brand" title="拖拽此区域可移动窗口">
+      <span class="logo" id="appLogo">残</span>
+      <div class="brand-text">
+        <b>KP 跑团工作台</b>
+        <span class="sub" id="appSub">残火纪 · 烬中寻火</span>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span class="profile-chip" id="topProfile" title="当前 AI 人设">—</span>
+      <select id="themeSelect" title="主题皮肤"></select>
+      <button class="ghost" id="btnBackup" title="立即备份">备份</button>
+      <button class="ghost" id="btnFolder" title="打开数据文件夹">文件夹</button>
+    </div>
+    <div class="win-ctl" id="winCtl">
+      <button class="wc" id="wcMin" title="最小化">─</button>
+      <button class="wc" id="wcMax" title="最大化/还原">▢</button>
+      <button class="wc wc-close" id="wcClose" title="关闭">✕</button>
+    </div>
+  </header>
+
+  <div class="body">
+    <!-- 侧栏 -->
+    <nav class="sidebar" id="sidebar">
+      <div class="gsearch" title="Ctrl+K 呼出命令面板">
+        <span class="gf">⌕</span><input id="glSearch" placeholder="全局搜索 (Ctrl+K)…" oninput="WB.globalSearch(this.value)">
+      </div>
+      <button data-view="dash" class="nav active"><span class="ic">◈</span><span class="navt">总览</span></button>
+      <div class="sect">资 料</div>
+      <button data-view="pcs" class="nav"><span class="ic">⛧</span><span class="navt">人物卡</span></button>
+      <button data-view="npcs" class="nav"><span class="ic">🧙</span><span class="navt">NPC</span></button>
+      <button data-view="regions" class="nav"><span class="ic">⛰</span><span class="navt">地区</span></button>
+      <button data-view="logs" class="nav"><span class="ic">🕮</span><span class="navt">日志</span></button>
+      <button data-view="mobs" class="nav"><span class="ic">☠</span><span class="navt">怪物</span></button>
+      <button data-view="rules" class="nav"><span class="ic">▤</span><span class="navt">规则</span></button>
+      <button data-view="lore" class="nav"><span class="ic">☷</span><span class="navt">背景</span></button>
+      <button data-view="relations" class="nav"><span class="ic">☸</span><span class="navt">关系网</span></button>
+      <div class="sep"></div>
+      <div class="sect">AI 工 具</div>
+      <button data-view="ai" class="nav"><span class="ic">✧</span><span class="navt">AI 助手</span></button>
+      <button data-view="persona" class="nav"><span class="ic">♜</span><span class="navt">AI 设定</span></button>
+      <button data-view="aiconf" class="nav"><span class="ic">⇅</span><span class="navt">AI 配置</span></button>
+      <div class="sep"></div>
+      <div class="sect">工 具</div>
+      <button data-view="dice" class="nav"><span class="ic">⚀</span><span class="navt">骰娘鉴定</span></button>
+      <button data-view="polish" class="nav"><span class="ic">✍</span><span class="navt">记录润色</span></button>
+      <button data-view="changelog" class="nav"><span class="ic">⌘</span><span class="navt">更新公告</span></button>
+      <button data-view="settings" class="nav"><span class="ic">⚙</span><span class="navt">设置</span></button>
+      <div class="sep"></div>
+      <button id="btnChatToggle" class="nav" title="展开/收起侧栏 AI 对话"><span class="ic">💬</span><span class="navt">AI 对话</span></button>
+      <button id="btnSidebarToggle" class="nav" title="折叠/展开侧栏"><span class="ic">⇤⇥</span><span class="navt">折叠侧栏</span></button>
+    </nav>
+
+    <!-- 主内容 -->
+    <main class="content" id="content"><div class="empty">加载中…</div></main>
+
+    <!-- 侧栏常驻 AI 对话抽屉 -->
+    <aside class="chatdrawer" id="chatdrawer" hidden>
+      <div class="chathead">
+        <span>AI 对话</span>
+        <span class="cd-profile" id="drawerProfile">人设 · 未配置</span>
+        <button id="btnChatClose" title="收起">»</button>
+      </div>
+      <div class="chatdrawer-bar">
+        <select id="drawerGenType" title="选择建卡类型"><option value="npc">NPC</option><option value="pc">人物卡</option><option value="region">地区</option><option value="log">日志</option><option value="mob">怪物</option></select>
+        <button id="drawerGenBuild" title="结合上方对话生成该类型资料卡">⚡按对话建卡</button>
+        <button id="drawerImportLast" title="把最近一条 AI 回复拆解为资料卡">⇥建资料卡</button>
+        <button id="drawerScriptBtn" title="展开/收起「剧本解析」：粘贴剧本一键拆解为多类资料卡（已并入侧栏）">✎剧本</button>
+      </div>
+      <!-- 剧本解析（并入侧栏） -->
+      <div id="drawerScriptPanel" class="drawer-script" hidden>
+        <textarea id="drawerScriptText" class="autoarea" rows="3" placeholder="在此粘贴跑团剧本正文…（或点下方「导入文件」读取 txt / md / docx / pdf / xlsx）"></textarea>
+        <div class="chatdrawer-bar">
+          <button id="drawerScriptImport" title="导入剧本文件文本类文件">📄文件</button>
+          <button id="drawerScriptParse" title="把上方剧本一键拆解为人物/NPC/地区/日志/怪物，预览勾选后写入">⇄解析剧本</button>
+          <span class="hint" id="drawerScriptState"></span>
+        </div>
+      </div>
+      <div class="chatlog" id="drawerLog"></div>
+      <div class="chatinput">
+        <button id="drawerUpload" title="上传文字文件（AI 无识图，仅文本）">📎</button>
+        <textarea id="drawerIn" class="autoarea" maxlength="60000" rows="1" placeholder="向 AI 提问…（Enter 发送 / Shift+Enter 换行）"></textarea>
+        <button id="drawerExport" title="导出最近 AI 回复为 .txt">⬇</button>
+        <button id="drawerSend" title="发送">发送</button>
+      </div>
+    </aside>
+  </div>
+
+</div>
+
+<!-- 通用弹窗 -->
+<div class="modal-mask" id="modalMask" hidden>
+  <div class="modal" id="modalBox"></div>
+</div>
+
+<!-- 确认框 -->
+<div class="modal-mask" id="confirmMask" hidden>
+  <div class="modal small" id="confirmBox"></div>
+</div>
+
+<!-- Ctrl+K 命令面板 -->
+<div class="palette-mask" id="paletteMask" hidden>
+  <div class="palette" id="paletteBox">
+    <div class="pal-input"><span class="pp">⌕</span><input id="palIn" placeholder="输入要跳转的页面 / 资料…（↑↓ 选择 Enter 打开 Esc 关闭）"></div>
+    <div class="pal-list" id="palList"></div>
+  </div>
+</div>
+
+<!-- 新手引导 -->
+<div class="modal-mask" id="onboardMask" hidden>
+  <div class="modal" id="onboardBox"></div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<!-- 文件拖拽导入遮罩反馈 -->
+<div class="drop-overlay" id="dropOverlay" hidden><div class="drop-box">松开以导入文件</div></div>
+
+<script>
+window.__errs=[];
+window.addEventListener('error',e=>window.__errs.push(String((e.error&&e.error.stack)||e.message)));
+window.api={
+  getAll:async()=>({data:{entities:{pcs:[],npcs:[],regions:[],logs:[],mobs:[],rules:[],lore:[],audit:[]},relations:{nodes:[],edges:[]}},fields:{pcs:[],npcs:[],regions:[],logs:[],mobs:[],rules:[],lore:[]},settings:{},profiles:[],activeProfile:null,meta:{}}),
+  save:async()=>{},
+  winCtrl:{minimize(){},toggleMax(){},close(){},onMaximized(cb){},isMaximized:async()=>({maximized:false})},
+  readSheet:async()=>({ok:false,error:'stub'}),
+  aiParse:async()=>({ok:false,error:'stub'}),
+  checkUpdate:async()=>({ok:false})
+};
+</script><script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "manifest": { "id": "dnd5e", "name": "DnD 5e", "version": "1.0.0", "ruleset": "龙与地下城 5 版", "author": "KP跑团工作台", "minCore": "3.0" },
+  "dice": { "常用骰式": "1d20", "取优": "2d20kh1" },
+  "checks": [
+    {
+      "name": "属性检定",
+      "expr": "1d20",
+      "levels": ["自然20·大成功", "成功", "失败", "自然1·大失败"],
+      "calc": [
+        {
+          "name": "分档",
+          "expr": "if(raw==20,'自然20·大成功', if(raw==1,'自然1·大失败', if(R>=skill,'成功','失败')))"
+        }
+      ]
+    }
+  ],
+  "cardFields": [
+    { "key": "力量", "label": "力量", "type": "number", "default": 10 },
+    { "key": "敏捷", "label": "敏捷", "type": "number", "default": 10 }
+  ],
+  "commands": [],
+  "templates": { "checkResult": "{name} 做出「{skill}」检定：掷出 {roll} → {level}" }
+}

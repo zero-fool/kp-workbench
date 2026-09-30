@@ -1,0 +1,8 @@
+{
+  "manifest": { "id": "plain", "name": "通用", "version": "1.0.0", "ruleset": "通用", "author": "KP跑团工作台", "minCore": "3.0" },
+  "dice": { "常用骰式": "1d20", "取优": "2d20kh1" },
+  "checks": [],
+  "cardFields": [],
+  "commands": [],
+  "templates": { "checkResult": "{name} 掷出 {roll}" }
+}

@@ -1,0 +1,12 @@
+{ "manifest": { "id": "builtin-coc7", "name": "克苏鲁的呼唤 7版", "version": "1.0.0", "ruleset": "CoC 7th", "author": "KP跑团工作台", "minCore": "3.0" },
+  "dice": { "百分骰": "1d100", "困难": "1d100/2", "极难": "1d100/5" },
+  "checks": [ { "name": "侦查", "expr": "1d100",
+      "levels": ["大成功", "极难成功", "困难成功", "成功", "失败", "大失败"],
+      "calc": [{ "name": "r", "expr": "if(R<=1,'大成功',if(R<=5,'极难成功',if(R<=20,'困难成功',if(R<100,'成功','大失败'))))" }] },
+    { "name": "心理学", "expr": "1d100",
+      "levels": ["大成功", "极难成功", "困难成功", "成功", "失败", "大失败"],
+      "calc": [{ "name": "r", "expr": "if(R<=1,'大成功',if(R<=5,'极难成功',if(R<=20,'困难成功',if(R<=100,'成功','失败'))))" }] } ],
+  "cardFields": [{ "key": "侦查", "label": "侦查", "type": "number", "default": 50 },
+    { "key": "心理学", "label": "心理学", "type": "number", "default": 45 }],
+  "commands": [],
+  "templates": { "checkResult": "{name} 【{skill}】{roll} → {level}" } }
