@@ -1561,7 +1561,7 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
 
   console.log('\n[M3] 自研骰娘内核：退役清零 + 新接口收口 + 版本 3.0.0');
   const M3pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
-  const M3cl = src.slice(src.indexOf('const CHANGELOG'), src.indexOf('const CHANGELOG') + 4000);
+  const M3cl = src.slice(src.indexOf('const CHANGELOG'), src.indexOf('const CHANGELOG') + 20000);
   const M3pre = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'preload.js'), 'utf8');
   const M3main = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.js'), 'utf8');
   check('M3 版本号：package.json / CHANGELOG 最新条目 / 界面 APP_VERSION 三处一致', () => {

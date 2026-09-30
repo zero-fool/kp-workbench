@@ -30,14 +30,14 @@ test('映射：ReplyOut → 群消息 REST 计划（被动回复带 msg_id）', 
   const calls = planQqMessages('qqofficial:555', { sessionId: 'qqofficial:555', segments: [{ type: 'text', text: '结果 12' }] }, 'msg-1');
   assert.deepStrictEqual(calls, [{
     method: 'POST',
-    url: 'https://api.sgroup.qq.com/groups/555/messages',
+    url: 'https://api.sgroup.qq.com/v2/groups/555/messages',
     body: { content: '结果 12', msg_id: 'msg-1' },
   }]);
 });
 
 test('映射：C2C 消息 REST 计划与空段拒绝（反例）', () => {
   const calls = planQqMessages('qqofficial:private:7', { sessionId: 'qqofficial:private:7', segments: [{ type: 'text', text: 'hi' }] }, 'm2');
-  assert.strictEqual(calls[0].url, 'https://api.sgroup.qq.com/users/7/messages');
+  assert.strictEqual(calls[0].url, 'https://api.sgroup.qq.com/v2/users/7/messages');
   assert.throws(() => planQqMessages('qqofficial:555', { sessionId: 'qqofficial:555', segments: [] }, 'x'), TypeError);
 });
 

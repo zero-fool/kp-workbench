@@ -19,6 +19,8 @@ function registerCmd(cmd) {
     handle: cmd.handle
   };
   if (typeof cmd.handleTrigger === 'function') c.handleTrigger = cmd.handleTrigger;
+  // Dice-Next 兼容：部分骰主远程指令允许「无前缀」直呼（boton/blackqq/…），显式声明才生效。
+  if (cmd.noPrefix === true) c.noPrefix = true;
   commands.set(cmd.name, c);
   for (const a of c.alias) commands.set(a, c);
   return c;

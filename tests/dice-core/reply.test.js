@@ -45,3 +45,23 @@ test('导入导出：坏包（format 不符 / 值非字符串）被拒（反例�
   assert.throws(() => importPack({ format: 'x', version: 1, persona: {}, templates: {} }), /格式不符/);
   assert.throws(() => importPack({ format: 'kp-dice-reply-pack', version: 1, persona: {}, templates: { a: 1 } }), /文案值必须是字符串/);
 });
+
+test('规则回复：用户覆盖 > fallback（规则包原文）> 出厂默认', () => {
+  // 无覆盖、有 fallback → 用 fallback（保持规则包既有行为）
+  const r0 = createReplyRenderer({ persona: DEFAULT_PERSONA, templates: {}, rules: {} });
+  assert.strictEqual(r0.ruleReply('coc7', 'check', { skill: '侦查', roll: 3, level: '成功' }, '【成功】侦查=3'), '【成功】侦查=3');
+  // 无覆盖、无 fallback → 出厂默认（CoC 检定模板）
+  assert.strictEqual(r0.ruleReply('coc7', 'check', { skill: '侦查', roll: 3, level: '成功' }),
+    '检定「侦查」（{src} · {diff}）：1d100 → 3 → 成功');
+  // 有用户覆盖 → 压过 fallback 与出厂默认
+  const r1 = createReplyRenderer({ persona: DEFAULT_PERSONA, templates: {}, rules: { coc7: { check: '【{level}】{skill} = {roll}' } } });
+  assert.strictEqual(r1.ruleReply('coc7', 'check', { skill: '侦查', roll: 3, level: '成功' }, '忽略我'), '【成功】侦查 = 3');
+});
+
+test('导入导出：规则回复往返一致', () => {
+  const pack = exportPack({ persona: DEFAULT_PERSONA, templates: DEFAULT_TEMPLATES, rules: { coc7: { roll: '自定义 {total}' } } });
+  assert.deepStrictEqual(pack.rules, { coc7: { roll: '自定义 {total}' } });
+  const back = importPack(JSON.parse(JSON.stringify(pack)));
+  assert.deepStrictEqual(back.rules, { coc7: { roll: '自定义 {total}' } });
+  assert.throws(() => importPack({ format: 'kp-dice-reply-pack', version: 1, persona: {}, templates: {}, rules: { coc7: { roll: 1 } } }), /规则回复值必须是字符串/);
+});

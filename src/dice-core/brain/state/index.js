@@ -11,6 +11,9 @@ function newSession(id) {
   return {
     id,
     rule: 'plain',
+    defaultDice: '',  // 默认骰（省略表达式时 / .rd±n 修正用）；空则随当前规则包的常用骰式
+    init: { list: [], turn: 0 }, // 先攻：list 为 [{name,value,note}] 降序；turn 为当前回合计
+    decks: {},       // 牌堆抽取状态：{ 牌组名 -> { pool: 剩余张[], total: 总张数 } }；内容取自 workspace.drewTables
     cards: {},       // 人物名 -> { name, fields: {}, updatedAt }
     bind: null,      // 当前绑定人物卡名
     logs: [],        // 投骰记录：{id,t,expr,seed,detail,total,rule,hidden}

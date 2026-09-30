@@ -25,7 +25,8 @@ function planQqMessages(sessionId, reply, msgId, apiBase = 'https://api.sgroup.q
   const content = reply.segments.filter((s) => s.type === 'text').map((s) => s.text).join('\n');
   return [{
     method: 'POST',
-    url: isGroup ? `${apiBase}/groups/${tail}/messages` : `${apiBase}/users/${tail.slice(8)}/messages`,
+    // 官方 v2 OpenAPI：群/单聊回发均带 /v2 前缀，缺少会 404。
+    url: isGroup ? `${apiBase}/v2/groups/${tail}/messages` : `${apiBase}/v2/users/${tail.slice(8)}/messages`,
     body: { content, msg_id: msgId },
   }];
 }

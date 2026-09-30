@@ -14,6 +14,10 @@ test('parser：半角/全角前缀、参数与引号', () => {
   assert.strictEqual(parseCommand('大家好呀'), null);
   assert.strictEqual(parseCommand('. r'), null); // 前缀后无指令字
   assert.deepStrictEqual(parseCommand('.r'), { name: 'r', rawArgs: '', args: [] });
+  // 指令名后可紧跟数字/正负号开头的参数（.r+3、.rd-5、.r1d100），与空格分隔等价
+  assert.deepStrictEqual(parseCommand('.r+3'), { name: 'r', rawArgs: '+3', args: ['+3'] });
+  assert.deepStrictEqual(parseCommand('.rd-5'), { name: 'rd', rawArgs: '-5', args: ['-5'] });
+  assert.deepStrictEqual(parseCommand('.r1d100'), { name: 'r', rawArgs: '1d100', args: ['1d100'] });
 });
 
 test('parser：splitArgs 支持单双引号合并含空格参数', () => {

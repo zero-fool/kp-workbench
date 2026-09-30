@@ -93,8 +93,11 @@ function rulesCheck(ctx, opts) {
   const o = opts || {};
   const exprSrc = o.expr || '1d100';
   const ast = parseExpr(exprSrc);
-  const rolled = rollExpr(ast, ctx.rng);
-  const rulesetId = (ctx.session && ctx.session.rule) || 'plain';
+  // preRoll：由指令先行掷好的结果（如 CoC 奖励/惩罚骰），跳过引擎自掷但沿用同一分档逻辑。
+  const rolled = o.preRoll || rollExpr(ast, ctx.rng);
+  // 分档所用规则：优先取指令显式指定（如 .ra→coc7、.rd→dnd5e，保证这两条基础规则开箱即用），
+  // 未指定时回退到会话当前规则。
+  const rulesetId = o.rule || (ctx.session && ctx.session.rule) || 'plain';
   const pack = getRuleset(rulesetId);
   const skillVal = o.skill == null ? 0 : Number(o.skill);
   const L = normalizeLevel(o.level);

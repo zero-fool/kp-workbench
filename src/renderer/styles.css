@@ -576,7 +576,12 @@ pre.jsonview{background:var(--panel2);border:1px solid var(--line);border-radius
 
 /* 侧栏：更宽、间距更舒展，激活项更醒目 */
 .sidebar{width:204px;padding:14px 12px}
-.nav{padding:10px 12px;border-radius:10px;transition:background .18s,color .18s,transform .12s,box-shadow .18s}
+/* 分组标题与子项统一为等高气泡；图标用固定尺寸盒子居中，避免 emoji / 符号高低不齐 */
+.nav,.snav>summary{padding:10px 12px;border-radius:10px;min-height:40px;line-height:1.15;
+  transition:background .18s,color .18s,transform .12s,box-shadow .18s}
+.nav .ic,.snav>summary .ic{flex:0 0 18px;width:18px;height:18px;display:inline-flex;
+  align-items:center;justify-content:center;font-size:14px;line-height:1}
+.nav .navt,.snav>summary .navt{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .nav:hover{transform:translateX(2px);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 18%,transparent)}
 .nav.active{background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 22%,var(--panel2)),var(--panel));
   box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 35%,transparent)}
@@ -677,6 +682,9 @@ textarea,input,select{max-width:100%}
 .sidebar.collapsed .gsearch .gf{display:none}
 .sidebar.collapsed .nav{justify-content:center;padding:9px 0}
 .sidebar.collapsed .nav .ic{margin:0}
+.sidebar.collapsed .snav>summary{justify-content:center;padding:9px 0}
+.sidebar.collapsed .snav>summary::after{display:none}
+.sidebar.collapsed .snav>.nav{padding-left:0;justify-content:center}
 .sidebar.collapsed .gsearch{display:none}
 .sidebar.collapsed .sep{width:80%;margin:8px auto}
 
@@ -1129,6 +1137,10 @@ button.ghost.small-secondary{opacity:.85}
 .dice-reply-form label{display:block;font-size:12px;color:var(--ink-soft)}
 .dice-reply-form input,.dice-reply-form textarea{width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--ink);font-size:12px;margin-top:2px}
 .dice-reply-form textarea{min-height:54px;resize:vertical;font-family:monospace}
+/* 规则回复分组（CoC / DnD）：整行铺满，标题 + 占位符提示 */
+.dice-reply-form .dice-rule-group{grid-column:1 / -1;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--panel)}
+.dice-reply-form .dice-rule-title{display:block;font-size:12.5px;color:var(--accent);margin-bottom:2px}
+.dice-reply-form .dice-rule-group .hint{display:block;font-size:11px;color:var(--ink-faint);margin-bottom:6px}
 .dice-chat{height:240px;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px}
 .dice-chat-input{display:flex;gap:6px;margin-top:8px}
 .dice-chat-input input{flex:1;box-sizing:border-box;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--ink);font-size:13px}

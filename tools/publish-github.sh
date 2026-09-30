@@ -80,9 +80,17 @@ done < <(find "$DIST" -maxdepth 1 -type f \( -name '*_绿色版.zip' -o -name '*
 
 [ -n "$versions" ] || { echo "没有找到可发布的产物（检查 dist/ 与版本号过滤）"; exit 0; }
 
+# ---- 计算全局最高版本：补传旧版本时不能把它顶成 GitHub 的「latest」 ----
+# GitHub 按「发布时间」决定 releases/latest，因此补传 3.1.3（晚于 3.1.4 创建）会抢走 latest。
+# 这里先算出 dist + 线上合起来的最高版本，只有它才允许 make_latest=true，其余一律 false。
+existing_tags="$(api "https://api.github.com/repos/$REPO/releases?per_page=100" | json_get 'o.map(x=>x.tag_name.replace(/^v/,"")).join("\n")')"
+LATEST_V="$(printf '%s\n%s\n' "$(printf '%s' "$versions" | tr ' ' '\n')" "$existing_tags" | sed '/^[[:space:]]*$/d' | sort -V | tail -1)"
+echo "最高版本（latest 目标）：v$LATEST_V"
+
 for v in $versions; do
   tag="v$v"
   echo "===== 版本 $v（tag $tag）====="
+  if [ "$v" = "$LATEST_V" ]; then make_latest="true"; else make_latest="false"; fi
 
   rel_json="$(api "https://api.github.com/repos/$REPO/releases/tags/$tag" || true)"
   rel_id="$(printf '%s' "$rel_json" | json_get 'o.id')"
@@ -106,7 +114,7 @@ for v in $versions; do
   if [ -z "$rel_id" ]; then
     if [ "$DRY_RUN" = 1 ]; then echo "  [dry] 将创建 Release $tag"; rel_id="DRY"; else
       echo "  创建 Release $tag …"
-      rel_id="$(printf '%s' "$body" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const t=process.argv[1];process.stdout.write(JSON.stringify({tag_name:t,name:"KP跑团工作台 "+t,body:s,draft:false,prerelease:false}))})' "$tag" \
+      rel_id="$(printf '%s' "$body" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const t=process.argv[1],ml=process.argv[2];process.stdout.write(JSON.stringify({tag_name:t,name:"KP跑团工作台 "+t,body:s,draft:false,prerelease:false,make_latest:ml}))})' "$tag" "$make_latest" \
         | api -X POST -H "Content-Type: application/json" "https://api.github.com/repos/$REPO/releases" -d @- | json_get 'o.id')"
       [ -n "$rel_id" ] || { echo "  创建失败，跳过"; continue; }
     fi
@@ -137,5 +145,15 @@ for v in $versions; do
       | json_get 'o.state==="uploaded"?"  -> ok":("  -> 失败: "+(o.message||""))' >&2 || echo "  -> 上传出错"
   done
 done
+
+# ---- 收尾：把 GitHub「latest」强制指回最高版本（补传旧版本后兜底纠正） ----
+if [ "$DRY_RUN" != 1 ]; then
+  latest_id="$(api "https://api.github.com/repos/$REPO/releases/tags/v$LATEST_V" | json_get 'o.id')"
+  if [ -n "$latest_id" ]; then
+    printf '{"make_latest":"true"}' | api -X PATCH -H "Content-Type: application/json" \
+      "https://api.github.com/repos/$REPO/releases/$latest_id" -d @- >/dev/null \
+      && echo "已将 latest 固定为 v$LATEST_V" || echo "（latest 固定失败，请手动检查）"
+  fi
+fi
 
 echo "完成。查看：https://github.com/$REPO/releases"

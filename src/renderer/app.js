@@ -16,8 +16,46 @@
   const KINDS = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
   const TPL_KINDS = ['pcs', 'npcs', 'mobs']; // 仅「卡片类」实体支持切换模板（模板改变显示字段集）
   const THEMES = [['ember', '残火纪·暗黑'], ['parchment', '羊皮纸手账'], ['lite', '极简浅色'], ['neon', '赛博霓虹'], ['dusk', '暮光护眼']];
-  const APP_VERSION = '3.1.2';
+  const APP_VERSION = '3.2.0';
   const CHANGELOG = [
+    { version: '3.2.0', date: '2026-10-01', type: '正式版·骰娘', items: [
+      '完整对照 DiceZone/Dice-Next 补齐骰娘指令：在原有骰点/检定基础上，新增大批骰点、人物卡、设置与平台管理类指令，指令总数扩充到 130 余条，均可在本地工作台脱离 AI 独立运转。',
+      '骰点/检定类：新增 .dx 双十字骰池（含 .dx <骰数>a<加骰线> 数成功/WoD 模式）、.rdc DnD 5e 属性检定（支持 轮数# 连投、B/P 优势劣势、±加值或骰式、理由与 DC 紧贴写法，如 .rdc3#+1d4力量 15）、.ww 骰池、.ba/.bav 对抗检定、.rx 暗骰、.rav 对抗骰、.rahb*/.rahp* 批量奖励惩罚骰；.rb2~.rb9 / .rp2~.rp9 支持奖励/惩罚骰数量前缀（如 .rb2 侦查 60）。',
+      '人物卡/设置类：.en 技能成长支持批量（.en 侦查|聆听|图书馆）与紧贴成长值；.st 支持 Car0/Car1/Car2 车卡模板录入与查询；.set 新增默认骰重置（.set / .set d off / .set <面数>）；新增 .setcoc 0-7 号 CoC 房规（show/clr）、.setdnd DnD 模式、.setsn 群名片模板、.rpmode 人格切换、.lang 语言、.text 文本、.reply 回复、.welcome 欢迎语（show/off）；.rules 支持 .rules <规则书>:<词条> 查询与 .ruleset 规则包切换。',
+      '娱乐/表现类：.name jp 日文起名、.favor 好感度（含 覆写/擦除/增加/成长/排行 中文子命令）、.hiy 打招呼与检定统计、.ob 旁观（join/exit/list/on/off/clr，含权限与开关）、.buff 状态、.gacha 抽卡、.mrrp/.zrrp 明日/昨日人品、.sleep 休息、.ak 抉择。',
+      '跑团日志：.log 全面对齐 Dice-Next——new/on/off/end/halt 开合，list 查看记录状态、stat 统计参与者与时段、type txt|html 设置导出格式、timer 跑团计时、export 导出投骰记录；统计会记录投骰者并跨「内核投骰」与「外部记录」统一汇总。',
+      '平台管理类：新增 .master/.boton/.botoff/.blackqq/.whiteqq/.blackgroup/.whitegroup 骰主远程管理（支持无前缀直呼），以及 .user/.cloud/.notice/.plugin/.system/.send/.dismiss/.game/.mod/.link/.info/.trust/.alias/.bind 等子命令，本地不可真正执行的部分会给出明确的本地化提示；新增 .str 文案体系（含 .strSelfName 骰娘名称 / .strSelfCall 骰娘自称）。',
+      '解析器增强：支持指令与参数紧贴（.ra侦查60 / .en侦查 / .rd100睡觉 等无需空格）、无空格原因、N# 连投、预览式检定，指令名最长匹配优先，避免误拆规则包名。',
+      '帮助中心与 .help 同步补齐以上全部指令与写法示例；新增 Dice-Next 兼容测试用例，npm test 366 项、npm run verify 全绿。'
+    ] },
+    { version: '3.1.6', date: '2026-09-29', type: '正式版·骰娘', items: [
+      '修复「骰娘 AI 设置」分项开关点了没反应（只有总开关生效）：分项开关没有 id，原先按 id 取元素恒为空，现改按属性选择器读取，各分项开关均可正常开关并保存。',
+      '修复 QQ 官方机器人通道连上后回消息报 404：回发接口改用官方 v2 端点（补 /v2 前缀），鉴权头由 Bearer 改为「QQBot <access_token>」，群/单聊消息可正常回复。',
+      '骰娘与 AI 彻底解耦：AI 只作为投掷结果之外的文字润色层——仅在原始结果后追加描述，绝不替换或改动骰点数据；无前后文、AI 超时、AI 关闭，或描述跑偏（索要结果、夹带伪指令、未复述引擎结果数字）时，一律回退为骰娘自带的标准回答，骰娘可完全脱离 AI 独立运转。',
+      '新增「按规则自定义投掷回答」：内置「通用 / CoC 7th / DnD 5e」三套回复模板，可在骰娘工作台逐条自定义，自定义优先、缺省回退出厂模板，并随文案包一起加载/保存/导入导出。',
+      '新增默认骰与修正语法：.r / .rh 省略表达式时掷默认骰，.r±n / .rh±n 直接修正；.rd±n 与 Dice-Next 行为一致（如 .rd-5）；.set d <表达式> / .set <面数> 设置会话默认骰、.set d off 回退规则默认，优先级为「会话自定义 > 规则包常用骰式 > 通用 1d100」。',
+      '新增先攻追踪：.ri [表达式|±n] [名称] 掷先攻并自动入列，.init 查看/删除/推进回合/清空列表，列表按先攻值降序排列。',
+      '新增牌堆系统：.draw [牌组名] 从牌堆不放回抽牌（抽完提示洗牌），.deck list/show/reset 查看与管理，牌堆内容取自工作台的随机事件表。',
+      '新增 CoC 奖励骰/惩罚骰检定：.rab / .rap（个位掷一次、十位掷 n+1 次，奖励取低 / 惩罚取高），沿用 CoC 分档逻辑与指令日志。',
+      '对照 DiceZone/Dice-Next 逐项比对补齐上述指令，帮助中心与 .help 同步更新。'
+    ] },
+    { version: '3.1.5', date: '2026-09-29', type: '正式版·修复', items: [
+      '修复「骰娘 AI 设置」（AI 功能开关 / 群聊 AI 行为 / 表情包库）无法读取与保存、界面误报「preload 未暴露 aiSwitchesGet」的问题：根因是渲染层变量名笔误（window.API 应为 window.api）；现已修复，且该设置直接读写本地存档，不依赖骰娘是否开机，随时可改。',
+      '修复侧栏「AI 对话」「折叠侧栏」按钮被误当作视图项，点击会清空当前高亮与视图状态的问题。',
+      '统一侧栏气泡尺寸：分组标题与子项改为等高、图标固定尺寸居中，emoji 与符号图标不再高低不齐；超长标签以省略号收尾，不再换行撑高。'
+    ] },
+    { version: '3.1.4', date: '2026-09-29', type: '正式版·界面', items: [
+      '重构：侧栏导航重组为六个可折叠大板块——「总览」（独立大板块）／「工作台功能」／「工作台 AI 功能」／「骰娘功能」／「骰娘 AI 设置」／「设置」，各自展开子项，点击后自动展开所在分组，信息架构更清晰。',
+      '调整：「原始文本」归入「工作台 AI 功能」；「总览」从各分组中独立为单独大板块。',
+      '新增：「骰娘 AI 设置」大板块——把骰娘运行时的 AI 能力集中到一处：AI 功能开关（总开关 + 分项开关）、群聊 AI 行为（随机插话概率、插话附带表情概率）、表情包库。',
+      '优化：帮助中心同步新导航并新增「骰娘 AI 设置」说明；命令面板补齐全部新入口；侧栏折叠态下分组图标居中显示。'
+    ] },
+    { version: '3.1.3', date: '2026-09-29', type: '正式版·新功能', items: [
+      '新增：应用内自更新（基于 GitHub Releases）——「更新公告」页可一键检查更新，检测到新版本后可按当前运行形态自动下载对应产物（绿色版 / 便携版 / 安装版），无需再手动找包换包。',
+      '新增：下载完成后自动更新并重启——下载完成会弹窗询问「立即重启更新 / 稍后」；确认后应用退出、由临时脚本接力覆盖程序文件并重新启动到新版。绿色版升级自动跳过 data 数据目录，安装版 / 便携版数据本就在系统用户目录，升级过程不丢数据。',
+      '新增：更新可靠性保障——下载支持断点续传与完整性校验；zip 解压内置路径穿越拦截与解压体量防护；程序目录不可写时自动降级为「打开下载页」手动更新。',
+      '新增：「设置 → 关于 → 更新设置」——可开关「启动时自动检查更新」「检测到新版本自动下载」，可调检查间隔与下载加速前缀（镜像）；上次更新未完成会在下次启动时提示。'
+    ] },
     { version: '3.1.2', date: '2026-09-29', type: '正式版·修复', items: [
       '修复：骰娘工作台「插件工坊」一打开即报「DiceUI.pluginListHTML is not a function」——插件工坊（workshop.js）与 AI 生成向导（wizard.js）共用 window.DiceUI 命名空间，后加载的向导直接整体覆盖命名空间，把插件工坊的方法全部抹掉。现两分区改为合并式挂载，方法共存、互不覆盖。',
       '修复：骰娘通道启动仍报「当前运行环境缺少 WebSocket」——主进程（Node 20）没有全局 WebSocket，原先的兜底（undici / ws 依赖）在打包环境都取不到。现新增项目自带的零依赖 WebSocket 客户端（基于 net/tls 实现 RFC6455 子集），启动早期优先注入，打包后也能连 QQ 官方 / OneBot 网关。',
@@ -703,8 +741,9 @@
     S.view = view;
     navPush(view);
     document.querySelectorAll('#sidebar .nav').forEach(n => n.classList.toggle('active', n.dataset.view === view));
-    const snav = document.querySelector('#sidebar details.snav');
-    if (snav && ['relations', 'tags', 'rawtext', 'encounter', 'stats', 'maps', 'polish', 'ai', 'persona', 'aiconf', 'runlog'].includes(view)) snav.open = true;
+    // 自动展开当前视图所在的分组
+    const activeNav = document.querySelector('#sidebar .nav[data-view="' + view + '"]');
+    if (activeNav) { const grp = activeNav.closest('details.snav'); if (grp) grp.open = true; }
     if (view === 'dash') renderDash();
     else if (view === 'search') renderGlobalSearch();
     else if (S.data.entities[view]) renderDataView(view);
@@ -723,6 +762,9 @@
     else if (view === 'dice') renderDice();
     else if (view === 'dicehost') renderDiceHost();
     else if (view === 'dicework') renderDiceWork();
+    else if (view === 'diceai') renderDiceAI();
+    else if (view === 'diceaichat') renderDiceAIChat();
+    else if (view === 'dicememe') renderDiceMeme();
     else if (view === 'stats') renderStats();
     else if (view === 'runlog') renderRunlog();
   }
@@ -2891,14 +2933,6 @@
         <div id="userPrefsList"></div>
         <button class="ghost" onclick="WB.addUserPref()" style="margin-top:8px">＋ 添加偏好条目</button>
       </div>
-      <div class="setcard"><h4>骰娘 AI 功能开关</h4>
-        <div class="hint" style="color:var(--ink-faint);font-size:12px;margin-bottom:8px">这些开关专控「骰娘」运行时用到的 AI 能力。关闭即绝不向模型发起该功能请求，能有效防止 token 在日常使用中被消耗。总开关关闭时，下列所有功能一并停止请求。</div>
-        <div style="display:grid;grid-template-columns:1fr;gap:12px" id="diceAiSwitches"><div class="hint">加载中…</div></div>
-      </div>
-      <div class="setcard"><h4>骰娘表情包库</h4>
-        <div class="hint" style="color:var(--ink-faint);font-size:12px;margin-bottom:8px">从群里“偷”到的表情会被自动收集到这里（emoji / 图片 / 文本图），在骰娘随机插话时有概率被附带使用。可手动录入、打标签、管理。若「骰娘 AI 功能开关」里的「表情包(meme)」被关闭，则插话时不会附带收集到的表情，但收集仍可进行。</div>
-        <div id="memeManage"><div class="hint">加载中…</div></div>
-      </div>
       <div class="setcard"><h4>长期记忆（可选，手动维护）</h4>
         <div class="hint" style="margin-bottom:8px">如需长期记忆，在这里逐条记录要点（会自动注入每次对话的 prompt）</div>
         <div id="longMemoryList"></div>
@@ -2909,8 +2943,6 @@
     contentInner(html);
     paintLongMemoryList();
     paintUserPrefsList();
-    paintDiceAiSwitches();
-    paintMemeManage();
   }
   function saveAIConf() {
     const toS = Number(val('aif_to')) || 120;
@@ -2931,7 +2963,7 @@
     persist(); toast('AI 连接与行为配置已保存', 'ok'); switchView('aiconf');
   }
 
-  /* ---- 骰娘 AI 功能开关（读主进程统一开关，写即生效） ---- */
+  /* ---- 骰娘 AI（功能开关 / 群聊行为 / 表情包库）：归入侧栏「骰娘 AI 设置」 ---- */
   const DICE_AI_FEATS = [
     { key: 'dice', label: '骰娘专属 AI 对话', hint: '.ai 指令发起的对话/定向判定，走独立开关；关闭则 .ai 直接给友好提示' },
     { key: 'optimize', label: '骰点文本优化', hint: '掷骰回复结合开团背景润色，更有剧情感（保留数值原义）' },
@@ -2939,10 +2971,27 @@
     { key: 'meme', label: '表情包（偷表情）', hint: '收集群里 emoji/图片/文本图，插话时按概率附带；关闭则不附带已收集表情' },
     { key: 'kpAdvice', label: 'KP 建议', hint: '依据当前对局给 KP 生成建议（仅在本工作台界面展示，不对外发送）' }
   ];
+
+  /* 骰娘 AI 设置 → AI 功能开关 */
+  function renderDiceAI() {
+    const html = `<div class="page-title"><h2>骰娘 AI 功能开关</h2>
+      <span class="hint">专控「骰娘」运行时用到的 AI 能力；关闭即绝不向模型发起该功能请求，避免 token 消耗</span></div>
+      <div class="setgrid">
+        <div class="setcard"><h4>功能开关</h4>
+          <div class="hint" style="color:var(--ink-faint);font-size:12px;margin-bottom:8px">总开关关闭时，下列所有功能一并停止请求。改动即时生效。</div>
+          <div style="display:grid;grid-template-columns:1fr;gap:12px" id="diceAiSwitches"><div class="hint">加载中…</div></div>
+        </div>
+        <div class="setcard"><h4>使用说明</h4>
+          <div class="note">本页开关仅作用于骰娘（<code>.ai</code> 对话 / 定向判定 / 插话 / 表情 / KP 建议）。工作台 AI（AI 助手、剧本解析、记录润色）不受影响，请在「工作台 AI 功能 → AI 配置」中设置。群聊中插话频率与附带表情概率在「群聊 AI 行为」里调整。</div>
+        </div>
+      </div>`;
+    contentInner(html);
+    paintDiceAiSwitches();
+  }
   async function paintDiceAiSwitches() {
     const box = q('diceAiSwitches'); if (!box) return;
     let sw;
-    try { sw = await (window.API && window.API.aiSwitchesGet ? window.API.aiSwitchesGet() : null); }
+    try { sw = await (window.api && window.api.aiSwitchesGet ? window.api.aiSwitchesGet() : null); }
     catch (_) { sw = null; }
     if (!sw) { box.innerHTML = '<div class="hint">开关服务不可用（preload 未暴露 aiSwitchesGet）。</div>'; return; }
     const feats = sw.features || {};
@@ -2951,43 +3000,86 @@
         <input type="checkbox" data-sw="${f.key}" ${chk(feats[f.key] !== false)} onchange="WB.saveDiceAiSwitches()">
         <span><b>${f.label}</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">${f.hint}</span></span>
       </label>`).join('');
-    const row = (id, label, val, min, max) => `
-      <div class="row" style="grid-template-columns:1fr 140px"><label>${label}</label>
-        <input id="${id}" type="number" min="${min}" max="${max}" value="${val}" onchange="WB.saveDiceAiSwitches()"></div>`;
     box.innerHTML = `
       <label class="toggle-row" style="display:flex;align-items:center;gap:10px">
         <input type="checkbox" id="dsw_total" ${chk(sw.enabled)} onchange="WB.saveDiceAiSwitches()">
         <span><b>总开关（所有骰娘 AI 功能）</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">关闭后不发起任何 AI 请求，仅此页面可重新开启</span></span>
       </label>
       ${rows}
-      ${row('dsw_interjectProb', '随机插话概率（% 命中率）', sw.interjectProb, 0, 100)}
-      ${row('dsw_memeProb', '插话附带表情概率（%）', sw.memeProb, 0, 100)}
     `;
   }
+
+  /* 骰娘 AI 设置 → 群聊 AI 行为 */
+  function renderDiceAIChat() {
+    const html = `<div class="page-title"><h2>群聊 AI 行为</h2>
+      <span class="hint">骰娘在群里发言时的 AI 行为参数（插话频率、附带表情概率）</span></div>
+      <div class="setgrid">
+        <div class="setcard"><h4>群聊行为概率</h4>
+          <div class="hint" style="color:var(--ink-faint);font-size:12px;margin-bottom:8px">这些参数决定骰娘在群聊中的主动程度。数值越高越活跃，同时也会消耗更多 token。改动即时生效。</div>
+          <div style="display:grid;grid-template-columns:1fr;gap:12px" id="diceAiChatProbs"><div class="hint">加载中…</div></div>
+        </div>
+        <div class="setcard"><h4>使用说明</h4>
+          <div class="note">插话与附带表情依赖「AI 功能开关」中的<b>随机插话</b>与<b>表情包</b>开关：对应开关关闭时，即使概率非零也不会生效。收集到的表情在「表情包库」里管理。</div>
+        </div>
+      </div>`;
+    contentInner(html);
+    paintDiceAiChat();
+  }
+  async function paintDiceAiChat() {
+    const box = q('diceAiChatProbs'); if (!box) return;
+    let sw;
+    try { sw = await (window.api && window.api.aiSwitchesGet ? window.api.aiSwitchesGet() : null); }
+    catch (_) { sw = null; }
+    if (!sw) { box.innerHTML = '<div class="hint">开关服务不可用（preload 未暴露 aiSwitchesGet）。</div>'; return; }
+    const row = (id, label, hint, val) => `
+      <div class="row" style="grid-template-columns:1fr 140px"><label>${label}<br><span class="hint" style="color:var(--ink-faint);font-size:12px">${hint}</span></label>
+        <input id="${id}" type="number" min="0" max="100" value="${val}" onchange="WB.saveDiceAiSwitches()"></div>`;
+    box.innerHTML =
+      row('dsw_interjectProb', '随机插话概率（% 命中率）', '每条回复后骰娘主动接话的命中概率', sw.interjectProb) +
+      row('dsw_memeProb', '插话附带表情概率（%）', '每次插话时顺带一个收藏表情的概率', sw.memeProb);
+  }
+
   window.WB.saveDiceAiSwitches = async function saveDiceAiSwitches() {
+    const patch = {};
     const feats = {};
-    for (const f of DICE_AI_FEATS) { const el = q('[data-sw="' + f.key + '"]'); if (el) feats[f.key] = el.checked; }
-    const patch = {
-      enabled: !!(q('dsw_total') && q('dsw_total').checked),
-      features: feats,
-      interjectProb: Number(q('dsw_interjectProb') && q('dsw_interjectProb').value),
-      memeProb: Number(q('dsw_memeProb') && q('dsw_memeProb').value)
-    };
+    // 注意：q() 是 getElementById，分项开关是 data-sw 属性、没有 id，必须用 querySelector 取，
+    // 否则 feats 恒为空、patch.features 从不提交，表现为「只有总开关能保存，分项点了没用」。
+    for (const f of DICE_AI_FEATS) { const el = document.querySelector('[data-sw="' + f.key + '"]'); if (el) feats[f.key] = el.checked; }
+    if (Object.keys(feats).length) patch.features = feats;
+    const tot = q('dsw_total'); if (tot) patch.enabled = !!tot.checked;
+    const ip = q('dsw_interjectProb'); if (ip) patch.interjectProb = Number(ip.value);
+    const mp = q('dsw_memeProb'); if (mp) patch.memeProb = Number(mp.value);
     try {
-      if (window.API && window.API.aiSwitchesSet) {
-        const r = await window.API.aiSwitchesSet(patch);
-        toast('骰娘 AI 开关已保存', 'ok');
+      if (window.api && window.api.aiSwitchesSet) {
+        const r = await window.api.aiSwitchesSet(patch);
+        toast('骰娘 AI 设置已保存', 'ok');
         paintDiceAiSwitches();
+        paintDiceAiChat();
         return r;
       }
-    } catch (e) { toast('保存开关失败：' + (e && e.message || e), 'err'); }
+    } catch (e) { toast('保存失败：' + (e && e.message || e), 'err'); }
   };
+
+  /* 骰娘 AI 设置 → 表情包库 */
+  function renderDiceMeme() {
+    const html = `<div class="page-title"><h2>表情包库</h2>
+      <span class="hint">从群里“偷”到的表情（emoji / 图片 / 文本图），骰娘插话时按概率附带</span></div>
+      <div class="setgrid">
+        <div class="setcard"><h4>已收集表情</h4>
+          <div class="hint" style="color:var(--ink-faint);font-size:12px;margin-bottom:8px">可手动录入、打标签、随机调用。若「AI 功能开关」里的「表情包(meme)」被关闭，则插话时不会附带收集到的表情，但收集仍可进行。</div>
+          <div id="memeManage"><div class="hint">加载中…</div></div>
+        </div>
+      </div>`;
+    contentInner(html);
+    paintMemeManage();
+  }
+
 
   /* ---- 骰娘表情包库管理 ---- */
   async function paintMemeManage() {
     const box = q('memeManage'); if (!box) return;
     let data;
-    try { data = await (window.API && window.API.diceCore && window.API.diceCore.meme ? window.API.diceCore.meme.list() : null) || { items: [], tags: [], count: 0 }; }
+    try { data = await (window.api && window.api.diceCore && window.api.diceCore.meme ? window.api.diceCore.meme.list() : null) || { items: [], tags: [], count: 0 }; }
     catch (_) { data = { items: [], tags: [], count: 0 }; }
     const tags = data.tags || [];
     const items = data.items || [];
@@ -3012,13 +3104,13 @@
   window.WB.addMeme = async function () {
     const el = q('memeAddInput'); const v = el && el.value.trim();
     if (!v) { toast('请输入表情内容', 'err'); return; }
-    try { if (window.API && window.API.diceCore && window.API.diceCore.meme) { await window.API.diceCore.meme.add(v); paintMemeManage(); toast('已收录表情', 'ok'); } } catch (e) { toast('收录失败', 'err'); }
+    try { if (window.api && window.api.diceCore && window.api.diceCore.meme) { await window.api.diceCore.meme.add(v); paintMemeManage(); toast('已收录表情', 'ok'); } } catch (e) { toast('收录失败', 'err'); }
   };
   window.WB.sampleMeme = async function () {
-    try { let t = ''; if (window.API && window.API.diceCore && window.API.diceCore.meme) t = await window.API.diceCore.meme.sample([]); toast(t || '表情库还是空的', t ? 'ok' : 'err'); } catch (e) { toast('调用失败', 'err'); }
+    try { let t = ''; if (window.api && window.api.diceCore && window.api.diceCore.meme) t = await window.api.diceCore.meme.sample([]); toast(t || '表情库还是空的', t ? 'ok' : 'err'); } catch (e) { toast('调用失败', 'err'); }
   };
   window.WB.addMemeTag = async function (token) {
-    try { if (window.API && window.API.diceCore && window.API.diceCore.meme) { await window.API.diceCore.meme.tag(token, ['通用'], 'add'); paintMemeManage(); } } catch (_) {}
+    try { if (window.api && window.api.diceCore && window.api.diceCore.meme) { await window.api.diceCore.meme.tag(token, ['通用'], 'add'); paintMemeManage(); } } catch (_) {}
   };
 
   /* ---- 内容过滤规则：读取 / 渲染 / 添加 / 删除 ---- */
@@ -3760,16 +3852,16 @@
     { id: 'start', ic: '🚀', title: '开团流程', html: () => `
       <p>从零搭建一团（一套跑团世界）的完整顺序如下：</p>
       <ol class="help-steps">
-        <li><b>配置 AI（可选但推荐）</b> —— 进入「AI 配置」，填写 baseUrl / 模型 / API Key 并保存，点「测试连通」验证。这样才能用 AI 拆登记、生成内容。详见下文「AI 设置」。</li>
-        <li><b>新建团档案</b> —— 在「总览 → 开始使用」输入一个团名，点「＋ 新建档案并进入」。每套团/世界独立开档，互不干扰。</li>
-        <li><b>导入原材料</b> —— 在「规则」「背景」等资料页粘贴或导入你的剧本、设定、笔记（支持 txt/md/docx/pdf/xlsx）。或在「原始文本」导入纯文本整理。</li>
+        <li><b>配置 AI（可选但推荐）</b> —— 进入「工作台 AI 功能 → AI 配置」，填写 baseUrl / 模型 / API Key 并保存，点「测试连通」验证。这样才能用 AI 拆登记、生成内容。详见下文「AI 设置」。</li>
+        <li><b>新建团档案</b> —— 在「总览看板 → 开始使用」输入一个团名，点「＋ 新建档案并进入」。每套团/世界独立开档，互不干扰。</li>
+        <li><b>导入原材料</b> —— 在「工作台功能」的「规则速查」「背景城设」等页面粘贴或导入你的剧本、设定、笔记（支持 txt/md/docx/pdf/xlsx）。或在「工作台 AI 功能 → 原始文本」导入纯文本整理。</li>
         <li><b>AI 拆分登记</b> —— 资料页点「AI 拆分登记」，把长文本一键拆成 人物卡 / NPC / 地区 / 日志 / 怪物 / 规则 / 背景 7 类资料卡。</li>
-        <li><b>按需创作</b> —— 用「AI 助手」对话写剧情、「地图」布置场景、「骰娘鉴定」投掷检定、「记录润色」把跑团记录润成文章。</li>
-        <li><b>定期备份</b> —— 「设置 → 数据」可手动备份（每 30 分钟与退出前自动备份），还可导出 JSON 换机交接。</li>
+        <li><b>按需创作</b> —— 用「AI 助手」对话写剧情、「地图」布置场景、「本地掷骰」投掷检定、「记录润色」把跑团记录润成文章。</li>
+        <li><b>定期备份</b> —— 「设置 → 偏好设置 → 数据」可手动备份（每 30 分钟与退出前自动备份），还可导出 JSON 换机交接。</li>
       </ol>` },
     { id: 'ai', ic: '🤖', title: 'AI 设置与 API 配置', html: () => `
       <div class="helph3">1. 配置接口（全局，一次搞定）</div>
-      <p>进入侧栏「AI 配置」：</p>
+      <p>进入侧栏「工作台 AI 功能 → AI 配置」：</p>
       <ol class="help-steps">
         <li><b>接口地址 baseUrl</b> —— 服务商提供的 API 根地址，如 <code>https://api.deepseek.com/v1</code>（兼容 OpenAI 格式的大模型服务均可）。</li>
         <li><b>模型 model</b> —— 你在服务商开通的模型名，如 <code>deepseek-chat</code>。</li>
@@ -3782,7 +3874,7 @@
       <div class="helph3">3. 行为开关与长期记忆（AI 配置页）</div>
       <p>可开关：启用当前人设、自动引入背景/规则作为参考、允许文件上传、启用长期记忆。长期记忆需手动逐条添加（会自动注入每次对话，保持长对话连贯），也可用「剧情要点」一键从近期对话提炼写入。</p>` },
     { id: 'data', ic: '🗂', title: '资料管理（7 类资料卡）', html: () => `
-      <p>工作台把团内内容分为 7 类，侧栏「资料」区逐项管理：</p>
+      <p>工作台把团内内容分为 7 类，侧栏「工作台功能」区逐项管理：</p>
       <ul class="help-list">
         <li><b>人物卡 (PC)</b> —— 玩家扮演的角色；AI 拆分登记时自动排除，不把玩家角色混入 NPC。</li>
         <li><b>NPC</b> —— 非玩家角色。</li>
@@ -3799,13 +3891,31 @@
         <li>「＋ 新建地图」手动建图：上传底图、网格、标记、区域、迷雾，支持缩放/平移/导出 PNG，无需 AI 也能搭。</li>
         <li>「AI 设计地图」：粘贴文字描述，一键生成体型草图，预览确认后应用。</li>
       </ul>
-      <div class="helph3">骰娘鉴定</div>
+      <div class="helph3">本地掷骰 / 骰娘鉴定</div>
       <ul class="help-list">
         <li>支持 DnD5e 与 CoC 规则，可自定义投掷表达式（如 <code>2d6+3</code>）、快捷检定与 AI 判定。</li>
       </ul>
       <div class="helph3">记录润色</div>
       <ul class="help-list">
         <li>粘贴跑团记录 → AI 补全背景润色成文章，可导出 txt；也可基于日志一键生成战报。</li>
+      </ul>` },
+    { id: 'diceai', ic: '🎛', title: '骰娘 AI 设置', html: () => `
+      <p>侧栏「骰娘 AI 设置」专管骰娘运行时用到的 AI 能力，与工作台 AI（AI 助手 / 剧本解析 / 记录润色）相互独立。</p>
+      <div class="helph3">AI 功能开关</div>
+      <ul class="help-list">
+        <li><b>总开关</b>：关闭后骰娘不发起任何 AI 请求，最省 token；仅此页可重新开启。</li>
+        <li>可按功能细分开关：骰娘专属 AI 对话（<code>.ai</code>）、骰点文本优化、随机插话、表情包（偷表情）、KP 建议。</li>
+      </ul>
+      <div class="helph3">群聊 AI 行为</div>
+      <ul class="help-list">
+        <li><b>随机插话概率</b>：每条回复后骰娘主动接话的命中概率。</li>
+        <li><b>插话附带表情概率</b>：每次插话时顺带一个收藏表情的概率。</li>
+        <li>需先在「AI 功能开关」中开启对应功能，概率才会生效。</li>
+      </ul>
+      <div class="helph3">表情包库</div>
+      <ul class="help-list">
+        <li>从群里“偷”到的表情（emoji / 图片 / 文本图）会自动收集到这里，可手动录入、打标签、随机调用。</li>
+        <li>关闭「表情包(meme)」开关后，插话不再附带表情，但收集仍会进行。</li>
       </ul>` },
     { id: 'chat', ic: '💬', title: 'AI 助手与侧栏对话', html: () => `
       <p>「AI 助手」页与右侧常驻抽屉（💬 AI 对话）共用同一段会话。</p>
@@ -3868,12 +3978,61 @@
     contentInner(html);
   }
 
+  /* ---- 更新公告 / 自更新入口 ----
+   * 状态：idle | checking | none | available | progress | staged | applying | err
+   * 流程：检查 → 有新版本自动下载 → 下载完成弹窗询问「立即重启更新 / 稍后」。
+   * 真正的替换由主进程 helper 脚本在退出后完成（见 src/main/updater）。 */
+  function updaterApi() { return (window.api && window.api.updater) || null; }
+  function updHumanSize(n) {
+    n = Number(n) || 0;
+    if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+    if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+    return n + ' B';
+  }
   function renderChangelog() {
     const upd = (S.settings && S.settings.updates) || {};
+    const st = upd.state || 'idle';
+    const busy = (st === 'checking' || st === 'progress' || st === 'applying');
+    const pct = Math.max(0, Math.min(100, Number(upd.percent) || 0));
+    const hasApi = !!updaterApi();
+    let actions = '';
+    if (!hasApi) actions = '';
+    else if (st === 'staged') actions = `<button onclick="WB.restartUpdate()">⟳ 立即重启更新</button><button class="ghost" onclick="WB.laterUpdate()">稍后</button>`;
+    else if (st === 'available') actions = `<button onclick="WB.startUpdateDownload()">↓ 下载更新${upd.latest ? ' v' + esc(upd.latest) : ''}</button><button class="ghost" onclick="WB.openReleasePage()">打开下载页</button>`;
+    else actions = `<button class="ghost" onclick="WB.checkUpdate()" ${busy ? 'disabled' : ''}>↻ ${st === 'checking' ? '检查中…' : st === 'progress' ? '下载中…' : '检查更新'}</button><button class="ghost" onclick="WB.openReleasePage()">打开下载页</button>`;
+
+    let status = '';
+    if (!hasApi) status = '当前环境未启用自更新（需在桌面版 EXE 内使用）。';
+    else if (st === 'checking') status = '正在检查更新…';
+    else if (st === 'none') status = '当前已是最新版本。';
+    else if (st === 'progress') status = '正在下载更新… ' + pct + '%' + (upd.total ? '（' + updHumanSize(upd.received) + ' / ' + updHumanSize(upd.total) + '）' : '');
+    else if (st === 'staged') status = '新版本 ' + (upd.latest ? 'v' + esc(upd.latest) + ' ' : '') + '已下载完成，重启后生效。';
+    else if (st === 'applying') status = '正在更新，应用即将自动重启…';
+    else if (st === 'err') status = '更新不可用：' + esc(upd.error || '未知错误');
+    else if (st === 'available') status = '发现新版本 ' + (upd.latest ? 'v' + esc(upd.latest) + ' ' : '') + '，正在准备下载…';
+    else status = '可点击右上角「检查更新」获取最新版本。';
+
     let html = `<div class="page-title"><h2>更新公告</h2><span class="hint">当前版本 v${APP_VERSION}</span>
-      <span style="flex:1"></span>
-      <button class="ghost" onclick="WB.checkUpdate()" id="btnCheckUpd" ${upd.state === 'checking' ? 'disabled' : ''}>↻ ${upd.state === 'download' ? '更新下载中…' : upd.state === 'ready' ? '更新已就绪' : '检查更新'}</button>
-      <span id="updState" class="hint">${upd.state === 'ready' ? '新版已下载，重启后生效' : upd.state === 'download' ? (typeof upd.percent === 'number' ? '正在下载更新… ' + Math.max(0, Math.min(100, +upd.percent.toFixed(0))) + '%' : '正在下载更新…') : upd.state === 'checking' ? '正在检查…' : upd.state === 'err' ? '更新不可用：' + esc(upd.error || '') : ''}</span></div><div class="changelog">`;
+      <span style="flex:1"></span>${actions}</div>`;
+
+    if (hasApi) {
+      html += `<div class="setcard"><h4>更新状态</h4><div class="note" style="white-space:normal;line-height:1.8">`;
+      html += `<div>运行形态：<b>${esc(upd.modeLabel || '未知')}</b>`;
+      if (upd.canAutoApply === false) html += `　<span style="color:var(--warn,#d8a657)">（程序目录不可写，无法自动替换，请用「打开下载页」手动更新）</span>`;
+      html += `</div><div id="updState" style="margin-top:4px">${status}</div>`;
+      if (st === 'progress') {
+        html += `<div style="margin-top:8px;height:10px;border-radius:6px;background:var(--bg-soft,#2c2c2c);overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:var(--accent,#e0663a);transition:width .25s ease"></div></div>`;
+      }
+      if (upd.notice) html += `<div class="hint" style="margin-top:6px">${esc(upd.notice)}</div>`;
+      if (upd.latest && (st === 'available' || st === 'progress' || st === 'staged')) {
+        html += `<div class="hint" style="margin-top:8px">最新版本：v${esc(upd.latest)}${upd.publishedAt ? '　发布于 ' + esc(String(upd.publishedAt).slice(0, 10)) : ''}</div>`;
+        if (upd.notes) html += `<details style="margin-top:6px"><summary style="cursor:pointer">查看本次更新说明</summary><div class="hint" style="white-space:pre-wrap;margin-top:6px;max-height:220px;overflow:auto">${esc(String(upd.notes).slice(0, 2000))}</div></details>`;
+      }
+      html += `</div></div>`;
+    }
+
+    html += `<div class="changelog">`;
     for (const v of CHANGELOG) {
       html += `<div class="logentry"><div class="lhead"><b>v${v.version}</b><span>${v.date}</span></div><ul>${v.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`;
     }
@@ -3881,16 +4040,93 @@
     html += `<div class="credit" style="margin-top:20px;color:var(--ink-faint);font-size:12px;line-height:1.8">🎨 制作人：零弈秋　·　🐞 Bug/建议反馈 QQ：247910428<br>免责声明：本工具为免费个人辅助软件，数据由用户自行保管，请定期备份；使用中若造成数据丢失等损失，作者概不负责，请勿用于商业用途。</div>`;
     contentInner(html);
   }
-  async function checkUpdate() {
+  function updSetState(patch) {
     if (!S.settings.updates) S.settings.updates = {};
-    S.settings.updates.state = 'checking'; persist();
-    renderChangelog();
-    const r = await window.api.updater.check();
-    if (r && r.ok && r.update) { S.settings.updates.state = 'download'; toast('检测到新版本 v' + r.version + '，正在后台下载…'); }
-    else if (r && r.ok && !r.update) { S.settings.updates.state = 'none'; toast('已是最新版本'); }
-    else { S.settings.updates.state = 'err'; S.settings.updates.error = r && r.error || '未知错误'; toast((r && r.error) || '检查失败', 'err'); }
+    Object.assign(S.settings.updates, patch || {});
     persist();
-    renderChangelog();
+    if (S.view === 'changelog') renderChangelog();
+  }
+  async function checkUpdate() {
+    const api = updaterApi();
+    if (!api) { toast('当前环境不支持自更新，请使用桌面版', 'err'); return; }
+    updSetState({ state: 'checking', error: '', percent: 0, received: 0, total: 0, notice: '', _prompted: false });
+    let r;
+    try { r = await api.check(); }
+    catch (e) { updSetState({ state: 'err', error: String((e && e.message) || e) }); toast('检查失败', 'err'); return; }
+    /* 有新版本时：状态推送会置为 available 并自动触发下载；这里只补齐元信息，避免覆盖已开始的下载态 */
+    if (r && r.ok && r.hasUpdate) {
+      const cur = (S.settings.updates || {}).state;
+      updSetState({ latest: r.latest, tag: r.tag, publishedAt: r.publishedAt, notes: r.notes, modeLabel: r.modeLabel, canAutoApply: r.canAutoApply });
+      if (cur !== 'progress' && cur !== 'staged') updSetState({ state: 'available', notice: '' });
+      toast('检测到新版本 v' + r.latest);
+    } else if (r && r.ok) {
+      updSetState({ state: 'none', notice: '', percent: 0 });
+      toast('已是最新版本', 'ok');
+    } else {
+      updSetState({ state: 'err', error: (r && r.error) || '未知错误' });
+      toast((r && r.error) || '检查失败', 'err');
+    }
+  }
+  async function startUpdateDownload() {
+    const api = updaterApi();
+    if (!api) return;
+    const up = (S.settings.updates = S.settings.updates || {});
+    if (up.state === 'progress') return;
+    up._prompted = false;
+    updSetState({ state: 'progress', percent: 0, received: 0, total: 0, error: '', notice: '' });
+    let r;
+    try { r = await api.download({}); }
+    catch (e) { updSetState({ state: 'err', error: String((e && e.message) || e) }); toast('下载失败', 'err'); return; }
+    if (r && r.ok) {
+      /* staged 的 UI 状态与重启询问统一由状态推送处理，避免重复弹窗 */
+      updSetState({ state: 'staged', percent: 100, latest: up.latest || '', notice: '' });
+    } else {
+      updSetState({ state: 'err', error: (r && r.error) || '下载失败' });
+      toast((r && r.error) || '下载失败', 'err');
+    }
+  }
+  /* 下载完成后的「是否立即重启更新」询问（全局只弹一次） */
+  let _updPromptBusy = false;
+  function onUpdateStaged(version) {
+    const up = (S.settings.updates = S.settings.updates || {});
+    if (up._prompted) return;
+    up._prompted = true;
+    if (_updPromptBusy) return;
+    _updPromptBusy = true;
+    setTimeout(async () => {
+      const v = version || up.latest || '';
+      try {
+        const yes = await appConfirm('更新已就绪', '新版本' + (v ? ' v' + v : '') + '已下载完成，是否立即重启并完成更新？\n\n点「确定」：关闭应用 → 自动替换文件 → 重新启动（期间请勿手动操作）。\n点「取消」：稍后可在「更新公告」页点「立即重启更新」生效。');
+        if (yes) await window.api.updater.apply();
+        else await window.api.updater.later();
+      } catch (_) {} finally { _updPromptBusy = false; if (S.view === 'changelog') renderChangelog(); }
+    }, 400);
+  }
+  async function restartUpdate() {
+    const api = updaterApi(); if (!api) return;
+    let r; try { r = await api.apply(); } catch (e) { r = { ok: false, error: String((e && e.message) || e) }; }
+    if (r && r.ok) { toast('正在更新，应用即将自动重启…', 'ok'); updSetState({ state: 'applying', notice: r.notice || '正在更新，应用即将自动重启…' }); }
+    else toast((r && r.error) || '无法启动更新', 'err');
+  }
+  async function laterUpdate() {
+    const api = updaterApi(); if (!api) return;
+    try { await api.later(); } catch (_) {}
+    updSetState({ state: 'staged', notice: '更新包已下载，可随时点「立即重启更新」生效。' });
+    toast('已暂缓更新，可稍后在此页重启生效');
+  }
+  async function openReleasePage() {
+    const api = updaterApi(); if (!api) return;
+    try { await api.openRelease('page'); } catch (_) { toast('无法打开下载页', 'err'); }
+  }
+  function saveUpdateSettings() {
+    const up = (S.settings.updates = S.settings.updates || {});
+    up.autoCheck = !!(q('updAutoCheck') && q('updAutoCheck').checked);
+    up.autoDownload = !!(q('updAutoDownload') && q('updAutoDownload').checked);
+    const iv = q('updInterval');
+    if (iv) up.checkIntervalHours = Math.max(1, Math.min(720, parseInt(iv.value, 10) || 24));
+    const mi = q('updMirror');
+    if (mi) up.mirror = mi.value.trim();
+    persist(); toast('更新设置已保存', 'ok');
   }
   async function delPersona(id) {
     if (!(await appConfirm('删除角色卡', '确定删除该角色卡？'))) return;
@@ -4015,7 +4251,19 @@
         <div class="toolbar"><button class="ghost" onclick="WB.importLegacy()">⇥ 从旧版数据文件夹迁移…</button></div>
         <div class="hint" style="margin-top:8px">安装版数据保存在系统用户目录（独立于安装位置），用新安装包原地覆盖升级不会丢失任何内容；从旧的绿色版换到安装版时，点上方按钮一次选定旧 data 文件夹即可无缝搬移，无需重填。</div></div>`;
     } else if (tab === 'about') {
-      h += `<div class="setcard"><h4>关于</h4>
+      const updc = (S.settings.updates || {});
+      h += `<div class="setcard"><h4>更新设置</h4>
+        <div class="note" style="margin-bottom:8px">自更新会从 GitHub Releases 检测新版本，并按当前运行形态（绿色版 / 便携版 / 安装版）自动下载与替换。当前版本 v${APP_VERSION}。</div>
+        <label class="toggle-row"><input type="checkbox" id="updAutoCheck" ${updc.autoCheck !== false ? 'checked' : ''}>
+          <span><b>启动时自动检查更新</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">应用启动约 1 分钟后静默检查，失败不打扰；勾选间隔内的重复启动会跳过检查。</span></span></label>
+        <label class="toggle-row"><input type="checkbox" id="updAutoDownload" ${updc.autoDownload !== false ? 'checked' : ''}>
+          <span><b>检测到新版本后自动下载</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">下载完成后会弹窗询问是否立即重启更新；取消则稍后可在「更新公告」页手动重启。</span></span></label>
+        <div class="row" style="margin-top:8px"><label>检查间隔（小时）</label><input id="updInterval" type="number" min="1" max="720" value="${Number(updc.checkIntervalHours) || 24}"></div>
+        <div class="row"><label>下载加速前缀<span class="hint" style="margin-left:8px;color:var(--ink-faint);font-size:12px">留空为直连 GitHub；可填镜像/加速前缀，如 https://ghproxy.com/</span></label><input id="updMirror" value="${esc(updc.mirror || '')}" placeholder="留空使用直连"></div>
+        <div style="margin-top:10px"><button onclick="WB.saveUpdateSettings()">💾 保存更新设置</button>
+        <button class="ghost" onclick="WB.checkUpdate()">↻ 立即检查更新</button>
+        <button class="ghost" onclick="WB.openReleasePage()">打开发布页</button></div></div>
+      <div class="setcard"><h4>关于</h4>
       <div class="note" style="white-space:normal;line-height:1.7">KP 跑团工作台 v${APP_VERSION}（Electron 桌面版）<br>
       一款专为 TRPG 主持人（KP/守密人）打造的桌面辅助工具，涵盖资料管理、AI 辅助创作、地图、骰娘检定、记录润色、关系网等功能。<br><br>
       🎨 制作人：零弈秋<br>
@@ -4672,14 +4920,17 @@
 
   /* ===== Ctrl+K 命令面板：页面跳转 + 实体直达 + 全局搜索入口 ===== */
   const PAL_COMMANDS = [
-    { v: 'dash', ic: '◈', t: '总览' }, { v: 'pcs', ic: '⛧', t: '人物卡' }, { v: 'npcs', ic: '🧙', t: 'NPC' },
-    { v: 'regions', ic: '⛰', t: '地区' }, { v: 'logs', ic: '🕮', t: '日志' }, { v: 'mobs', ic: '☠', t: '怪物' },
-    { v: 'rules', ic: '▤', t: '规则' }, { v: 'lore', ic: '☷', t: '背景' }, { v: 'relations', ic: '☸', t: '关系网' },
+    { v: 'dash', ic: '◈', t: '总览看板' }, { v: 'pcs', ic: '⛧', t: '人物卡' }, { v: 'npcs', ic: '🧙', t: 'NPC 图鉴' },
+    { v: 'regions', ic: '⛰', t: '地区场景' }, { v: 'logs', ic: '🕮', t: '战役日志' }, { v: 'mobs', ic: '☠', t: '怪物图鉴' },
+    { v: 'rules', ic: '▤', t: '规则速查' }, { v: 'lore', ic: '☷', t: '背景城设' }, { v: 'relations', ic: '☸', t: '关系网' },
+    { v: 'tags', ic: '＃', t: '标签' }, { v: 'maps', ic: '🗺', t: '地图' },
     { v: 'ai', ic: '✧', t: 'AI 助手' }, { v: 'persona', ic: '♜', t: 'AI 设定' },
-    { v: 'aiconf', ic: '⇅', t: 'AI 配置' }, { v: 'dice', ic: '⚀', t: '骰娘鉴定' },
-    { v: 'polish', ic: '✍', t: '记录润色' },
+    { v: 'aiconf', ic: '⇅', t: 'AI 配置' }, { v: 'polish', ic: '✍', t: '记录润色' }, { v: 'rawtext', ic: '↯', t: '原始文本' },
+    { v: 'dicehost', ic: '🎲', t: '连 QQ 骰娘' }, { v: 'dice', ic: '⚀', t: '本地掷骰' }, { v: 'dicework', ic: '🧭', t: '骰娘工作台' },
+    { v: 'diceai', ic: '🎛', t: '骰娘 AI 功能开关' }, { v: 'diceaichat', ic: '💬', t: '群聊 AI 行为' }, { v: 'dicememe', ic: '🖼', t: '表情包库' },
     { v: 'encounter', ic: '⚔', t: '临场战斗' }, { v: 'stats', ic: '📊', t: '统计分析' },
-    { v: 'changelog', ic: '⌘', t: '更新公告' }, { v: 'settings', ic: '⚙', t: '设置' }
+    { v: 'settings', ic: '⚙', t: '偏好设置' }, { v: 'help', ic: '❓', t: '帮助中心' },
+    { v: 'changelog', ic: '⌘', t: '更新公告' }, { v: 'runlog', ic: '📜', t: '运行记录' }
   ];
   let _palIdx = 0;
   function _palItems(q_) {
@@ -7254,7 +7505,7 @@
     const api = dwApi(); if (!api) return;
     try {
       const pack = collectReplyPack();
-      const text = `# 骰娘文案与人设导出\n\n## persona\n\n${JSON.stringify((pack && pack.persona) || {}, null, 2)}\n\n## templates\n\n${JSON.stringify((pack && pack.templates) || {}, null, 2)}`;
+      const text = `# 骰娘文案与人设导出\n\n## persona\n\n${JSON.stringify((pack && pack.persona) || {}, null, 2)}\n\n## templates\n\n${JSON.stringify((pack && pack.templates) || {}, null, 2)}\n\n## rules（CoC / DnD 投掷与检定回复）\n\n${JSON.stringify((pack && pack.rules) || {}, null, 2)}`;
       const r = await window.api.saveText('骰娘文案_' + new Date().toISOString().slice(0, 10) + '.md', text);
       toast(r !== false ? '文案已导出' : '已取消导出', r !== false ? 'ok' : '');
     } catch (e) { toast('导出失败：' + ((e && e.message) || e), 'err'); }
@@ -7312,7 +7563,7 @@
         <div class="dh-card"><div class="dh-head"><b>💬 文案与人设（分区 4）</b><span class="grow"></span>
           <button class="ghost mini" id="dwExportReply">⬇ 导出</button><button class="ghost mini" id="dwSaveReply">💾 保存</button></div>
           <div id="dice-reply-editor" class="dice-reply-editor"></div>
-          <div class="dh-note">直接编辑人设名/风格/前缀与各指令文案，保存后即时生效，测试通道下一条指令即用新文案。</div></div>
+          <div class="dh-note">编辑人设名/风格/前缀、各指令文案，以及 CoC 7th / DnD 5e 两套基础规则的投掷与检定回复模板（留空即用出厂默认）。保存后即时生效，测试通道下一条指令即用新文案。</div></div>
         <div class="dh-card"><div class="dh-head"><b>🧩 插件工坊（分区 5）</b><span class="grow"></span><span id="dwPlgMeta" class="hint">…</span>
           <button class="ghost mini" id="dwRefreshPlg">🔄 刷新</button></div>
           <div id="dice-zone-workshop" class="dice-zone-workshop"></div>
@@ -7665,6 +7916,7 @@
     setDiceRule, setDiceAi, rollExpr, rollQuick, cocJudgeBtn, dndJudgeBtn, delDiceLog, diceClearLog,
     diceAiPortSave, diceAITest, diceViewRefresh,
     readSheet, sheetUsage, aiJudge, aiJudgeExplain, checkUpdate,
+    startUpdateDownload, restartUpdate, laterUpdate, openReleasePage, saveUpdateSettings,
     relAddNode, relSaveNewNode, relSaveNode, relDelNode, relAddEdge, relSaveNewEdge, relSaveEdge, relDelEdge,
     relEdgePick, relConfirmEdge, relLayout, relUndo, relClear, relImportEnts, relAiSuggest,
     relToggleList, relListPick, relFilter, relZoomIn, relZoomOut, relFit, relCenter, toggleDrawerScript, setImportTpl,
@@ -8469,6 +8721,7 @@
     });
     document.querySelectorAll('#sidebar .nav').forEach(n => n.addEventListener('click', () => {
       const v = n.dataset.view;
+      if (!v) return; // 无 data-view 的侧栏按钮（如「AI 对话」「折叠侧栏」）不参与视图切换
       if (v === S.view) return; // 重复点击当前视图不整体重建（数据刷新走显式 switchView，不受影响）
       if (window.api && window.api.runlog && window.api.runlog.write) window.api.runlog.write({ level: 'info', msg: '进入界面：' + v });
       switchView(v);
@@ -8658,17 +8911,53 @@
       if (S.settings.chatOpen) openChat(true);
       switchView('dash');
       setTimeout(() => maybeOnboard(), 600);
-      /* 订阅主进程推送的更新状态（下载进度 / 下载完成 / 出错），实时反映到「更新公告」页 */
+      /* 同步一次主进程当前更新状态：清理跨启动残留的瞬时状态，并提示上次未完成的更新 */
+      if (window.api.updater && window.api.updater.status) {
+        try {
+          const st = await window.api.updater.status();
+          const up = (S.settings.updates = S.settings.updates || {});
+          if (st && st.lastApplyFailed && st.lastApplyFailed.version && up._warnedFor !== st.lastApplyFailed.version) {
+            up._warnedFor = st.lastApplyFailed.version;
+            setTimeout(() => toast('上次更新 v' + st.lastApplyFailed.version + ' 未完成，可在「更新公告」页重新检查更新', 'err'), 1600);
+          }
+          /* 暂存包与下载态只存在于主进程内存，不跨启动；此处归零避免出现点不动的「重启更新」 */
+          if (['staged', 'available', 'progress', 'applying', 'checking'].indexOf(up.state) >= 0) {
+            up.state = 'idle'; up.percent = 0; up.received = 0; up.total = 0; up._prompted = false;
+          }
+          persist();
+        } catch (_) {}
+      }
+      /* 订阅主进程推送的更新状态（检测/进度/就绪/出错），实时反映到「更新公告」页；
+       * 检测到新版本且允许自动下载时，自动开始下载；下载就绪后弹窗询问是否立即重启更新。 */
       if (window.api.updater && window.api.updater.state) {
         window.api.updater.state((v) => {
           try {
             if (!S.settings.updates) S.settings.updates = {};
             const up = S.settings.updates;
-            if (v.state === 'available' || v.state === 'progress') { up.state = 'download'; if (typeof v.percent === 'number') up.percent = v.percent; }
-            else if (v.state === 'downloaded') { up.state = 'ready'; toast('新版本已下载，重启后生效'); }
-            else if (v.state === 'err') { up.state = 'err'; up.error = v.error || '未知错误'; }
+            const st = v && v.state;
+            if (st === 'checking') up.state = 'checking';
+            else if (st === 'none') up.state = 'none';
+            else if (st === 'available') {
+              up.state = 'available'; up._prompted = false;
+              up.latest = v.latest || up.latest; up.tag = v.tag || up.tag;
+              up.publishedAt = v.publishedAt || up.publishedAt; up.notes = v.notes || up.notes;
+            } else if (st === 'progress') {
+              up.state = 'progress';
+              if (typeof v.percent === 'number') up.percent = v.percent;
+              up.received = v.received; up.total = v.total; if (v.notice) up.notice = v.notice;
+            } else if (st === 'staged') {
+              up.state = 'staged'; up.latest = v.latest || up.latest; up.percent = 100; up.notice = '';
+            } else if (st === 'applying') {
+              up.state = 'applying'; up.notice = v.notice || '正在更新，应用即将自动重启…';
+            } else if (st === 'err') {
+              up.state = 'err'; up.error = v.error || '未知错误';
+            }
+            if (v.modeLabel) up.modeLabel = v.modeLabel;
+            if (typeof v.canAutoApply === 'boolean') up.canAutoApply = v.canAutoApply;
             persist();
             if (S.view === 'changelog') renderChangelog();
+            if (st === 'available' && up.autoDownload !== false && up.state === 'available') startUpdateDownload();
+            if (st === 'staged') onUpdateStaged(v.latest);
           } catch (_) {}
         });
       }

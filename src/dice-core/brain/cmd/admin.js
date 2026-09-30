@@ -9,10 +9,12 @@ module.exports = registerCmd({
     const s = ctx.session;
     if (!s.perm) s.perm = { whitelist: [], blacklist: [] };
     const arg = (args || []).join(' ');
-    let m = /^(white|add)\s+(\S+)\s+(\S+)$/.exec(arg);
+    // Dice-Next 兼容：.admin add <目标> [角色]（角色缺省为「管理员」）。
+    let m = /^(white|add)\s+(\S+)(?:\s+(\S+))?$/.exec(arg);
     if (m) {
+      const role = m[3] || '管理员';
       if (!s.perm.whitelist.includes(m[2])) s.perm.whitelist.push(m[2]);
-      return { text: ctx.render ? ctx.render('admin.granted', { target: m[2], role: m[3] }) : `已更新 ${m[2]} 的权限为 ${m[3]}` };
+      return { text: ctx.render ? ctx.render('admin.granted', { target: m[2], role }) : `已更新 ${m[2]} 的权限为 ${role}` };
     }
     m = /^(black|ban)\s+(\S+)$/.exec(arg);
     if (m) {

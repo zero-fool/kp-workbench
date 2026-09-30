@@ -47,7 +47,7 @@ test('help：全量列表/单条/不存在的指令/全角前缀', () => {
   const b = freshBrain();
   const all = ask(b, '.help');
   assert.ok(all.startsWith('可用指令（前缀 . 或 。）：'));
-  assert.ok(all.includes('.r <表达式>'));
+  assert.ok(all.includes('.r [表达式]'));
   assert.ok(all.includes('.st 录入 <人物名>'));
   assert.strictEqual(ask(b, '。help ra'), '.ra <技能名> [技能值] [难度]：CoC 检定，难度 普通/困难/极难/极限，如 .ra 侦查 60 困难');
   assert.strictEqual(ask(b, '.help nope'), '没有「nope」这条指令');

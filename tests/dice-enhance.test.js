@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { createTransformReplies, buildOptimizeReq, buildInterjReq } = require('../src/main/dice-enhance');
+const { createTransformReplies, buildOptimizeReq, buildInterjReq, acceptableOptimize } = require('../src/main/dice-enhance');
 
 function makeBridge() {
   const calls = [];
@@ -16,14 +16,55 @@ function makeBridge() {
 }
 function textOfRs(replies) { return (replies[0].segments || []).map(s => s.text).join(''); }
 
-test('optimize 开 + 骰点指令：调用 optimize 并替换回复文本', async () => {
+test('optimize 开 + 骰点指令：追加描述且原始骰点数据不被改写', async () => {
   const bridge = makeBridge();
   const tr = createTransformReplies({ aiBridge: bridge, getConfig: () => ({ enabled: true, features: { optimize: true }, interjectProb: 0, optimizePrompt: '' }) });
   const replies = await tr({ msg: { text: '.r 1d100', user: { id: 'u' } }, replies: [{ sessionId: 'sim:x', segments: [{ type: 'text', text: '掷骰 1d100：45 = 45' }] }] });
   assert.strictEqual(bridge.calls.length, 1);
   assert.strictEqual(bridge.calls[0].feature, 'optimize');
   assert.match(bridge.calls[0].msg[0].content, /45/);
-  assert.match(textOfRs(replies), /优化/);
+  const joined = textOfRs(replies);
+  assert.match(joined, /优化/);        // AI 描述已追加
+  assert.match(joined, /45 = 45/);     // 原始骰点结果完整保留（数据未被 AI 改写）
+  assert.ok(joined.indexOf('45 = 45') < joined.indexOf('优化'), '原始结果应排在描述之前');
+});
+
+test('无上下文的跑偏描述（索要结果 / 夹带伪指令）被丢弃，只保留引擎原文', async () => {
+  const bad = { async chat() { return { ok: true, text: '我敲了敲空骰盘：这张纸上只有掷骰咒式。请把实际结果（如 .r 1d100=42）发来。' }; } };
+  const tr = createTransformReplies({ aiBridge: bad, getConfig: () => ({ enabled: true, features: { optimize: true }, interjectProb: 0 }) });
+  const replies = await tr({ msg: { text: '.r 1d100' }, replies: [{ sessionId: 's', segments: [{ type: 'text', text: '掷骰 1d100：42 = 42' }] }] });
+  assert.strictEqual(textOfRs(replies), '掷骰 1d100：42 = 42');
+});
+
+test('无结果的用法/帮助文本（如单独 .r）：不调用 AI 优化，原样返回', async () => {
+  const bridge = makeBridge();
+  const tr = createTransformReplies({ aiBridge: bridge, getConfig: () => ({ enabled: true, features: { optimize: true }, interjectProb: 0 }) });
+  const help = '用法：.r <表达式>，例如 .r 2d6+3、.r 2d20kh1';
+  const replies = await tr({ msg: { text: '.r' }, replies: [{ sessionId: 's', segments: [{ type: 'text', text: help }] }] });
+  assert.strictEqual(bridge.calls.length, 0);
+  assert.strictEqual(textOfRs(replies), help);
+});
+
+test('AI 优化超时/抛错：静默降级为引擎原文，不因 AI 卡住骰娘', async () => {
+  const boom = { async chat() { throw new Error('ai-timeout'); } };
+  const tr = createTransformReplies({ aiBridge: boom, getConfig: () => ({ enabled: true, features: { optimize: true, interject: true }, interjectProb: 100 }) });
+  const replies = await tr({ msg: { text: '.r 1d20' }, replies: [{ sessionId: 's', segments: [{ type: 'text', text: '掷骰 1d20：7 = 7' }] }] });
+  assert.strictEqual(textOfRs(replies), '掷骰 1d20：7 = 7');
+});
+
+test('acceptableOptimize：正常文风通过；索要结果/伪指令/数值不一致判废', () => {
+  assert.strictEqual(acceptableOptimize('你屏住呼吸，子弹擦过肩头。', '掷骰 1d100：42 = 42'), true);
+  assert.strictEqual(acceptableOptimize('请把实际结果发来。', '掷骰 1d100：42 = 42'), false);
+  assert.strictEqual(acceptableOptimize('如 .r 1d100=42', '掷骰 1d100：42 = 42'), false);
+  assert.strictEqual(acceptableOptimize('这一击结算为 = 7', '掷骰 1d100：42 = 42'), false);
+});
+
+test('optimize 请求失败/不可用：原回复原样保留，数据不受影响', async () => {
+  const bridge = { async chat() { return { ok: false, text: 'AI 暂时不可用：未配置' }; } };
+  const tr = createTransformReplies({ aiBridge: bridge, getConfig: () => ({ enabled: true, features: { optimize: true, interject: true }, interjectProb: 0 }) });
+  const replies = await tr({ msg: { text: '.r 1d20' }, replies: [{ sessionId: 's', segments: [{ type: 'text', text: '掷骰 1d20：7 = 7' }] }] });
+  assert.strictEqual(replies.length, 1);
+  assert.strictEqual(textOfRs(replies), '掷骰 1d20：7 = 7');
 });
 
 test('optimize 关 + 骰点指令：不调用 AI', async () => {

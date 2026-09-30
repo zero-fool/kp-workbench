@@ -38,38 +38,57 @@
       <div class="gsearch" title="Ctrl+K 呼出命令面板">
         <span class="gf">⌕</span><input id="glSearch" placeholder="全局搜索 (Ctrl+K)…" oninput="WB.globalSearch(this.value)">
       </div>
-      <button data-view="dash" class="nav active"><span class="ic">◈</span><span class="navt">总览</span></button>
-      <div class="sect">资 料</div>
-      <button data-view="pcs" class="nav"><span class="ic">⛧</span><span class="navt">人物卡</span></button>
-      <button data-view="npcs" class="nav"><span class="ic">🧙</span><span class="navt">NPC 图鉴</span></button>
-      <button data-view="regions" class="nav"><span class="ic">⛰</span><span class="navt">地区场景</span></button>
-      <button data-view="logs" class="nav"><span class="ic">🕮</span><span class="navt">战役日志</span></button>
-      <button data-view="mobs" class="nav"><span class="ic">☠</span><span class="navt">怪物图鉴</span></button>
-      <button data-view="rules" class="nav"><span class="ic">▤</span><span class="navt">规则速查</span></button>
-      <button data-view="lore" class="nav"><span class="ic">☷</span><span class="navt">背景城设</span></button>
-      <details class="snav"><summary><span class="ic">≡</span><span class="navt">更多工具</span><span class="snav-badge" id="snavCnt"></span></summary>
+      <!-- 总览：独立大板块 -->
+      <div class="sect">总 览</div>
+      <button data-view="dash" class="nav active"><span class="ic">◈</span><span class="navt">总览看板</span></button>
+      <div class="sep"></div>
+
+      <!-- 工作台功能 -->
+      <details class="snav" data-grp="work"><summary><span class="ic">🧰</span><span class="navt">工作台功能</span></summary>
+        <button data-view="pcs" class="nav"><span class="ic">⛧</span><span class="navt">人物卡</span></button>
+        <button data-view="npcs" class="nav"><span class="ic">🧙</span><span class="navt">NPC 图鉴</span></button>
+        <button data-view="regions" class="nav"><span class="ic">⛰</span><span class="navt">地区场景</span></button>
+        <button data-view="logs" class="nav"><span class="ic">🕮</span><span class="navt">战役日志</span></button>
+        <button data-view="mobs" class="nav"><span class="ic">☠</span><span class="navt">怪物图鉴</span></button>
+        <button data-view="rules" class="nav"><span class="ic">▤</span><span class="navt">规则速查</span></button>
+        <button data-view="lore" class="nav"><span class="ic">☷</span><span class="navt">背景城设</span></button>
         <button data-view="relations" class="nav"><span class="ic">☸</span><span class="navt">关系网</span></button>
         <button data-view="tags" class="nav"><span class="ic">＃</span><span class="navt">标签</span></button>
-        <button data-view="rawtext" class="nav"><span class="ic">↯</span><span class="navt">原始文本</span></button>
+        <button data-view="maps" class="nav"><span class="ic">🗺</span><span class="navt">地图</span></button>
         <button data-view="encounter" class="nav"><span class="ic">⚔</span><span class="navt">临场战斗</span></button>
         <button data-view="stats" class="nav"><span class="ic">📊</span><span class="navt">统计分析</span></button>
-        <button data-view="maps" class="nav"><span class="ic">🗺</span><span class="navt">地图</span></button>
-        <button data-view="polish" class="nav"><span class="ic">✍</span><span class="navt">记录润色</span></button>
+      </details>
+
+      <!-- 工作台 AI 功能 -->
+      <details class="snav" data-grp="workai"><summary><span class="ic">✧</span><span class="navt">工作台 AI 功能</span></summary>
         <button data-view="ai" class="nav"><span class="ic">✧</span><span class="navt">AI 助手</span></button>
         <button data-view="persona" class="nav"><span class="ic">♜</span><span class="navt">AI 设定</span></button>
         <button data-view="aiconf" class="nav"><span class="ic">⇅</span><span class="navt">AI 配置</span></button>
+        <button data-view="polish" class="nav"><span class="ic">✍</span><span class="navt">记录润色</span></button>
+        <button data-view="rawtext" class="nav"><span class="ic">↯</span><span class="navt">原始文本</span></button>
+      </details>
+
+      <!-- 骰娘功能 -->
+      <details class="snav" data-grp="dice"><summary><span class="ic">🎲</span><span class="navt">骰娘功能</span></summary>
+        <button data-view="dicehost" class="nav"><span class="ic">🎲</span><span class="navt">连 QQ 骰娘</span></button>
+        <button data-view="dice" class="nav"><span class="ic">⚀</span><span class="navt">本地掷骰</span></button>
+        <button data-view="dicework" class="nav"><span class="ic">🧭</span><span class="navt">骰娘工作台</span></button>
+      </details>
+
+      <!-- 骰娘 AI 设置 -->
+      <details class="snav" data-grp="diceai"><summary><span class="ic">🧠</span><span class="navt">骰娘 AI 设置</span></summary>
+        <button data-view="diceai" class="nav"><span class="ic">🎛</span><span class="navt">AI 功能开关</span></button>
+        <button data-view="diceaichat" class="nav"><span class="ic">💬</span><span class="navt">群聊 AI 行为</span></button>
+        <button data-view="dicememe" class="nav"><span class="ic">🖼</span><span class="navt">表情包库</span></button>
+      </details>
+
+      <!-- 设置 -->
+      <details class="snav" data-grp="sys"><summary><span class="ic">⚙</span><span class="navt">设置</span></summary>
+        <button data-view="settings" class="nav"><span class="ic">⚙</span><span class="navt">偏好设置</span></button>
+        <button data-view="help" class="nav"><span class="ic">❓</span><span class="navt">帮助中心</span></button>
+        <button data-view="changelog" class="nav"><span class="ic">⌘</span><span class="navt">更新公告</span></button>
         <button data-view="runlog" class="nav"><span class="ic">📜</span><span class="navt">运行记录</span></button>
       </details>
-      <div class="sep"></div>
-      <div class="sect">骰 娘</div>
-      <button data-view="dicehost" class="nav"><span class="ic">🎲</span><span class="navt">连 QQ 骰娘</span></button>
-      <button data-view="dice" class="nav"><span class="ic">⚀</span><span class="navt">本地掷骰</span></button>
-      <button data-view="dicework" class="nav"><span class="ic">🧭</span><span class="navt">骰娘工作台</span></button>
-      <div class="sep"></div>
-      <div class="sect">系 统</div>
-      <button data-view="help" class="nav"><span class="ic">❓</span><span class="navt">帮助中心</span></button>
-      <button data-view="changelog" class="nav"><span class="ic">⌘</span><span class="navt">更新公告</span></button>
-      <button data-view="settings" class="nav"><span class="ic">⚙</span><span class="navt">设置</span></button>
       <div class="sep"></div>
       <button id="btnChatToggle" class="nav" title="展开/收起侧栏 AI 对话"><span class="ic">💬</span><span class="navt">AI 对话</span></button>
       <button id="btnSidebarToggle" class="nav" title="折叠/展开侧栏"><span class="ic">⇤⇥</span><span class="navt">折叠侧栏</span></button>

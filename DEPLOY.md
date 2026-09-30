@@ -1,51 +1,50 @@
 # 安装 / 更新发布指南
 
-本工具的安装方式为「安装 + 增量更新」：用户用一次**安装包**装到任意位置，之后每次发版只发**更新包**，更新包在原有安装上原地覆盖升级，无需删除、无需重装，也不丢数据（安装版数据保存在系统用户目录，独立于安装位置）。
+本工具的更新机制基于 **GitHub Releases**：应用内「更新公告」页检测最新 Release，按当前运行形态下载对应产物，校验后自动替换并重启。不再依赖 `electron-updater`、`latest.yml` 与 blockmap 差分包。
 
-## 1. 两个构建命令
+## 1. 三种运行形态与更新策略
 
-| 命令 | 产物 | 用途 |
+| 形态 | 判定依据 | 检测到新版后 |
 | ---- | ---- | ---- |
-| `npm run build:installer` | `dist/KP跑团工作台_v<版本>_安装版.exe` | 完整安装包（首次安装，可自选目录） |
-| `npm run build:update` | 安装包 + `安装版.exe.blockmap` + `latest.yml` | 用于发布更新，产物整体作为更新源 |
+| 绿色版 | 程序目录无 `Uninstall*.exe`（解压即用的文件夹） | 下载 `-green.zip` → 校验 `KP跑团工作台.exe` 与 `resources/app.asar` → 解压到暂存 → 退出后覆盖复制 `data/` 之外的文件并重启 |
+| 便携版 | 存在环境变量 `PORTABLE_EXECUTABLE_DIR`（单文件自解压） | 下载 `-portable.exe` → 校验 PE 头（`MZ`）→ 退出后替换自身 exe 并重启 |
+| 安装版 | 程序目录存在 `Uninstall*.exe` | 下载 `-setup.exe` → 校验 PE 头 → 交互式拉起安装程序（不静默，避免装到默认目录）后退出 |
 
-> 说明：
-> - `build:update` 会额外生成 `latest.yml` 和 `.exe.blockmap`（差分 / 最新版本元数据），应用据此检查并下载新版，在原有安装上覆盖升级。
-> - 两种命令在 **Windows** 上执行即能得到最终 `.exe`。在 Linux/mac 上打包 Windows 目标需要 `wine`，建议直接在 Windows 机器上发布。
-> - 便携版仍可用 `npm run build:portable` 产出单文件绿色版（但不支持自更新）。
-> - 版本示例统一从 `3.0.0` 起（`3.0.0 → 3.0.1`）；3.0.0 起 `build.files` 已移除 `bridge/**`，`resources/dice-next` 不再随包。
+- 程序目录不可写时（例如装到 `Program Files` 的绿色版）不做自动替换，界面退化为「打开下载页」手动更新。
+- 三种产物命名固定为 ASCII，与 `tools/publish-github.sh` 一致：
+  `KP-workbench-v<版本>-green.zip` / `-portable.exe` / `-setup.exe`。
 
-## 2. 第一步：先设置更新源地址
+## 2. 应用内自更新流程
 
-更新源地址写在触发时的配置里。发布前把 `package.json` 的 `build.publish.url` 改成你的实际地址：
+1. **检测**：请求 `https://api.github.com/repos/<owner>/<repo>/releases/latest`，取 `tag_name` / `body` / `assets`。
+   - 匿名访问 `api.github.com` 容易触发 403 限流，此时自动回退「302 探测」：请求 `github.com/<owner>/<repo>/releases/latest`，从 `Location` 头解析 `vX.Y.Z`（只有版本号，资产地址按命名规范拼出）。
+   - 预发布（`prerelease`）与草稿（`draft`）不参与比较；版本比较按 `主.次.补丁[.更迭]` 逐段进行。
+   - owner/repo 常量写死在 [github.js](src/main/updater/github.js)：`OWNER = 'zero-fool'`、`REPO = 'kp-workbench'`。**换成自己的仓库时必须同步修改这里**，否则检测/下载会指向错误仓库。
+2. **下载**：写临时文件 `<文件>.part` 并支持 HTTP Range 断点续传；完成后校验下载字节数（当 API 提供了 `size` 时）。
+3. **校验 / 解压**：绿色版 zip 用零依赖解析器读取中央目录，逐条校验 CRC32，拒绝 `..`/绝对路径/盘符路径（防路径穿越），限制解压总量 ≤ 400MB、条目数 ≤ 20000（防 zip bomb），并剥掉顶层目录 `KP跑团工作台_vX.Y.Z_绿色版/`。
+4. **替换并重启**：生成纯 ASCII 的 `.cmd` helper（路径经环境变量以 UTF-16 传入，避免中文乱码），detached 拉起后应用退出；脚本等待 exe 释放锁、覆盖文件、`robocopy` 同步（绿色版，`/XD data` 跳过数据目录）、重新启动。
 
-```json
-"publish": [{ "provider": "generic", "url": "https://<你的域名或服务器>/KP跑团工作台/updates/" }]
-```
+界面行为：启动约 1 分钟后静默检查一次（可在设置里关闭 / 调整间隔）；检测到新版后默认**自动下载**，下载完成弹窗询问「立即重启更新 / 稍后」，「稍后」可在「更新公告」页点「立即重启更新」；上次更新未完成会在下次启动时提示。相关开关见「设置 → 关于 → 更新设置」，下载加速前缀（镜像）也在该处配置。
 
-这个地址会在打包时写入应用的 `app-update.yml`（已验证生成于 `dist/win-unpacked/resources/app-update.yml`），是应用「检查更新」时请求的地址。
+## 3. 发布前准备
 
-## 3. 发布更新包的步骤
+1. 提升版本号：把 `package.json` 的 `version` 升为新版本（例如 `3.1.2` → `3.1.3`）。
+   - 版本比较完全依赖 Release 的 tag，**每次发版必须提升版本号**，否则应用认为没有新版本。
+   - 同步把 [app.js](src/renderer/app.js) 顶部的 `APP_VERSION = '...'` 改成相同值（`npm test` 会校验二者一致）。
+2. 在 [app.js](src/renderer/app.js) 的 `CHANGELOG` 里补一条本次更新条目——它同时是应用内「更新公告」内容与 Release 正文的来源。
+3. 发布前跑通：`npm test`（含 `tests/updater.test.js`）与 `npm run verify`。
 
-1. 改版本号：把 `package.json` 的 `version` 升为新版本（例如 `3.0.0` → `3.0.1`）。
-   - 版本比较完全依赖 `package.json` 的 `version`，**每次发版必须提升**，否则应用认为没有新版本。
-   - 同步把 `src/renderer/app.js` 顶部的 `APP_VERSION = '3.0.0'` 改成相同值（仅用于界面显示）。
-2. 在「更新公告」页脚本（`src/renderer/app.js` 的 `CHANGELOG`）里补一条本次更新的条目，方便用户看到说明。
-3. 在 Windows 上执行 `npm run build:update`。
-4. 把 `dist/` 下这 **三个文件** 上传到第 2 步的地址根目录：
-   - `KP跑团工作台_v<版本>_安装版.exe`
-   - `KP跑团工作台_v<版本>_安装版.exe.blockmap`
-   - `latest.yml`
-5. 老用户打开应用 →「更新公告」→「检查更新」，即自动比对、后台下载、下载完自动重启完成覆盖升级。
+## 4. 构建产物
 
-## 3.1 3.0.0 特别说明（自研骰娘内核）
+| 命令 | 产物 | 对应形态 |
+| ---- | ---- | ---- |
+| `npm run build:installer` | `dist/KP跑团工作台_v<版本>_安装版.exe` | 安装版 |
+| `npm run build:portable` | `dist/KP跑团工作台_v<版本>_便携版.exe` | 便携版 |
+| `npm run build:dir` | `dist/win-unpacked/`（免安装目录） | 绿色版：压缩并命名为 `KP跑团工作台_v<版本>_绿色版.zip`，压缩包顶层目录为 `KP跑团工作台_v<版本>_绿色版/` |
 
-- 打包清单 `build.files` 已移除 `bridge/**/*`；`resources/dice-next/`（149MB 旧内核 + lagrange/milky）已整体删除，不再随包。
-- 发布前必须依次跑通：`node --test tests/`（全绿）与 `npm run verify`（wiring-audit + 零第三方扫描 + regress.test 三条链）。
-- 体积硬性上限：绿色版 / 安装版解包后 < 100MB（规格预期约 70MB）；超限视为发布失败，先检查是否有旧内核残留回流。
-- 骰娘板块由「连 QQ 骰娘（内嵌 dice-next）」升级为「骰娘工作台」六分区；preload 只剩 `diceCore.*` 新接口，无第三方可拦截面。
+> 在 Windows 上打包即得到最终 `.exe`；在 Linux/mac 上打 Windows 目标需要 `wine`，建议直接在 Windows 机器上发布。
 
-## 4. 一键发布到 GitHub Releases（tools/publish-github.sh）
+## 5. 一键发布到 GitHub Releases（tools/publish-github.sh）
 
 ```bash
 GH_TOKEN=<具备 Contents: write 的令牌> bash tools/publish-github.sh            # 发布 dist 中所有版本
@@ -53,26 +52,19 @@ GH_TOKEN=xxx bash tools/publish-github.sh 3.1.2                              # �
 GH_TOKEN=xxx bash tools/publish-github.sh --dry-run                          # 只打印动作
 ```
 
-- Release 正文（「更新通告」）由 `tools/release-notes.js` 从 `src/renderer/app.js` 的 `CHANGELOG` 自动生成，并附带「绿色版下载须知」要点与 `DOWNLOAD.md` 链接；因此**发版前务必先在 CHANGELOG 里补上该版本条目**，否则正文会退回通用说明。
-- 附件名统一为 ASCII：`KP-workbench-vX.Y.Z-green.zip` / `-portable.exe` / `-setup.exe`。
-- 脚本可重复执行：已存在的 Release 会刷新通告正文，已上传的附件自动跳过；缺失的附件会补传。
-- 面向用户的完整下载说明见仓库根目录 [DOWNLOAD.md](DOWNLOAD.md)（数据位置、升级不丢数据、常见问题）。
+- Release 正文（「更新通告」）由 `tools/release-notes.js` 从 `src/renderer/app.js` 的 `CHANGELOG` 自动生成；因此**发版前务必先在 CHANGELOG 里补上该版本条目**，否则正文会退回通用说明。
+- 附件名统一为 ASCII（中文附件名会被 GitHub 规范化成 `KP._vX_.exe` 导致撞名）：`KP-workbench-vX.Y.Z-green.zip` / `-portable.exe` / `-setup.exe`。
+- **Release 必须是「latest 正式版」**：不要勾选 Pre-release，草稿不会对外可见。应用只认 `releases/latest`。
+- 脚本可重复执行：已存在的 Release 会刷新通告正文，已上传的附件自动跳过，缺失的附件补传。
 
-## 5. 更新源托管选项
+## 6. 更新源、镜像与代理
 
-- **任意静态站点 / 对象存储 / 自建 Web 服务**：把三个文件放在一个固定可访问的 HTTPS 目录即可（上面的 generic 方式）。
-- 换用 **GitHub Releases**：把 `publish` 改为
-  ```json
-  "publish": [{ "provider": "github", "owner": "<你的用户名>", "repo": "<仓库名>" }]
-  ```
-  然后发布 tag 时把三个产物传上去，应用会自动从 GitHub 读取。
+- owner/repo 写在 [github.js](src/main/updater/github.js)，默认 `zero-fool/kp-workbench`；`tools/publish-github.sh` 则从 `git remote origin` 推断仓库，**两者需指向同一仓库**。
+- 匿名访问 API 会被限流，代码已内置 302 探测回退；仍失败时可在「更新设置」填「下载加速前缀」（如 `https://ghproxy.net/`），下载请求会自动拼接该前缀。
+- 网络走系统代理：识别 `HTTPS_PROXY` / `HTTP_PROXY` 及其小写形式，命中 `NO_PROXY` 则直连（通过 `CONNECT` 隧道 + TLS）。
 
-## 6. 数据安全保证
+## 7. 数据安全保证
 
-安装版数据存放于系统用户目录（`app.getPath('userData')`），与安装目录无关。原地覆盖升级、甚至卸载重装都不会触碰数据；从旧绿色版切换过来时，应用会自动把旧 `data/` 搬到用户目录，无需手动处理。
-
-## 7. 贴合你诉求的验证对照
-
-- 「只留一个安装包，可选安装位置」→ `build:installer`，NSIS 安装器 `allowToChangeInstallationDirectory: true`。
-- 「更新包在原有包体上更新，不用反复删除」→ `build:update` 产出差分包 + `latest.yml`，应用下载后 `quitAndInstall` 原地覆盖升级。
-- 「无需翻来覆去删除包体」→ 安装版数据独立于安装目录，覆盖升级与数据互不干扰。
+- **安装版 / 便携版**：数据存放于系统用户目录（`app.getPath('userData')`），与程序位置无关，覆盖升级不会触碰数据。
+- **绿色版**：数据在 exe 同目录 `data/` 内；替换脚本以 `/XD data` 跳过该目录，升级不丢数据。
+- 从旧绿色版切到安装版时，应用会把旧 `data/` 搬到用户目录，无需手动处理。

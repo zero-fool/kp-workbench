@@ -184,6 +184,11 @@ contextBridge.exposeInMainWorld('api', {
   importFile: (userPath) => ipcRenderer.invoke('file:importFile', userPath || ''),
   updater: {
     check: () => ipcRenderer.invoke('updater:check'),
+    status: () => ipcRenderer.invoke('updater:status'),
+    download: (opts) => ipcRenderer.invoke('updater:download', opts || {}),
+    apply: () => ipcRenderer.invoke('updater:apply'),
+    later: () => ipcRenderer.invoke('updater:later'),
+    openRelease: (target) => ipcRenderer.invoke('updater:openRelease', target || 'page'),
     state: (cb) => { ipcRenderer.on('updater:state', (_e, v) => cb(v)); }
   },
   winCtrl: {

@@ -8,6 +8,7 @@ const { createHub } = require('../dice-core/hub');
 const { createChannelAdapters } = require('../dice-net');
 const { createStateBox } = require('../dice-core/state');
 const { DEFAULT_PERSONA, DEFAULT_TEMPLATES } = require('../dice-core/reply/defaults');
+const { RULE_REPLY_RULES, RULE_REPLY_KEYS, RULE_REPLY_META } = require('../dice-core/reply/rule-replies');
 const { importPack } = require('../dice-core/reply/io');
 
 function createDiceRuntime(deps) {
@@ -60,12 +61,30 @@ function createDiceRuntime(deps) {
   }
 
   // 文案包（分区 4）：读 dice-replies，可保存/导入后即时重建渲染器注入 hub.brain
-  let replyPack = (store && store.load('dice-replies')) || { persona: { ...DEFAULT_PERSONA }, templates: { ...DEFAULT_TEMPLATES } };
+  // rules.<规则id>.<键> 为「按规则的投掷/检定回复」用户覆盖，白名单收敛，避免脏数据。
+  let replyPack = normalizePack(store && store.load('dice-replies'));
+  function normalizePack(p) {
+    const src = p || {};
+    const pack = {
+      persona: Object.assign({}, DEFAULT_PERSONA, src.persona || {}),
+      templates: Object.assign({}, DEFAULT_TEMPLATES, (src.templates && typeof src.templates === 'object') ? src.templates : {}),
+      rules: {},
+    };
+    for (const rid of RULE_REPLY_RULES) {
+      pack.rules[rid] = {};
+      for (const k of RULE_REPLY_KEYS) {
+        const v = src.rules && src.rules[rid] && src.rules[rid][k];
+        if (typeof v === 'string' && v.length) pack.rules[rid][k] = v;
+      }
+    }
+    return pack;
+  }
   function reloadReplies() {
-    replyPack = (store && store.load('dice-replies')) || replyPack;
+    const loaded = store && store.load('dice-replies');
+    if (loaded) replyPack = normalizePack(loaded);
     try {
       const { createReplyRenderer } = require('../dice-core/reply');
-      hub.brain.renderer = createReplyRenderer({ persona: replyPack.persona, templates: replyPack.templates });
+      hub.brain.renderer = createReplyRenderer({ persona: replyPack.persona, templates: replyPack.templates, rules: replyPack.rules });
     } catch (_) {}
     return replyPack;
   }
@@ -122,11 +141,12 @@ function createDiceRuntime(deps) {
   }
 
   // 文案包 load / save / import（save/import 后即时生效）
-  function replyLoad() { return replyPack; }
+  // 附带 ruleMeta：让渲染层无需 require 内核即可渲染 CoC / DnD 两套规则回复的编辑表单。
+  function replyLoad() { return Object.assign({}, replyPack, { ruleMeta: RULE_REPLY_META }); }
   function replySave(pack) {
     const { validatePack } = require('../renderer/dice-ui/reply-editor');
     validatePack(pack);
-    replyPack = { persona: pack.persona, templates: pack.templates };
+    replyPack = normalizePack(pack);
     if (store) store.save('dice-replies', replyPack);
     reloadReplies();
     return true;
@@ -135,6 +155,9 @@ function createDiceRuntime(deps) {
     const pack = importPack(typeof text === 'string' && text ? JSON.parse(text) : null);
     return replySave(pack);
   }
+
+  // 启动即把已保存的文案/人设/规则回复注入渲染器（此前仅在保存后生效，属遗漏）。
+  reloadReplies();
 
   // 优雅回收
   async function dispose() {

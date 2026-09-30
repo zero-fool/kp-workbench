@@ -96,8 +96,9 @@ function createQqOfficialAdapter(deps) {
       const calls = planQqMessages(sessionId, reply, reply.msgId, apiBase);
       for (const c of calls) {
         let token = await keeper.get();
-        let res = await fetchImpl(c.url, { method: c.method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(c.body) });
-        if (res.status === 401) { keeper.invalidate(); token = await keeper.get(); res = await fetchImpl(c.url, { method: c.method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(c.body) }); }
+        // 官方 v2 OpenAPI 鉴权头为 QQBot <access_token>（非 Bearer）。
+        let res = await fetchImpl(c.url, { method: c.method, headers: { Authorization: `QQBot ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(c.body) });
+        if (res.status === 401) { keeper.invalidate(); token = await keeper.get(); res = await fetchImpl(c.url, { method: c.method, headers: { Authorization: `QQBot ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(c.body) }); }
         if (!res.ok) lastError = `QQ 发送失败 ${res.status}`;
       }
     },

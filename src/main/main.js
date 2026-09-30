@@ -4,8 +4,6 @@ const fs = require('fs');
 const path = require('path');
 const dhttp = require('http');
 const dhttps = require('https');
-let autoUpdater = null;
-try { autoUpdater = require('electron-updater').autoUpdater; } catch (_) { autoUpdater = null; }
 
 /* 数据目录策略（关键：升级/重装不丢数据）：
  * 便携版(自解压)：保留 EXE 旁 data/（数据随包即走）。
@@ -53,11 +51,13 @@ const promptHub = require('./prompt-hub');
 const exporter = require('./exporter');
 const { createMainStorePort } = require('./dice-state-store');
 const runlog = require('./runlog');
+const { createUpdater } = require('./updater');
 const { createPluginHost } = require('../dice-core/plugin/host');
 const { validatePlugin } = require('../dice-core/plugin/validate');
 const { createWizard } = require('../dice-core/plugin/wizard');
 
 let win = null;
+let updater = null;
 const dataDir = resolveDataDir();
 runlog.init(dataDir);
 autoMigrateLegacyData(dataDir);
@@ -1048,35 +1048,30 @@ function registerIpc() {
     }
   });
 
-  /* ---- 自动更新（electron-updater）----
-   * 更新源地址在打包时由 package.json 的 publish.url 写入应用（安装版有效，便携版忽略）。
-   * 版本比较基于 package.json 的 version 字段与更新源 latest.yml / 版本号。 */
-  if (autoUpdater) {
-    autoUpdater.autoDownload = true; // 检查到新版本后立即后台下载，下载完成自动重装（覆盖安装，不丢用户目录数据）
-    autoUpdater.on('error', (e) => {
-      try { if (win) win.webContents.send('updater:state', { state: 'err', error: String(e && e.message || e) }); } catch (_) {}
-    });
-    autoUpdater.on('update-available', () => {
-      try { if (win) win.webContents.send('updater:state', { state: 'available' }); } catch (_) {}
-    });
-    autoUpdater.on('download-progress', (p) => {
-      try { if (win) win.webContents.send('updater:state', { state: 'progress', percent: p.percent }); } catch (_) {}
-    });
-    autoUpdater.on('update-downloaded', () => {
-      try { if (win) win.webContents.send('updater:state', { state: 'downloaded' }); } catch (_) {}
-      try { autoUpdater.quitAndInstall(false, true); } catch (_) {}
-    });
-  }
-  ipcMain.handle('updater:check', async () => {
-    if (!autoUpdater) return { ok: false, error: '当前构建未启用自动更新（未配置更新源）。' };
-    if (process.env.PORTABLE_EXECUTABLE_DIR) return { ok: false, error: '绿色版暂不支持自更新，请从更新源下载新版。' };
-    try {
-      const r = await autoUpdater.checkForUpdates();
-      return { ok: true, update: !!(r && r.updateInfo), version: r && r.updateInfo && r.updateInfo.version };
-    } catch (e) {
-      return { ok: false, error: '检查更新失败：' + String(e && e.message || e) };
-    }
+  /* ---- 自更新（GitHub Releases）----
+   * 检测 / 下载 / 解压 / 替换 全部在 src/main/updater/ 内实现（纯 Node，可单测）；
+   * 这里只做实例化与 IPC 装配，状态经 updater:state 推给渲染进程。
+   * 设计见 docs/superpowers/specs/2026-09-29-self-update-design.md */
+  updater = createUpdater({
+    dataDir,
+    currentVersion: app.getVersion(),
+    getSettings: () => (doc.settings && doc.settings.updates) || {},
+    saveSettings: (patch) => {
+      if (!doc.settings.updates) doc.settings.updates = {};
+      Object.assign(doc.settings.updates, patch || {});
+      try { store.save(doc); } catch (_) {}
+    },
+    onState: (s) => { try { if (win) win.webContents.send('updater:state', s); } catch (_) {} },
+    openExternal: (url) => shell.openExternal(url),
+    quit: () => app.quit(),
+    log: runlog
   });
+  ipcMain.handle('updater:check', () => updater.check({ manual: true }));
+  ipcMain.handle('updater:status', () => updater.status());
+  ipcMain.handle('updater:openRelease', (e, target) => updater.openRelease(target));
+  ipcMain.handle('updater:download', (e, opts) => updater.download(opts || {}));
+  ipcMain.handle('updater:apply', () => updater.apply());
+  ipcMain.handle('updater:later', () => updater.later());
 
   /* ---- AI 用量可见与按类型取消 ---- */
   ipcMain.handle('ai:usage', () => ai.usageLog());
@@ -1431,6 +1426,8 @@ app.whenReady().then(() => {
   // 向 AI 层注入提示词中枢上下文：dataDir 用于分场景记忆读写；此后各 AI 调用自动注入总提示词+本场景记忆
   ai.setHubContext({ dataDir });
   createWindow();
+  // 启动静默检查更新：受「启动时自动检查」开关与检查间隔（默认 24h）限制，失败只落日志不打扰用户
+  setTimeout(() => { try { if (updater) updater.autoCheck(); } catch (_) {} }, 60 * 1000);
   // 自动备份：按用户配置的间隔（默认 30 分钟）+ 退出前各一次。
   // 用分钟级轮询实现，方便用户在设置里改间隔后即时生效。
   setInterval(() => {
