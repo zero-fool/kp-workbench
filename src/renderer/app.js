@@ -438,10 +438,15 @@
     return { msg: s.length > 300 ? s.slice(0, 300) + '…' : s, cfg: /AI|上游|配置/i.test(s) };
   }
 
+  /* 开团模式（U0-1）为运行时状态，不落盘：重启后回到常规布局，避免用户被锁在全屏驾驶舱里。 */
+  let _gmMode = false;
+
   /* ================= 全局快捷键（可自定义） =================
    * 每个动作一个默认组合；用户在「设置 → 外观 → 快捷键」里可改，覆盖值存 settings.shortcuts。
    * allowInField：输入框聚焦时是否仍响应（命令面板/搜索需要，其余不需要以免误触）。 */
   const SHORTCUT_ACTIONS = [
+    { id: 'gmMode', label: '开团模式', def: 'F2', allowInField: true, run: () => toggleGmMode() },
+    { id: 'quickNote', label: '随手便签', def: 'Ctrl+Shift+N', allowInField: true, run: () => openQuickNote() },
     { id: 'palette', label: '命令面板', def: 'Ctrl+K', allowInField: true, run: () => openPalette() },
     { id: 'search', label: '全局搜索', def: 'Ctrl+Shift+F', allowInField: true, run: () => openGlobalSearch() },
     { id: 'newCard', label: '新建卡片（当前视图）', def: 'Ctrl+N', allowInField: false, run: () => { if (KINDS.includes(S.view)) add(S.view); else if (S.view === 'relations') relAddNode(); } },
@@ -540,7 +545,7 @@
   }
   /* 浮层（弹窗/命令面板/全局搜索/新手引导）打开时不响应单键跳转，避免误切背后视图 */
   function anyOverlayOpen() {
-    return ['modalMask', 'confirmMask', 'paletteMask', 'gSearchMask', 'onboardMask'].some(id => { const el = q(id); return el && !el.hidden; });
+    return ['modalMask', 'confirmMask', 'paletteMask', 'gSearchMask', 'onboardMask', 'noteMask'].some(id => { const el = q(id); return el && !el.hidden; });
   }
   function paintShortcuts() {
     const box = q('shortcutList'); if (!box) return;
@@ -550,6 +555,72 @@
       <button class="ghost small" onclick="WB.shortcutReset('${a.id}')" title="恢复默认">↺</button></div>`).join('');
     const hint = q('singleKeyHint');
     if (hint) hint.innerHTML = '当前映射：' + SINGLE_KEY_VIEWS.map(([k, , l]) => `<code class="sc-cap">${esc(k)}</code> ${esc(l)}`).join(' · ');
+  }
+
+  /* ================= U0-3 全局随手便签 =================
+   * 开团中随时记一句，落到 settings.quickNotes（随档案打包）；团后一键归档为
+   * 日志（summary）/ 伏笔（日志的「当前钩子/任务」hook，状态「待跟进」）/ NPC（note），
+   * 避免只为一句临时信息建一整张卡。 */
+  function quickNotes() {
+    if (!S.settings.quickNotes || !Array.isArray(S.settings.quickNotes)) S.settings.quickNotes = [];
+    return S.settings.quickNotes;
+  }
+  function openQuickNote() {
+    const m = q('noteMask'); if (!m) return;
+    m.hidden = false;
+    paintQuickNotes();
+    const inp = q('noteInput'); if (inp) inp.focus();
+  }
+  function closeQuickNote() { const m = q('noteMask'); if (m) m.hidden = true; }
+  function quickNoteAdd() {
+    const inp = q('noteInput'); const text = String((inp && inp.value) || '').trim();
+    if (!text) { toast('先写点什么再记下', 'err'); return; }
+    quickNotes().unshift({ id: uid(), text, t: Date.now() });
+    if (inp) { inp.value = ''; inp.focus(); }
+    persist(); paintQuickNotes();
+    toast('已记下，可在「便签」里归档', 'ok');
+  }
+  function quickNoteDel(id) {
+    S.settings.quickNotes = quickNotes().filter(n => n.id !== id);
+    persist(); paintQuickNotes();
+  }
+  /* 归档一条便签到工作台：target = log（日志摘要）| hook（伏笔）| npc */
+  function quickNoteArchive(id, target) {
+    const n = quickNotes().find(x => x.id === id); if (!n) return;
+    const text = String(n.text || '').trim();
+    const title = (text.split('\n').map(s => s.trim()).filter(Boolean)[0] || '随手记录').slice(0, 40);
+    if (target === 'npc') {
+      const arr = S.data.entities.npcs || (S.data.entities.npcs = []);
+      arr.unshift(normFields('npcs', { id: uid(), name: title, note: text }));
+      pushAudit('create', 'npcs', title);
+    } else {
+      const arr = S.data.entities.logs || (S.data.entities.logs = []);
+      const obj = { id: uid(), name: title, status: '待跟进' };
+      if (target === 'hook') obj.hook = text; else obj.summary = text;
+      arr.unshift(normFields('logs', obj));
+      pushAudit('create', 'logs', title);
+    }
+    quickNoteDel(id);
+    toast('已归档为' + (target === 'npc' ? 'NPC' : (target === 'hook' ? '伏笔' : '日志')) + '：' + title, 'ok');
+  }
+  function quickNoteArchiveAll() {
+    const list = quickNotes().slice();
+    if (!list.length) { toast('没有可归档的便签', 'err'); return; }
+    for (const n of list) quickNoteArchive(n.id, 'log');
+    toast('已把 ' + list.length + ' 条便签归档为日志（待跟进）', 'ok');
+  }
+  function paintQuickNotes() {
+    const box = q('noteList'); if (!box) return;
+    const list = quickNotes();
+    if (!list.length) { box.innerHTML = '<div class="note-empty">还没有便签。开团中想到什么就记一句，团后一键归档。</div>'; return; }
+    box.innerHTML = list.map(n => `<div class="note-row">
+      <div class="note-txt">${esc(n.text)}</div>
+      <div class="note-acts">
+        <button class="ghost small" onclick="WB.quickNoteArchive('${n.id}','log')" title="归档为战役日志（摘要=这条便签）">→ 日志</button>
+        <button class="ghost small" onclick="WB.quickNoteArchive('${n.id}','hook')" title="归档为日志的「当前钩子/任务」，状态置为待跟进">→ 伏笔</button>
+        <button class="ghost small" onclick="WB.quickNoteArchive('${n.id}','npc')" title="归档为 NPC（名称取首行，正文进备注）">→ NPC</button>
+        <button class="ghost small" onclick="WB.quickNoteDel('${n.id}')" title="删除这条便签">✕</button>
+      </div></div>`).join('');
   }
 
   /* ================= 全局「AI 处理中」提示 =================
@@ -950,6 +1021,8 @@
 
   /* ---------- 导航 ---------- */
   function switchView(view) {
+    /* 从开团模式跳到任意常规视图即自动退出全屏，避免侧栏被隐藏后用户找不到出口 */
+    if (_gmMode && view !== 'gm') { _gmMode = false; applyGmClass(); }
     S.view = view;
     navPush(view);
     paintStatusBar();
@@ -980,6 +1053,7 @@
     else if (view === 'dicememe') renderDiceMeme();
     else if (view === 'stats') renderStats();
     else if (view === 'runlog') renderRunlog();
+    else if (view === 'gm') renderGM();
   }
 
   /* 根据可自定义的主题名刷新品牌区与窗口标题 */
@@ -3754,6 +3828,8 @@
   ];
   function encData() { if (!S.data.entities) S.data.entities = {}; if (!Array.isArray(S.data.entities.encounters)) S.data.entities.encounters = []; return S.data.entities.encounters; }
   function encCur() { return encData().find(x => x._open) || null; }
+  /* 遭遇操作后的重绘入口：开团模式内嵌了遭遇面板，需就地刷新驾驶舱而非切回遭遇视图 */
+  function encRefresh() { if (S.view === 'gm' && typeof renderGM === 'function') renderGM(); else renderEncounter(); }
 
   function renderEncounter() {
     const list = encData();
@@ -3889,18 +3965,18 @@
     const list = encData();
     const e = { id: uid(), name: '遭遇 ' + (list.length + 1), note: '', units: [], order: [], cur: null, flow: { active: false }, combatLog: [], _open: true, created: new Date().toISOString() };
     list.unshift(e);
-    persist(); renderEncounter();
+    persist(); encRefresh();
   }
   function encOpen(id) {
     encData().forEach(x => x._open = (x.id === id));
-    persist(); renderEncounter();
+    persist(); encRefresh();
   }
-  function closeEnc() { encData().forEach(x => x._open = false); persist(); renderEncounter(); }
+  function closeEnc() { encData().forEach(x => x._open = false); persist(); encRefresh(); }
   async function encDel(id) {
     const list = encData();
     const i = list.findIndex(x => x.id === id); if (i < 0) return;
     if (!(await appConfirm('删除遭遇', '确定删除该遭遇（含全部单位与投骰流水）？此操作不可恢复。'))) return;
-    list.splice(i, 1); persist(); renderEncounter();
+    list.splice(i, 1); persist(); encRefresh();
   }
   /* 结算行：记录胜负时间与幸存/倒下统计 */
   function settleLine(e) {
@@ -3917,7 +3993,7 @@
     e.done = done || '';
     if (done) { e.doneAt = new Date().toISOString(); e._open = e._open; encLog(e, '系统', (done === 'win' ? '战斗胜利，遭遇结算' : done === 'fail' ? '战斗失败，遭遇结算' : '遭遇中途弃置')); }
     else delete e.doneAt;
-    persist(); renderEncounter();
+    persist(); encRefresh();
   }
   function encSetFlow(id, on) {
     const e = encData().find(x => x.id === id); if (!e) return;
@@ -3925,7 +4001,7 @@
     e.flow.active = !!on;
     if (!e.order || !e.order.length) e.order = (e.units || []).map(u => u.id);
     if (on && !e.cur && e.order.length) e.cur = e.order[0];
-    persist(); renderEncounter();
+    persist(); encRefresh();
   }
   function encLog(e, who, text) { if (!e.combatLog) e.combatLog = []; e.combatLog.push({ t: new Date().toISOString(), who, text }); e.combatLog = e.combatLog.slice(-200); }
 
@@ -3942,7 +4018,7 @@
     else { toast('同名单位已在场，如需复数请用「手动单位」', 'err'); return; }
     if (e.order && e.order.length) e.order.push(unit.id);
     encLog(e, '系统', `加入单位「${nm}」`);
-    persist(); renderEncounter();
+    persist(); encRefresh();
   }
   function encAddManual(id) {
     const e = encData().find(x => x.id === id); if (!e) return;
@@ -3957,7 +4033,7 @@
       e.units.push(unit);
       if (e.order && e.order.length) e.order.push(unit.id);
       encLog(e, '系统', `手动添加单位「${nm}」`);
-      persist(); renderEncounter();
+      persist(); encRefresh();
     });
   }
   function encDelUnit(eid, uid) {
@@ -3966,7 +4042,7 @@
     e.order = (e.order || []).filter(x => x !== uid);
     if (e.cur === uid) { e.cur = (e.order.length ? e.order[0] : null); encLog(e, '系统', '当前行动者已除名，自动转移'); }
     encLog(e, '系统', '移除单位');
-    persist(); renderEncounter();
+    persist(); encRefresh();
   }
   /* 有血量的单位才计入存活/倒下；无血量（手动单位）不计入任一分组 */
   function encLiveStats(e) {
@@ -3990,7 +4066,7 @@
     else u.curHp = Math.max(0, (u.curHp || 0) + d);
     if (u.curHp <= 0 && (u.status || []).indexOf('down') < 0) { u.status = u.status || []; u.status.unshift('down'); encLog(e, u.name, (d < 0 ? '生命归零' : '')); }
     encLog(e, u.name, (d < 0 ? '受到 ' + (-d) + ' 点伤害' : '恢复 ' + d + ' 点生命'));
-    persist(); renderEncounter();
+    persist(); encRefresh();
   }
   function encToggleStatus(eid, uId, st) {
     const e = encData().find(x => x.id === eid); if (!e) return;
@@ -3999,7 +4075,7 @@
     const i = u.status.indexOf(st);
     if (i >= 0) { u.status.splice(i, 1); encLog(e, u.name, '解除状态'); }
     else { u.status.unshift(st); encLog(e, u.name, '附加状态：' + (ENC_STATUS.find(x => x[0] === st) || [,''])[1]); }
-    persist(); renderEncounter();
+    persist(); encRefresh();
   }
   function encGoRef(kind, refId) {
     closeModal();
@@ -4025,7 +4101,7 @@
     const ni = i + 1;
     e.cur = order[ni % order.length];
     if (ni % order.length === 0) encLog(e, '系统', '进入下一轮');
-    persist(); renderEncounter();
+    persist(); encRefresh();
   }
   function encPrev(eid) {
     const e = encData().find(x => x.id === eid); if (!e) return;
@@ -4035,14 +4111,14 @@
     const i = order.indexOf(e.cur);
     const pi = (i <= 0 ? order.length : i) - 1;
     e.cur = order[pi];
-    persist(); renderEncounter();
+    persist(); encRefresh();
   }
   function encNextTo(eid, uId) {
     const e = encData().find(x => x.id === eid); if (!e) return;
     const order = encNormOrder(e);
     if (order.indexOf(uId) < 0) { toast('该单位已不在场', 'err'); return; }
     e.cur = uId;
-    persist(); renderEncounter();
+    persist(); encRefresh();
   }
 
   /* 投骰即记：骰娘投掷后若某场遭遇正在进行，把结果并入流水 */
@@ -4584,6 +4660,13 @@
         h += `<label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" ${hid ? '' : 'checked'} onchange="WB.toggleTile('${k}',this.checked)"> ${l}</label>`;
       }
       h += `</div><div style="margin-top:12px"><button class="ghost" onclick="WB.resetLayout()">重置看板排序</button></div></div>`;
+      h += `<div class="setcard"><h4>快捷键</h4>
+        <div class="note" style="margin-bottom:8px">点「修改」后按下新的组合键即可改绑（需含 Ctrl / Alt / Shift，F1~F12 例外）；改完即存，「↺」恢复默认。</div>
+        <div id="shortcutList"></div>
+        <label class="toggle-row" style="display:flex;align-items:center;gap:10px;margin-top:12px">
+          <input type="checkbox" ${S.settings.singleKeyNav ? 'checked' : ''} onchange="WB.setSingleKeyNav(this.checked)">
+          <span><b>单键快速跳转</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">开启后，光标不在输入框时按下列单键直接切视图；浮层（弹窗 / 命令面板 / 搜索）打开时不响应。</span></span></label>
+        <div class="hint" id="singleKeyHint" style="margin-top:8px"></div></div>`;
     } else if (tab === 'fields') {
       h += `<div class="setcard"><h4>字段自定义</h4><div id="fieldEditor"></div></div>`;
     } else if (tab === 'prompts') {
@@ -4650,6 +4733,7 @@
       <div class="note" style="white-space:normal;line-height:1.7">本工作台为个人独立开发的免费辅助工具，所有数据由用户自行录入与保管，请务必定期备份。本软件免费发布，使用过程中产生的任何损失（含数据丢失）作者概不负责。内容仅供 TRPG 跑团与创作参考，请勿用于商业用途或违反所在平台规则。<br><br>本项目尊重一切在先权利：若你认为本软件中有任何内容侵犯了你的合法权益，请联系 QQ 247910428 并附权利证明，核实后我们会立即删除或修改、必要时下架对应版本。<br><br>查看各功能的使用说明，请前往侧栏「系统 → 帮助中心」。</div></div>`;
     }
     body.innerHTML = h;
+    if (tab === 'appearance') paintShortcuts();
     if (tab === 'fields') { S.editFieldKind = 'pcs'; paintFieldEditor('pcs'); }
     if (tab === 'prompts') {
       loadPromptEditor();
@@ -5314,6 +5398,7 @@
     { v: 'dicehost', ic: '🎲', t: '连 QQ 骰娘' }, { v: 'dice', ic: '⚀', t: '本地掷骰' }, { v: 'dicework', ic: '🧭', t: '骰娘工作台' },
     { v: 'diceai', ic: '🎛', t: '骰娘 AI 功能开关' }, { v: 'diceaichat', ic: '💬', t: '群聊 AI 行为' }, { v: 'dicememe', ic: '🖼', t: '表情包库' },
     { v: 'encounter', ic: '⚔', t: '临场战斗' }, { v: 'stats', ic: '📊', t: '统计分析' },
+    { v: 'gm', ic: '⚡', t: '开团模式（集中驾驶舱）' },
     { v: 'settings', ic: '⚙', t: '偏好设置' }, { v: 'help', ic: '❓', t: '帮助中心' },
     { v: 'changelog', ic: '⌘', t: '更新公告' }, { v: 'runlog', ic: '📜', t: '运行记录' }
   ];
@@ -6027,6 +6112,7 @@
     pushAudit('剧本进度', 'edit', '剧本分幕');
     persist();
     if (S.view === 'rawtext') { if ((S.rawShow || '') !== 'script') S.rawShow = 'script'; rawRedrawOut(); }
+    if (S.view === 'gm') renderGM();
     if (msg) toast(msg, 'ok');
   }
   /* 取当前剧本的第 idx 幕进度条目并补全缺省（写路径统一入口） */
@@ -6103,6 +6189,7 @@
     pushAudit('剧本进度', 'reset', '剧本分幕');
     persist();
     if (S.view === 'rawtext') rawRedrawOut();
+    if (S.view === 'gm') renderGM();
     toast('进度已清空，可以重新开团了', 'ok');
   }
   /* 一键生成本幕开团清单 → 填入侧栏对话，作为交给 AI 的提示词起点 */
@@ -6118,6 +6205,174 @@
     const inp = q('drawerIn');
     if (inp) { inp.value = text; try { inp.focus(); inp.setSelectionRange(0, 0); } catch (_) {} }
     toast('已生成第 ' + (st.nowIdx + 1) + ' 幕开团清单（已复制，可直接发送给 AI）', 'ok');
+  }
+
+  /* ============================================================
+   * U0-1 开团模式（集中驾驶舱）
+   * 一键进入的全屏布局，把开团当下最常用的五件事聚到一屏：
+   *   当前幕 + 待兑现伏笔 · 遭遇战 · 快捷骰 · 常用收藏。
+   * 进入后隐藏侧栏与非常用顶栏入口；跳去任意常规视图即自动退出（_gmMode 不落盘）。
+   * 设计原则：只做「聚合 + 就地操作」，不复制既有逻辑——每块都复用原视图的数据与动作函数。
+   * ============================================================ */
+  function applyGmClass() {
+    const on = !!_gmMode;
+    if (document.body) document.body.classList.toggle('gm-on', on);
+    const btn = q('btnGmMode');
+    if (btn) {
+      btn.classList.toggle('on', on);
+      btn.title = on ? '退出开团模式（F2）' : '开团模式（F2）：一屏聚合 当前幕 / 待兑现伏笔 / 遭遇战 / 快捷骰 / 常用收藏';
+    }
+    const lab = q('gmBtnLabel');
+    if (lab) lab.textContent = on ? '退出开团' : '开团';
+  }
+  function gmEnter() { _gmMode = true; applyGmClass(); switchView('gm'); }
+  function gmExit() { _gmMode = false; applyGmClass(); switchView('dash'); }
+  function toggleGmMode() { if (_gmMode) gmExit(); else gmEnter(); }
+  /* 剧本盒子：无分幕返回 null，其余给出现幕、进度与统计（纯读取，不产生副作用） */
+  function gmScriptBox() {
+    const script = S.rawScript;
+    const scenes = (script && Array.isArray(script.scenes)) ? script.scenes : [];
+    if (!scenes.length) return null;
+    const prog = scriptProgRead(script);
+    return { script: script, scenes: scenes, prog: prog, st: scriptStats(script, prog) };
+  }
+  function gmSceneGo(idx) {
+    const box = gmScriptBox(); if (!box) return;
+    if (idx < 0 || idx >= box.scenes.length) return;
+    scriptGoto(idx);   // 内部 scriptProgPersist 会在开团模式下就地重绘
+  }
+  function gmPeople(sc) {
+    return (Array.isArray(sc.characters) ? sc.characters : [])
+      .map(c => String((c && typeof c === 'object') ? (c.name || '') : (c == null ? '' : c))).filter(Boolean);
+  }
+  /* 当前幕 + 待兑现伏笔 */
+  function gmScenePanel(box) {
+    if (!box) {
+      return `<section class="gm-card">
+        <div class="gm-card-h"><b>🎬 当前幕</b></div>
+        <div class="empty">还没有剧本分幕。到「原始文本」导入团本后点「🎬 剧本分幕」，这里就会出现当前幕、本幕要素与待兑现伏笔。
+          <div class="toolbar" style="margin-top:10px;justify-content:flex-start"><button onclick="WB.go('rawtext')">去导入 / 分幕</button></div></div>
+      </section>`;
+    }
+    const scenes = box.scenes, st = box.st, i = st.nowIdx;
+    const pct = st.total ? Math.round((st.done / st.total) * 100) : 0;
+    let h = `<section class="gm-card">
+      <div class="gm-card-h"><b>🎬 当前幕</b><span class="grow"></span>
+        <span class="hint">已完成 ${st.done}/${st.total} 幕 · ${pct}%</span></div>
+      <div class="gm-bar"><i style="width:${pct}%"></i></div>`;
+    if (i >= 0 && scenes[i]) {
+      const sc = scenes[i];
+      const clueSt = scriptClueStates(box.prog, i, (Array.isArray(sc.clues) ? sc.clues : []).map(String).filter(x => x.trim()));
+      const loc = (Array.isArray(sc.location) ? sc.location : []).map(String).filter(Boolean);
+      const ppl = gmPeople(sc);
+      const props = (Array.isArray(sc.props) ? sc.props : []).map(String).filter(Boolean);
+      h += `<div class="gm-now"><b>第 ${i + 1} 幕 · ${esc(sc.title || '未命名')}</b>
+        <span class="gm-st">${esc(scriptStLabel(scriptSceneProg(box.prog, i).st))}</span></div>`;
+      if (sc.time) h += `<div class="gm-line"><span class="gm-k">时间</span><span>${esc(sc.time)}</span></div>`;
+      if (loc.length) h += `<div class="gm-line"><span class="gm-k">地点</span><span>${loc.map(esc).join('、')}</span></div>`;
+      if (ppl.length) h += `<div class="gm-line"><span class="gm-k">出场</span><span>${ppl.map(esc).join('、')}</span></div>`;
+      if (props.length) h += `<div class="gm-line"><span class="gm-k">道具/机关</span><span>${props.map(esc).join('、')}</span></div>`;
+      if (clueSt.length) h += `<div class="gm-clues">${clueSt.map((c, ci) => `<label class="gm-clue${c.done ? ' on' : ''}" title="勾选表示该伏笔已向玩家兑现"><input type="checkbox" ${c.done ? 'checked' : ''} onchange="WB.scriptToggleClue(${i},${ci})"><span>${esc(c.text)}</span></label>`).join('')}</div>`;
+      h += `<div class="toolbar gm-acts">
+        ${i > 0 ? `<button class="ghost small" onclick="WB.gmSceneGo(${i - 1})" title="把上一幕设为进行中">◀ 上一幕</button>` : ''}
+        ${i < scenes.length - 1 ? `<button class="small" onclick="WB.gmSceneGo(${i + 1})" title="推进到下一幕：当前幕自动收尾为已完成">下一幕 ▶</button>` : `<span class="hint">已到最后一幕</span>`}
+        <span class="grow"></span>
+        <button class="ghost small" onclick="WB.scriptChecklist()" title="把本幕要素与待兑现伏笔整理成提示词，填入侧栏对话">📋 本幕开团清单</button></div>`;
+    } else {
+      h += `<div class="empty">全部幕已完成。可重开进度，或导入新团本。</div>
+        <div class="toolbar" style="margin-top:8px"><button class="ghost small" onclick="WB.scriptReset()">重开进度</button></div>`;
+    }
+    h += `<div class="gm-sub">未兑现伏笔 ${st.pending.length} 条</div>`;
+    if (st.pending.length) {
+      h += `<div class="gm-chips">` + st.pending.slice(0, 20).map(p =>
+        `<span class="gm-chip" title="第 ${p.scene} 幕 · ${esc(p.title)}：${esc(p.text)}" onclick="WB.scriptJump(${p.scene - 1})">第${p.scene}幕 · ${esc(trunc(p.text, 16))}</span>`).join('')
+        + (st.pending.length > 20 ? `<span class="hint">…等共 ${st.pending.length} 条</span>` : '') + `</div>`;
+    } else {
+      h += `<div class="hint">${st.cluesTotal ? '伏笔已全部兑现，可安心推进。' : '本剧本未标注线索/伏笔。'}</div>`;
+    }
+    h += `</section>`;
+    return h;
+  }
+  /* 遭遇战：内嵌当前进行中遭遇的面板（复用 renderEncBoard），无进行中则给新建入口 */
+  function gmEncPanel() {
+    const cur = encCur();
+    let h = `<section class="gm-card">
+      <div class="gm-card-h"><b>⚔ 遭遇战</b><span class="grow"></span>
+        <button class="ghost small" onclick="WB.go('encounter')">${cur ? '全屏管理' : '查看全部'}</button></div>`;
+    if (cur) h += renderEncBoard(cur);
+    else {
+      const n = encData().length;
+      h += `<div class="empty">当前没有进行中的遭遇。开打时新建一场、拉入交战单位，就能在这里追血量与回合。${n ? `（已有 ${n} 场记录）` : ''}
+        <div class="toolbar" style="margin-top:10px;justify-content:flex-start"><button onclick="WB.encNew()">➕ 新建遭遇</button></div></div>`;
+    }
+    h += `</section>`;
+    return h;
+  }
+  /* 快捷骰：常用骰式一键投 + 自定义输入；结果就地显示并记入投骰记录 */
+  function gmLastRollHtml() {
+    const last = (S.settings.diceLog || [])[0];
+    if (!last) return '<span class="hint">掷骰结果会显示在这里，并自动记入投骰记录；若正在遭遇战中会并入本场流水。</span>';
+    const t = new Date(last.t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    return `<div class="gm-lastroll"><b>${esc(last.summary || last.expr || '')}</b>${last.grade ? `<span class="gm-grade">${esc(last.grade)}</span>` : ''}<span class="hint"> · ${t}</span></div>`;
+  }
+  function gmDicePanel() {
+    const quick = ['1d100', '1d20', '1d12', '1d10', '1d8', '1d6', '2d6', '3d6'];
+    const expr = (S.settings.dice && S.settings.dice.expr) || '1d20';
+    return `<section class="gm-card">
+      <div class="gm-card-h"><b>🎲 快捷骰</b><span class="grow"></span>
+        <button class="ghost small" onclick="WB.go('dice')">完整骰娘</button></div>
+      <div class="gm-dicegrid">${quick.map(x => `<button class="ghost gm-die" onclick="WB.gmRoll('${x}')">${x}</button>`).join('')}</div>
+      <div class="gm-dicein"><input id="gmDiceExpr" value="${esc(expr)}" placeholder="自定义，如 2d6+3 / 1d100" onkeydown="if(event.key==='Enter'){event.preventDefault();WB.gmRoll();}">
+        <button onclick="WB.gmRoll()">投掷</button></div>
+      <div id="gmDiceOut" class="gm-diceout">${gmLastRollHtml()}</div>
+    </section>`;
+  }
+  /* 常用收藏 */
+  function gmFavPanel() {
+    const chips = [];
+    for (const k of KINDS) for (const id of favIds(k)) {
+      const it = (S.data.entities[k] || []).find(x => x.id === id);
+      if (!it) continue;
+      const nm = it.name || it.title || '未命名';
+      chips.push(`<span class="gm-chip" onclick="WB.go('${k}')" title="${esc(DATA_TYPE[k])} · ${esc(nm)}">${esc(nm)}<span class="gm-chip-k">${esc(DATA_TYPE[k])}</span></span>`);
+    }
+    return `<section class="gm-card">
+      <div class="gm-card-h"><b>★ 常用收藏</b><span class="grow"></span><span class="hint">${chips.length} 条</span></div>
+      ${chips.length ? `<div class="gm-chips">${chips.join('')}</div>` : '<div class="hint">还没有收藏。在资料卡右上角点 ☆ 收藏，常用的卡就会出现在这里，开团时一键直达。</div>'}
+    </section>`;
+  }
+  function renderGM() {
+    let html = `<div class="gm-top">
+      <span class="gm-live">开团模式</span>
+      <span class="hint">一屏完成常用操作 · F2 或右侧「退出开团」返回常规布局</span>
+      <span class="grow"></span>
+      <div class="toolbar gm-quick">
+        <button class="ghost small" onclick="WB.openPalette()">⌘ 命令面板</button>
+        <button class="ghost small" onclick="WB.openQuickNote()">📝 便签</button>
+        <button class="ghost small" onclick="WB.go('maps')">🗺 地图</button>
+        <button class="ghost small" onclick="WB.go('logs')">🕮 日志</button>
+        <button class="ghost small" onclick="WB.go('search')">⌕ 搜索</button>
+        <button class="ghost small" onclick="WB.gmExit()">✕ 退出开团</button>
+      </div></div>`;
+    html += `<div class="gm-grid">
+      <div class="gm-col">${gmScenePanel(gmScriptBox())}</div>
+      <div class="gm-col"><div id="gmEncWrap">${gmEncPanel()}</div>${gmDicePanel()}${gmFavPanel()}</div>
+    </div>`;
+    contentInner(html);
+  }
+  /* 开团模式下就地投骰：不整体重绘（避免打断连续投掷），仅刷新结果区与遭遇面板 */
+  function gmRoll(expr) {
+    const inp = q('gmDiceExpr');
+    const e = String(expr || (inp && inp.value) || '1d20').trim() || '1d20';
+    const r = rollDice(e);
+    const out = q('gmDiceOut');
+    if (!r || !r.ok) { if (out) out.innerHTML = `<div class="gm-lastroll err">${esc((r && r.error) || '投掷失败')}</div>`; return; }
+    if (!S.settings.dice) S.settings.dice = {};
+    S.settings.dice.expr = e;
+    diceLogAdd({ expr: e, total: r.total, rolls: r.rolls, seed: r.seed, detail: r.detail, summary: e + ' = ' + r.total + (r.rolls.length > 1 ? '（' + r.rolls.join('+') + '）' : ''), rule: 'plain' });
+    if (out) out.innerHTML = `<div class="gm-rollres"><b>${esc(e)}</b><span class="gm-total">${r.total}</span>${r.rolls.length > 1 ? `<span class="hint">点数 ${r.rolls.join(' / ')}</span>` : ''}</div>`;
+    /* 投骰若并入了进行中遭遇的流水，就地刷新遭遇面板让新流水可见 */
+    if (encCur()) { const wrap = q('gmEncWrap'); if (wrap) wrap.innerHTML = gmEncPanel(); }
   }
   /* AI 剧本分幕：把原始文本拆成剧本（主进程对超长文本自动分块续幕） */
   async function rawScriptBreak() {
@@ -8289,6 +8544,8 @@
     runAudit,
     createArchive, createArchiveHome, switchArchive, switchHome: switchArchive, dupArchive, delArchive, restoreBackup, restoreSnapshot,
     setSettingsTab, setAiFlag, saveAutoBackup,
+    shortcutEdit, shortcutReset, shortcutEditEnd, setSingleKeyNav,
+    openQuickNote, closeQuickNote, quickNoteAdd, quickNoteDel, quickNoteArchive, quickNoteArchiveAll,
     toggleSidebar, openPalette, openGlobalSearch, closeGlobalSearch, onboardDismiss, exportView, exportPick,
     openChat, doParse, scriptImportFile, captureScript, commitScript, clearScript, editPersona, savePersona, testPersona, delPersona, setActive, togglePersona,
     setFieldKind: (v) => { S.editFieldKind = v; paintFieldEditor(v); },
@@ -8305,6 +8562,7 @@
     rawInput, rawClear, rawSuggest, rawExport, removePendFile, clearPendFiles,
     rawScriptBreak, rawShowTxt, rawShowSug, rawShowScript, rawExportScript,
     scriptStatusCycle, scriptGoto, scriptToggleClue, scriptNoteSet, scriptReset, scriptChecklist, scriptJump,
+    gmEnter, gmExit, toggleGmMode, gmSceneGo, gmRoll,
     plotSummary, commitPlotPoints, storySuggest, dismissChatHint,
     mapNew, mapDel, mapOpen, mapBack, mapMode, mapToggleGrid, mapGridSize, mapFinishRegion, mapUpload, mapTemplate,
     mapEditMarker, mapSaveMarker, mapDelMarker, mapFit, mapExportImg,
@@ -9130,12 +9388,18 @@
     q('btnChatToggle').addEventListener('click', () => openChat());
     q('btnChatClose').addEventListener('click', () => openChat(false));
     q('btnSidebarToggle').addEventListener('click', () => toggleSidebar());
+    /* 随手便签输入框：Ctrl+Enter 记下（Enter 留给多行换行） */
+    const noteIn = q('noteInput');
+    if (noteIn) noteIn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); quickNoteAdd(); }
+    });
     /* 全局快捷键：默认绑定见 SHORTCUT_ACTIONS，用户可在「设置 → 外观 → 快捷键」自定义。
      * 处理顺序：Esc 关浮层 → 有修饰键的组合（按动作 allowInField 决定输入框内是否生效）→
      * 输入框内直接返回 → 单键快速跳转（可选）→ Esc 失焦。 */
     document.addEventListener('keydown', (e) => {
       const inField = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '');
       if (e.key === 'Escape') {
+        if (!q('noteMask').hidden) { closeQuickNote(); return; }
         if (!q('gSearchMask').hidden) { closeGlobalSearch(); return; }
         if (!q('paletteMask').hidden) { closePalette(); return; }
       }

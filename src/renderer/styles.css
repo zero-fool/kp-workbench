@@ -1663,3 +1663,77 @@ button:hover>.ic{transform:translateY(-1px)}
   .dash-hero .dh-cap{max-width:88%}
   .dash-hero .dh-img{height:clamp(112px,26vw,168px)}
 }
+
+/* ===== U0-2 快捷键设置（设置 → 外观） ===== */
+#shortcutList{display:flex;flex-direction:column;gap:6px}
+.sc-row{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--line);
+  border-radius:9px;background:var(--panel2)}
+.sc-row b{font-weight:600;font-size:13px;color:var(--ink)}
+.sc-cap{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;
+  padding:2px 7px;border-radius:6px;border:1px solid var(--line2);
+  background:color-mix(in srgb,var(--accent) 10%,transparent);color:var(--ink-soft);white-space:nowrap}
+.rec-cap{margin:10px 0;padding:14px;text-align:center;font-size:13px;color:var(--ink-soft);
+  border:1px dashed var(--line2);border-radius:10px;background:var(--panel2)}
+
+/* ===== U0-3 全局随手便签 ===== */
+.note-modal{width:min(560px,92vw)}
+.note-modal textarea{width:100%;font:inherit;line-height:1.6}
+.note-list{margin-top:12px;display:flex;flex-direction:column;gap:8px;max-height:44vh;overflow:auto}
+.note-row{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
+  border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
+.note-txt{flex:1;min-width:0;white-space:pre-wrap;word-break:break-word;
+  font-size:13px;line-height:1.6;color:var(--ink)}
+.note-acts{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;flex:0 0 auto}
+.note-empty{padding:16px;text-align:center;color:var(--ink-faint);font-size:12.5px;
+  border:1px dashed var(--line);border-radius:10px}
+
+/* ===== U0-1 开团模式（集中驾驶舱） ===== */
+/* 进入后隐藏侧栏与非常用顶栏入口，把一屏留给开团当下最常用的五件事 */
+.gm-on .sidebar,
+.gm-on #winBar .brand-text,
+.gm-on #winBar .top-actions .profile-chip,
+.gm-on #winBar .top-actions #themeSelect,
+.gm-on #winBar .top-actions #btnDensity,
+.gm-on #winBar .top-actions #btnQuickNote,
+.gm-on #winBar .top-actions #btnBackup,
+.gm-on #winBar .top-actions #btnFolder{display:none !important}
+.gm-on #winBar .top-actions{margin-left:auto}
+.gm-on #btnGmMode{color:var(--accent);border-color:var(--accent)}
+.gm-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 16px;
+  border-bottom:1px solid var(--line);background:var(--panel);margin:-16px -16px 16px}
+.gm-live{font-weight:700;color:var(--accent);margin-right:4px}
+.gm-grid{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px}
+@media (max-width:1080px){.gm-grid{grid-template-columns:1fr}}
+.gm-col{display:flex;flex-direction:column;gap:16px;min-width:0}
+.gm-card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  box-shadow:var(--shadow);padding:16px;display:flex;flex-direction:column}
+.gm-card-h{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-weight:600}
+.gm-card-h .grow{flex:1}
+.gm-bar{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden;margin-bottom:12px}
+.gm-bar i{display:block;height:100%;background:var(--accent);transition:width .3s}
+.gm-now{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+.gm-st{font-size:12px;padding:2px 8px;border-radius:10px;background:var(--panel2);color:var(--ink-soft);white-space:nowrap}
+.gm-line{display:flex;margin-bottom:8px;line-height:1.5}
+.gm-k{width:64px;color:var(--ink-soft);flex:0 0 auto}
+.gm-clues{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.gm-clue{display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;border:1px solid var(--line2);
+  background:var(--panel2);font-size:12px;cursor:pointer}
+.gm-clue.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.gm-acts{margin-top:12px;margin-bottom:0}
+.gm-sub{font-size:12px;color:var(--ink-soft);margin:8px 0}
+.gm-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;max-height:130px;overflow-y:auto}
+.gm-chip{padding:4px 8px;border-radius:6px;border:1px solid var(--line2);background:var(--panel2);
+  font-size:12px;cursor:pointer;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.gm-chip:hover{border-color:var(--accent)}
+.gm-chip-k{margin-left:4px;color:var(--ink-faint);font-size:11px}
+.gm-dicegrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}
+.gm-die{padding:8px 0;text-align:center;justify-content:center}
+.gm-dicein{display:flex;gap:8px;margin:12px 0 0}
+.gm-dicein input{flex:1;min-width:0}
+.gm-diceout{min-height:40px;margin-top:12px;padding:8px 10px;border-radius:8px;border:1px solid var(--line2);
+  background:var(--panel2);display:flex;align-items:center}
+.gm-lastroll{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.gm-lastroll.err{color:var(--danger,#c0392b)}
+.gm-rollres{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.gm-total{font-size:18px;font-weight:700;color:var(--accent)}
+.gm-grade{margin-left:8px;padding:2px 8px;border-radius:10px;font-size:12px;background:var(--panel)}

@@ -215,7 +215,7 @@ check('批量：toggleBatch / batchSelIds / batchDel / batchExport / batchFav �
   (/function\s+toggleBatch/.test(src) && /function\s+batchSelIds/.test(src) && /function\s+batchDel/.test(src) && /function\s+batchExport/.test(src) && /function\s+batchFav/.test(src)) ? true : '批量函数缺失');
 check('批量：工具栏提供「☑ 多选」入口', () => /☑\s*多选|toggleBatch\(kind\)/.test(src) ? true : '缺多选按钮入口');
 check('前进/后退：_navHist 历史栈 + navBack/navForward + Alt+←/→ 快捷键', () =>
-  (/_navHist\s*=\s*\[\]/.test(src) && /function\s+navBack/.test(src) && /function\s+navForward/.test(src) && /e\.altKey[\s\S]{0,80}?ArrowLeft/.test(src) && /e\.altKey[\s\S]{0,80}?ArrowRight/.test(src)) ? true : '导航历史栈/快捷键缺失');
+  (/_navHist\s*=\s*\[\]/.test(src) && /function\s+navBack/.test(src) && /function\s+navForward/.test(src) && /id:\s*'navBack',[\s\S]{0,140}?def:\s*'Alt\+ArrowLeft'/.test(src) && /id:\s*'navForward',[\s\S]{0,140}?def:\s*'Alt\+ArrowRight'/.test(src)) ? true : '导航历史栈/快捷键缺失');
 check('前进/后退按钮挂到工具栏且导出到全局 WB', () =>
   (/onclick="WB\.navBack\(\)"/.test(src) && /onclick="WB\.navForward\(\)"/.test(src) && /navBack,\s*navForward/.test(src)) ? true : '导航按钮未挂载/未导出');
 check('AI 错误降级：eiAIErr 将 401/429/超时/断网/404 映射为可读并带去配置标记', () => {
@@ -1565,10 +1565,122 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     return /PAL_COMMANDS/.test(src) && /v: 'encounter'/.test(src) && /v: 'stats'/.test(src) ? true : '命令面板缺遭遇/统计入口';
   });
   check('D3 渲染层：Ctrl+E 遭遇 / Ctrl+T 统计 快捷键', () => {
-    return /switchView\('encounter'\)/.test(src) && /switchView\('stats'\)/.test(src) && /key === 'e' \|\| e\.key === 'E'\)/.test(src) && /key === 't' \|\| e\.key === 'T'\)/.test(src) ? true : '快捷键缺失';
+    return /id:\s*'encounter',[\s\S]{0,140}?def:\s*'Ctrl\+E',[\s\S]{0,120}?switchView\('encounter'\)/.test(src)
+      && /id:\s*'stats',[\s\S]{0,140}?def:\s*'Ctrl\+T',[\s\S]{0,120}?switchView\('stats'\)/.test(src) ? true : '快捷键缺失';
   });
   check('D3 渲染层：帮助中心补全新快捷键说明', () => {
     return /Ctrl\+E/.test(src) && /Ctrl\+T/.test(src) && /帮助中心/.test(src) ? true : '帮助中心快捷键说明缺失';
+  });
+
+  console.log('\n[U0] 体验优化第一组：可自定义快捷键 / AI 服务商预设 / 离线降级提示 / 随手便签');
+  const U0html = fs.readFileSync(path.join(RENDERER_DIR, 'index.html'), 'utf8');
+  const U0css = fs.readFileSync(path.join(RENDERER_DIR, 'styles.css'), 'utf8');
+
+  /* ---- U0-2 单键快捷键 + 可自定义 ---- */
+  check('U0-2 快捷键表：SHORTCUT_ACTIONS 定义 + 覆盖值优先读取（shortcutOf）', () => {
+    return (/const SHORTCUT_ACTIONS = \[/.test(src) && /function shortcutOf\(id\)/.test(src)
+      && /S\.settings\.shortcuts/.test(src) && /id: 'palette',[\s\S]{0,120}def: 'Ctrl\+K'/.test(src)) ? true : '快捷键表/覆盖读取缺失';
+  });
+  check('U0-2 自定义：setShortcut 冲突检测 + shortcutEdit 录制须含修饰键', () => {
+    return (/function setShortcut\(id, combo\)[\s\S]{0,400}?已被「/.test(src)
+      && /function shortcutEdit\(id\)/.test(src) && /需至少包含 Ctrl \/ Alt \/ Shift/.test(src)
+      && /addEventListener\('keydown', _recKeyHandler, true\)/.test(src)) ? true : '自定义录制/冲突检测缺失';
+  });
+  check('U0-2 单键跳转：SINGLE_KEY_VIEWS 映射 + 开关 singleKeyNav 才生效', () => {
+    return (/const SINGLE_KEY_VIEWS = \[/.test(src) && /\['1', 'dash'/.test(src)
+      && /S\.settings\.singleKeyNav && !e\.ctrlKey/.test(src)) ? true : '单键跳转表/开关缺失';
+  });
+  check('U0-2 门控：浮层打开时不响应单键（anyOverlayOpen 含便签/命令面板/搜索）', () => {
+    return /function anyOverlayOpen\(\)[\s\S]{0,260}?'noteMask'/.test(src)
+      && /singleKeyNav[\s\S]{0,80}?anyOverlayOpen\(\)/.test(src) ? true : '单键跳转未做浮层门控';
+  });
+  check('U0-2 键位派发：keydown 统一走 matchesCombo + allowInField 规则', () => {
+    return /for \(const a of SHORTCUT_ACTIONS\)[\s\S]{0,160}?matchesCombo\(e, shortcutOf\(a\.id\)\)/.test(src)
+      && /if \(inField && !a\.allowInField\) continue/.test(src) ? true : '全局键位未统一派发';
+  });
+  check('U0-2 设置页：快捷键卡片 + 单键开关 + WB 挂载', () => {
+    return (/id="shortcutList"/.test(src) && /id="singleKeyHint"/.test(src)
+      && /WB\.setSingleKeyNav\(this\.checked\)/.test(src) && /shortcutEdit, shortcutReset, shortcutEditEnd, setSingleKeyNav/.test(src)) ? true : '设置页快捷键卡片/挂载缺失';
+  });
+
+  /* ---- U0-4 AI 服务商预设 ---- */
+  check('U0-4 预设表：AI_PRESETS 覆盖 DeepSeek/通义/智谱/Kimi/OpenAI/本地 Ollama', () => {
+    const ids = ['deepseek', 'qwen', 'zhipu', 'moonshot', 'openai', 'ollama'];
+    return ids.every(i => new RegExp("id: '" + i + "'").test(src)) ? true : '服务商预设不全';
+  });
+  check('U0-4 一键填参：applyAiPreset 写入 baseUrl/model 并显示「获取 API Key」链接', () => {
+    return /function applyAiPreset\(id\)/.test(src) && /q\('aif_base'\)/.test(src) && /q\('aif_model'\)/.test(src)
+      && /aif_keylink/.test(src) && /link\.href = p\.keyUrl/.test(src) ? true : '一键填参/Key 引导缺失';
+  });
+  check('U0-4 界面接线：AI 配置页服务商下拉 + WB.applyAiPreset 挂载', () => {
+    return /<select id="aif_preset" onchange="WB\.applyAiPreset\(this\.value\)">/.test(src)
+      && /WB\.applyAiPreset\(this\.value\)/.test(src) ? true : 'AI 配置页下拉未接线';
+  });
+
+  /* ---- U1-3 断网 / 未配 AI 降级提示 ---- */
+  check('U1-3 判定：aiReady 三要素齐备（baseUrl/apiKey/model）', () => {
+    return /function aiReady\(\)[\s\S]{0,160}?a\.baseUrl && a\.apiKey && a\.model/.test(src) ? true : 'aiReady 判定缺失';
+  });
+  check('U1-3 文案：aiDegradeHTML 明说离线可用（掷骰/建档/地图/日志/备份）', () => {
+    return /function aiDegradeHTML\(\)/.test(src) && /全部离线可用/.test(src)
+      && /掷骰/.test(src) && /地图/.test(src) && /备份/.test(src) ? true : '降级文案缺失或不完整';
+  });
+  check('U1-3 接线：AI 配置页未就绪时渲染降级卡 + 样式 .setcard.ai-degrade', () => {
+    return /const ready = aiReady\(\)/.test(src) && /\$\{ready \? '' : aiDegradeHTML\(\)\}/.test(src)
+      && /\.setcard\.ai-degrade/.test(U0css) ? true : '降级卡未接入或样式缺失';
+  });
+
+  /* ---- U0-3 全局随手便签 ---- */
+  check('U0-3 数据层：quickNotes 落 settings 且增删/归档函数齐全', () => {
+    return /function quickNotes\(\)/.test(src) && /S\.settings\.quickNotes/.test(src)
+      && /function quickNoteAdd\(\)/.test(src) && /function quickNoteDel\(id\)/.test(src)
+      && /function quickNoteArchive\(id, target\)/.test(src) && /function quickNoteArchiveAll\(\)/.test(src) ? true : '便签数据层缺失';
+  });
+  check('U0-3 归档去向：log→摘要 / hook→伏笔(待跟进) / npc→备注', () => {
+    return /if \(target === 'npc'\)[\s\S]{0,400}?normFields\('npcs'/.test(src)
+      && /if \(target === 'hook'\) obj\.hook = text; else obj\.summary = text/.test(src)
+      && /status: '待跟进'/.test(src) ? true : '归档字段映射错误';
+  });
+  check('U0-3 界面：顶栏「便签」按钮 + 浮层（noteMask/noteInput/noteList）', () => {
+    return /id="btnQuickNote"/.test(U0html) && /WB\.openQuickNote\(\)/.test(U0html)
+      && /id="noteMask"/.test(U0html) && /id="noteInput"/.test(U0html) && /id="noteList"/.test(U0html) ? true : '便签界面结构缺失';
+  });
+  check('U0-3 快捷键与关闭：Ctrl+Shift+N 打开 / Ctrl+Enter 记下 / Esc 关闭', () => {
+    return /id: 'quickNote',[\s\S]{0,120}def: 'Ctrl\+Shift\+N'/.test(src)
+      && /e\.key === 'Enter' && \(e\.ctrlKey \|\| e\.metaKey\)/.test(src)
+      && /!q\('noteMask'\)\.hidden\) \{ closeQuickNote\(\); return; \}/.test(src) ? true : '便签快捷键/关闭逻辑缺失';
+  });
+  check('U0-3 挂载与样式：WB 便签函数 + .note-row/.note-empty 样式', () => {
+    return /openQuickNote, closeQuickNote, quickNoteAdd, quickNoteDel, quickNoteArchive, quickNoteArchiveAll/.test(src)
+      && /\.note-row/.test(U0css) && /\.note-empty/.test(U0css) ? true : '便签未挂载或样式缺失';
+  });
+
+  /* ---- U0-1 开团模式（集中驾驶舱） ---- */
+  check('U0-1 入口：顶栏「开团」按钮 + F2 快捷键 + 命令面板直达', () => {
+    return /id: 'gmMode',[\s\S]{0,120}def: 'F2'/.test(src)
+      && /\{ v: 'gm', ic: '⚡', t: '开团模式（集中驾驶舱）' \}/.test(src)
+      && /id="btnGmMode"/.test(U0html) && /WB\.toggleGmMode\(\)/.test(U0html) && /id="gmBtnLabel"/.test(U0html)
+      ? true : '开团模式入口缺失';
+  });
+  check('U0-1 路由：switchView 注册 gm 视图，跳到常规视图自动退出全屏', () => {
+    return /else if \(view === 'gm'\) renderGM\(\);/.test(src)
+      && /if \(_gmMode && view !== 'gm'\) \{ _gmMode = false; applyGmClass\(\); \}/.test(src) ? true : '开团视图路由/自动退出缺失';
+  });
+  check('U0-1 聚合：当前幕 + 待兑现伏笔 + 遭遇战 + 快捷骰 + 常用收藏 五块齐备', () => {
+    const need = [/function gmScenePanel\(box\)/, /function gmEncPanel\(\)/, /function gmDicePanel\(\)/, /function gmFavPanel\(\)/];
+    return need.every(re => re.test(src))
+      && /未兑现伏笔 \$\{st\.pending\.length\}/.test(src)
+      && /<b>🎬 当前幕<\/b>/.test(src) && /<b>⚔ 遭遇战<\/b>/.test(src)
+      && /<b>🎲 快捷骰<\/b>/.test(src) && /<b>★ 常用收藏<\/b>/.test(src) ? true : '开团聚合面板不全';
+  });
+  check('U0-1 就地操作：gmRoll 记入投骰记录 + gmSceneGo 推进幕 + gmRoll 并入遭遇流水', () => {
+    return /function gmRoll\(expr\)/.test(src) && /diceLogAdd\(\{ expr: e,/.test(src)
+      && /function gmSceneGo\(idx\)[\s\S]{0,160}?scriptGoto\(idx\)/.test(src)
+      && /if \(encCur\(\)\) \{ const wrap = q\('gmEncWrap'\); if \(wrap\) wrap\.innerHTML = gmEncPanel\(\); \}/.test(src) ? true : '开团就地操作缺失';
+  });
+  check('U0-1 门控与挂载：进入后隐藏非常用入口（.gm-on）+ WB 暴露 gm 系列函数', () => {
+    return /\.gm-on/.test(U0css) && /\.gm-grid/.test(U0css) && /\.gm-card/.test(U0css)
+      && /gmEnter, gmExit, toggleGmMode, gmSceneGo, gmRoll,/.test(src) ? true : '开团模式门控样式或挂载缺失';
   });
 
   console.log('\n[M3] 自研骰娘内核：退役清零 + 新接口收口 + 版本 3.0.0');

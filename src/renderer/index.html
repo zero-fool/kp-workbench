@@ -67,6 +67,8 @@
       <span class="profile-chip" id="topProfile" title="当前 AI 人设">—</span>
       <select id="themeSelect" title="主题皮肤"></select>
       <button class="ghost" id="btnDensity" title="切换卡片密度：紧凑 / 舒适" onclick="WB.toggleDensity()"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-rows"></use></svg>密度</button>
+      <button class="ghost" id="btnGmMode" title="开团模式（F2）：一屏聚合 当前幕 / 待兑现伏笔 / 遭遇战 / 快捷骰 / 常用收藏" onclick="WB.toggleGmMode()"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-bolt"></use></svg><span id="gmBtnLabel">开团</span></button>
+      <button class="ghost" id="btnQuickNote" title="随手便签（Ctrl+Shift+N）：任意界面记一句，团后一键归档为 日志 / 伏笔 / NPC" onclick="WB.openQuickNote()"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-pen"></use></svg>便签</button>
       <button class="ghost" id="btnBackup" title="立即备份"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-db"></use></svg>备份</button>
       <button class="ghost" id="btnFolder" title="打开数据文件夹"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-folder"></use></svg>文件夹</button>
     </div>
@@ -219,6 +221,22 @@
 <!-- 新手引导 -->
 <div class="modal-mask" id="onboardMask" hidden>
   <div class="modal" id="onboardBox"></div>
+</div>
+
+<!-- U0-3 全局随手便签（Ctrl+Shift+N / 顶栏「便签」） -->
+<div class="modal-mask" id="noteMask" hidden>
+  <div class="modal note-modal" id="noteBox">
+    <h3>随手便签</h3>
+    <div class="note">任意界面随时记一句；团后点右侧按钮一键归档为「日志 / 伏笔 / NPC」。Ctrl+Enter 记下，Esc 关闭。</div>
+    <textarea id="noteInput" rows="3" placeholder="例：老陈的怀表停在 3:07 —— 可能是时间线关键线索。"></textarea>
+    <div class="foot">
+      <button class="ghost" onclick="WB.closeQuickNote()">关闭</button>
+      <span class="grow"></span>
+      <button class="ghost" onclick="WB.quickNoteArchiveAll()" title="把所有便签一次性归档为日志（状态：待跟进）">全部→日志</button>
+      <button onclick="WB.quickNoteAdd()">记下</button>
+    </div>
+    <div id="noteList" class="note-list"></div>
+  </div>
 </div>
 
 <!-- 全局「AI 处理中」提示：任意界面调用 AI 时显示，提示勿重复点击 -->
