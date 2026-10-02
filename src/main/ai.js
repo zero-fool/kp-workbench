@@ -18,6 +18,8 @@ function hubPrefix(sceneKey, settings, vars) {
     const parts = [];
     const master = promptHub.masterOf(settings);
     if (master.trim()) parts.push('【总则】' + master.trim());
+    const style = promptHub.styleOf(settings); // U2-4：风格包优先级最高
+    if (style) parts.push('【叙事风格（最高优先级，覆盖其他风格描述）】' + style.text);
     if (mem.trim()) parts.push(mem);
     return parts.join('\n\n');
   } catch (_) { return ''; }

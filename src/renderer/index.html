@@ -132,6 +132,7 @@
       <!-- 设置 -->
       <details class="snav" data-grp="sys"><summary><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-gear"></use></svg><span class="navt">设置</span></summary>
         <button data-view="settings" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-gear"></use></svg><span class="navt">偏好设置</span></button>
+        <button data-view="datasteward" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-db"></use></svg><span class="navt">数据管家</span></button>
         <button data-view="help" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-help"></use></svg><span class="navt">帮助中心</span></button>
         <button data-view="changelog" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-megaphone"></use></svg><span class="navt">更新公告</span></button>
         <button data-view="runlog" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-clock"></use></svg><span class="navt">运行记录</span></button>
@@ -245,6 +246,8 @@
   <b id="aiBusyText">AI 处理中</b>
   <span class="ai-busy-tip">请勿重复点击，完成后自动关闭</span>
   <button class="ghost small" id="aiBusyCancel" onclick="WB.aiCancelCurrent()" title="中止正在进行的 AI 任务，任务类型错误会被终止">✕ 取消任务</button>
+  <button class="ghost small" id="aiQueueClear" hidden onclick="WB.aiAbortAll()" title="清空所有排队任务并中止当前任务">清空排队</button>
+  <div class="ai-queue" id="aiQueue" hidden></div>
 </div>
 
 <div class="toasts" id="toasts"></div>

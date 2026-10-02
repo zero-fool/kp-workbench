@@ -134,6 +134,27 @@ function masterOf(settings) {
   return (typeof m === 'string' && m.trim()) ? m : DEFAULT_MASTER;
 }
 
+/* ===== U2-4 提示词风格包 =====
+ * 预置几种常见叙事风格，选中后作为「最高优先级偏好」注入所有 AI 场景 system 的最前面，
+ * 让不熟悉提示词的普通用户也能一键切换整体文风，而无需逐个场景手改。 */
+const STYLE_PACKS = [
+  { key: 'none', label: '不使用（默认）', text: '' },
+  { key: 'strict', label: '严谨考据', text: '叙事保持严谨考据：设定自洽、因果清晰，专有名词与时代/规则细节准确，避免功能化爽点和网络流行语。' },
+  { key: 'shuang', label: '爽快热血', text: '叙事节奏明快、爽点密集：突出主角的高光时刻与痛快反击，语言有张力、有画面感，避免冗长铺垫与说教。' },
+  { key: 'cthulhu', label: '克苏鲁压抑', text: '叙事弥漫克苏鲁式的压抑与未知恐惧：多写环境细节、感官异样与心理溃败，克制直白，优先留白与暗示，不轻易给出真相。' },
+  { key: 'cozy', label: '轻松日常', text: '叙事轻松温和：多用生活化细节与幽默对白，节奏舒缓，冲突点到为止，让玩家感到温暖放松。' },
+  { key: 'hardcore', label: '硬核生存', text: '叙事硬核写实：强调资源、伤势、代价与两难抉择，不回避失败与死亡，结果描述冷峻客观。' },
+  { key: 'gothic', label: '哥特阴郁', text: '叙事阴郁哥特：辞藻华丽而克制，遍布衰败、宿命与宗教意象，氛围沉重，暗流涌动。' }
+];
+function stylePacks() { return clone(STYLE_PACKS); }
+/* 取生效的风格包：return { key, text } 或 null（未选/自定义文本为空时） */
+function styleOf(settings) {
+  const sp = (settings && settings.prompts) || {};
+  const s = sp.style;
+  if (s && typeof s.text === 'string' && s.text.trim()) return { key: s.key || 'custom', text: s.text.trim() };
+  return null;
+}
+
 /* 每个场景生效提示词：被覆盖用覆盖，否则用默认模板 */
 function effective(sceneKey, settings) {
   const src = defaultScenes();
@@ -155,6 +176,8 @@ function systemFor(sceneKey, settings, vars, memoryBlock) {
   const parts = [];
   const master = masterOf(settings);
   if (master.trim()) parts.push('【总则】' + master.trim());
+  const style = styleOf(settings); // U2-4：风格包置于最前，优先级最高
+  if (style) parts.push('【叙事风格（最高优先级，覆盖其他风格描述）】' + style.text);
   const sc = effective(sceneKey, settings);
   if (sc && sc.sys && String(sc.sys).trim()) parts.push(renderTpl(sc.sys, vars));
   if (memoryBlock && String(memoryBlock).trim()) parts.push(memoryBlock);
@@ -257,6 +280,7 @@ function list() {
 
 module.exports = {
   DEFAULT_MASTER, defaultScenes, renderTpl, masterOf, effective,
+  STYLE_PACKS, stylePacks, styleOf,
   systemFor, userFor,
   memoryDir, filePathOf, readMemory, appendMemory, listMemories, rawMemory, writeMemory, clearMemory,
   list

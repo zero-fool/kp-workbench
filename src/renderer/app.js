@@ -627,9 +627,10 @@
    * 每项 AI 请求在 preload 层已被守卫，这里只负责界面表现：
    * 请求一开始就亮起提示条（显示当前在做什么 + 已用秒数）并禁用刚点下的那个按钮，
    * 结束自动熄灭。任何界面（资料卡 / 地图 / 关系网 / 骰娘 / 剧本 / 侧栏对话…）调 AI 都有统一提示，
-   * 连点同一个按钮也不会再发出一次无用请求（重复的 AI 调用会被直接拦下并说明原因）。 */
+   * 连点同一个按钮不会重复发车（同类型请求在 preload 层自动排队接力，见 U1-8）。 */
   let _aiT0 = 0, _aiTimer = null, _aiLabel = '', _aiBtn = null;
   let _aiLastClickBtn = null, _aiLastClickAt = 0;
+  let _aiWasBusy = false; // U2-5：用于在 AI 收尾（on→off）时核对预算
   let _aiGroups = []; // 当前在飞的 AI 任务组（供取消）
   /* 记住「刚点下的按钮」：AI 开始时把它禁用即可挡住连点（限 900ms 内，避免误伤别处） */
   document.addEventListener('click', (e) => {
@@ -641,8 +642,33 @@
     const txt = q('aiBusyText');
     if (txt) txt.textContent = _aiLabel + ' · 已用 ' + Math.max(0, Math.round((Date.now() - _aiT0) / 1000)) + ' 秒';
   }
+  /* U1-8 队列可视化：把「进行中 / 排队中」逐项列出来，用户一眼看清还有几项在等、分别是什么。*/
+  const AI_GROUP_UI = { chat: '对话类任务', cards: '资料类任务', scenario: '剧本分幕', map: '地图生成', tpl: '模板生成', sys: '连接测试/审查', misc: 'AI 任务' };
+  function aiGroupLabel(g) { return AI_GROUP_UI[g] || g || 'AI 任务'; }
+  function aiQueuePaint(s) {
+    const el = q('aiQueue'); if (!el) return;
+    const active = Array.isArray(s.active) ? s.active : [];
+    const queue = Array.isArray(s.queue) ? s.queue : [];
+    if (!active.length && !queue.length) { el.hidden = true; el.innerHTML = ''; return; }
+    let html = '';
+    if (active.length) {
+      html += '<div class="ai-queue-h">进行中</div>' + active.map(a =>
+        '<div class="ai-queue-row"><span class="ai-queue-dot"></span>' + esc(aiGroupLabel(a.group))
+        + (a.count > 1 ? ' ×' + a.count : '') + (a.label ? ' · ' + esc(a.label) : '') + '</div>').join('');
+    }
+    if (queue.length) {
+      html += '<div class="ai-queue-h">排队中 ' + queue.length + ' 项（完成后按顺序自动执行）</div>' + queue.map((qq, i) =>
+        '<div class="ai-queue-row"><span class="ai-queue-idx">' + (i + 1) + '</span>' + esc(aiGroupLabel(qq.group)) + (qq.label ? ' · ' + esc(qq.label) : '') + '</div>').join('');
+    }
+    el.innerHTML = html;
+    el.hidden = false;
+  }
   function aiBusySet(s) {
     if (!s) return;
+    const wasBusy = _aiWasBusy;
+    _aiWasBusy = !!s.on;
+    /* U2-5：一轮 AI 收尾后核对一次预算（跨阈值/上限时提醒） */
+    if (!s.on && wasBusy) aiBudgetCheck();
     const el = q('aiBusy');
     if (s.on) {
       _aiLabel = s.label || 'AI 处理中';
@@ -654,13 +680,23 @@
         _aiBtn = _aiLastClickBtn; _aiBtn.disabled = true; _aiBtn.classList.add('ai-running');
       }
       const cb = q('aiBusyCancel'); if (cb) cb.hidden = false;
+      const qc = q('aiQueueClear'); if (qc) qc.hidden = !(Number(s.queued) > 0);
+      aiQueuePaint(s);
     } else {
       if (_aiTimer) { clearInterval(_aiTimer); _aiTimer = null; }
       _aiGroups = [];
       if (_aiBtn) { try { _aiBtn.disabled = false; _aiBtn.classList.remove('ai-running'); } catch (_) {} _aiBtn = null; }
       if (el) el.hidden = true;
       const cb = q('aiBusyCancel'); if (cb) cb.hidden = true;
+      const qc = q('aiQueueClear'); if (qc) qc.hidden = true;
+      const qe = q('aiQueue'); if (qe) { qe.hidden = true; qe.innerHTML = ''; }
     }
+  }
+  /* U1-8 清空排队 + 中止在飞：删掉所有排队项并让主进程终止当前请求 */
+  function aiAbortAll() {
+    const had = _aiGroups.length;
+    try { if (window.api && window.api.aiAbortAll) window.api.aiAbortAll(); } catch (_) {}
+    toast(had ? '已清空排队并中止在飞任务' : '已清空排队任务', 'ok');
   }
   /* 大文件 AI 分析整理进度：主进程按 digest/merge 阶段广播，这里渲染一个浮动进度条 */
   let _importProgEl = null;
@@ -691,6 +727,99 @@
     toast('已发送取消指令，正在中止…');
   }
 
+  /* ===== U2-5 费用估算 + 预算告警 =====
+   * 在既有 token 用量面板上补「金额」维度：按用户配置的单价（元/百万 token，含常见服务商预设）
+   * 估算本轮花费，并支持设置预算上限与告警阈值；跨过阈值时在 AI 收尾后弹一次提醒。
+   * 价格均为公开列表价的近似值，仅作参考，实际以服务商账单为准。 */
+  const AI_PRICE_PRESETS = [
+    { key: 'deepseek-chat', label: 'DeepSeek-V3 / Chat', in: 2, out: 8 },
+    { key: 'deepseek-reasoner', label: 'DeepSeek-R1 / Reasoner', in: 4, out: 16 },
+    { key: 'gpt-4o-mini', label: 'OpenAI GPT-4o mini', in: 1.1, out: 4.4 },
+    { key: 'gpt-4o', label: 'OpenAI GPT-4o', in: 18, out: 72 },
+    { key: 'qwen-turbo', label: '通义千问 Turbo', in: 0.3, out: 0.6 },
+    { key: 'qwen-plus', label: '通义千问 Plus', in: 0.8, out: 2 },
+    { key: 'glm-4-flash', label: '智谱 GLM-4-Flash（免费）', in: 0, out: 0 },
+    { key: 'glm-4', label: '智谱 GLM-4', in: 5, out: 15 },
+    { key: 'moonshot', label: 'Kimi / Moonshot', in: 12, out: 12 },
+    { key: 'local', label: '本地模型（免费）', in: 0, out: 0 }
+  ];
+  /* 按模型名猜一个价格预设（用户可再改） */
+  function aiPricePresetFor(model) {
+    const m = String(model || '').toLowerCase();
+    if (!m) return null;
+    const byKey = k => AI_PRICE_PRESETS.find(p => p.key === k);
+    if (/127\.0\.0\.1|localhost|192\.168\.|ollama/.test(m)) return byKey('local');
+    if (/reason|r1/.test(m)) return byKey('deepseek-reasoner');
+    if (/deepseek/.test(m)) return byKey('deepseek-chat');
+    if (/4o-mini/.test(m)) return byKey('gpt-4o-mini');
+    if (/4o/.test(m)) return byKey('gpt-4o');
+    if (/qwen.*turbo/.test(m)) return byKey('qwen-turbo');
+    if (/qwen.*plus/.test(m)) return byKey('qwen-plus');
+    if (/glm.*flash/.test(m)) return byKey('glm-4-flash');
+    if (/glm/.test(m)) return byKey('glm-4');
+    if (/moonshot|kimi/.test(m)) return byKey('moonshot');
+    return null;
+  }
+  function aiBudgetCfg() {
+    if (!S.settings) S.settings = {};
+    if (!S.settings.aiBudget || typeof S.settings.aiBudget !== 'object') {
+      S.settings.aiBudget = { preset: '', inPrice: 2, outPrice: 8, limit: 0, warn: 80 };
+    }
+    const d = S.settings.aiBudget;
+    if (typeof d.preset !== 'string') d.preset = '';
+    if (typeof d.inPrice !== 'number') d.inPrice = 2;
+    if (typeof d.outPrice !== 'number') d.outPrice = 8;
+    if (typeof d.limit !== 'number') d.limit = 0;
+    if (typeof d.warn !== 'number') d.warn = 80;
+    return d;
+  }
+  /* 估算金额（元）：入 token×入价 + 出 token×出价，单价按「元/百万 token」 */
+  function aiCostOf(data, cfg) {
+    const c = cfg || aiBudgetCfg();
+    const pin = Number(c.inPrice) || 0, pout = Number(c.outPrice) || 0;
+    const it = Number(data && data.promptTokens) || 0;
+    const ot = Number(data && data.completionTokens) || 0;
+    return (it * pin + ot * pout) / 1e6;
+  }
+  function aiMoney(v) { const n = Number(v) || 0; return (n > 0 && n < 0.01) ? '¥' + n.toFixed(4) : '¥' + n.toFixed(2); }
+  /* 预算告警：AI 收尾后核对一次，跨过阈值/上限各提醒一次（重置统计后重新武装） */
+  const _aiBudgetWarned = { level: 0 };
+  function aiBudgetCheck() {
+    const cfg = aiBudgetCfg();
+    if (!(Number(cfg.limit) > 0) || !(window.api && window.api.aiUsage)) return;
+    window.api.aiUsage().then(data => {
+      const cost = aiCostOf(data, cfg);
+      const ratio = cost / Number(cfg.limit);
+      const level = ratio >= 1 ? 2 : (ratio >= (Number(cfg.warn) || 80) / 100 ? 1 : 0);
+      if (level > _aiBudgetWarned.level) {
+        _aiBudgetWarned.level = level;
+        if (level === 2) toast('⚠️ AI 花费已达预算上限（估算 ' + aiMoney(cost) + ' / ' + aiMoney(cfg.limit) + '），建议暂停或调高预算', 'err');
+        else toast('AI 花费已达预算 ' + (Number(cfg.warn) || 80) + '%（估算 ' + aiMoney(cost) + ' / ' + aiMoney(cfg.limit) + '）');
+      }
+    }).catch(() => {});
+  }
+  function aiBudgetPresetApply() {
+    const sel = q('aiBudgetPreset'); if (!sel) return;
+    const p = AI_PRICE_PRESETS.find(x => x.key === sel.value);
+    if (!p) return;
+    if (q('aiBudgetIn')) q('aiBudgetIn').value = p.in;
+    if (q('aiBudgetOut')) q('aiBudgetOut').value = p.out;
+    toast('已套用「' + p.label + '」单价，记得点保存');
+  }
+  function aiBudgetSave() {
+    const cfg = aiBudgetCfg();
+    const num = (id, dft) => { const el = q(id); const v = el ? parseFloat(el.value) : NaN; return isFinite(v) ? v : dft; };
+    cfg.preset = q('aiBudgetPreset') ? q('aiBudgetPreset').value : cfg.preset;
+    cfg.inPrice = Math.max(0, num('aiBudgetIn', cfg.inPrice));
+    cfg.outPrice = Math.max(0, num('aiBudgetOut', cfg.outPrice));
+    cfg.limit = Math.max(0, num('aiBudgetLimit', cfg.limit));
+    cfg.warn = Math.min(100, Math.max(1, num('aiBudgetWarn', cfg.warn)));
+    _aiBudgetWarned.level = 0; // 改完预算重新武装告警
+    persist();
+    toast('费用与预算设置已保存', 'ok');
+    aiOpenUsagePanel();
+  }
+
   /* ============== AI 用量面板（T28）==============
    * 展示本轮统计（调用次数 / 耗时 / token）与逐条明细，可重置统计时段并清空日志。 */
   function fmtClock(ms) { const s = Math.max(0, Math.round(ms / 1000)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60; return (h ? h + '时' : '') + (h || m ? m + '分' : '') + ss + '秒'; }
@@ -699,6 +828,14 @@
     let data = null;
     try { data = (window.api && window.api.aiUsage) ? await window.api.aiUsage() : null; } catch (_) { data = null; }
     const w = (S.settings && S.settings.aiUsageWindow) || 3600e3;
+    /* U2-5：首次打开时按当前配置的模型自动猜一个价格预设，省得用户手填 */
+    const budget = aiBudgetCfg();
+    if (!budget.preset) {
+      const p = aiPricePresetFor(S.settings.ai && S.settings.ai.model);
+      if (p) { budget.preset = p.key; budget.inPrice = p.in; budget.outPrice = p.out; persist(); }
+    }
+    const budgetCost = aiCostOf(data, budget);
+    const budgetRatio = Number(budget.limit) > 0 ? budgetCost / Number(budget.limit) : 0;
     const mask = q('modalMask'); const box = q('modalBox');
     let listRows;
     const entries = (data && data.entries) ? data.entries.concat().reverse() : [];
@@ -722,8 +859,29 @@
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
         <div class="usage-chip"><b>${fmtNum(data ? data.calls : 0)}</b> 次调用</div>
         <div class="usage-chip"><b>${fmtNum(data ? data.totalTokens : 0)}</b> token <span class="hint">(入 ${fmtNum(data ? data.promptTokens : 0)} / 出 ${fmtNum(data ? data.completionTokens : 0)})</span></div>
-        <div class="usage-chip"><b>${fmtClock(data ? data.msSum : 0)}</b> 总耗时</div>
+        <div class="usage-chip"><b>${fmtNum(data ? data.msSum : 0)}</b> 总耗时</div>
+        <div class="usage-chip"><b>${aiMoney(budgetCost)}</b> 估算花费${budget.limit > 0 ? `<span class="hint"> / 预算 ${aiMoney(budget.limit)}</span>` : ''}</div>
       </div>
+      ${budget.limit > 0 ? `<div style="margin-bottom:12px">
+        <div class="ai-budget-bar"><div class="ai-budget-fill ${budgetRatio >= 1 ? 'over' : (budgetRatio >= (Number(budget.warn) || 80) / 100 ? 'warn' : '')}" style="width:${Math.min(100, Math.round(budgetRatio * 100))}%"></div></div>
+        <div class="hint" style="margin-top:4px">已用 ${aiMoney(budgetCost)} / ${aiMoney(budget.limit)}（${Math.round(budgetRatio * 100)}%）${budgetRatio >= 1 ? ' · <b style="color:var(--danger)">已超预算</b>' : (budgetRatio >= (Number(budget.warn) || 80) / 100 ? ' · <b style="color:var(--warn)">接近预算</b>' : '')}</div>
+      </div>` : ''}
+      <details class="ai-budget-card">
+        <summary>💰 费用估算与预算设置</summary>
+        <div class="note" style="margin:8px 0">单价按<strong>元 / 百万 token</strong>填写，费用为<strong>估算值</strong>，仅供参考，实际以服务商账单为准。</div>
+        <div class="row" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <label style="display:flex;flex-direction:column;gap:4px">价格预设
+            <select id="aiBudgetPreset" onchange="WB.aiBudgetPresetApply()">
+              <option value="">— 手动填写 —</option>
+              ${AI_PRICE_PRESETS.map(p => `<option value="${p.key}"${budget.preset === p.key ? ' selected' : ''}>${esc(p.label)}（入 ${p.in} / 出 ${p.out}）</option>`).join('')}
+            </select></label>
+          <label style="display:flex;flex-direction:column;gap:4px">输入单价<input id="aiBudgetIn" type="number" min="0" step="0.01" value="${budget.inPrice}" style="width:100px"></label>
+          <label style="display:flex;flex-direction:column;gap:4px">输出单价<input id="aiBudgetOut" type="number" min="0" step="0.01" value="${budget.outPrice}" style="width:100px"></label>
+          <label style="display:flex;flex-direction:column;gap:4px">预算上限（元，0=不限）<input id="aiBudgetLimit" type="number" min="0" step="0.1" value="${budget.limit}" style="width:120px"></label>
+          <label style="display:flex;flex-direction:column;gap:4px">告警阈值（%）<input id="aiBudgetWarn" type="number" min="1" max="100" step="1" value="${budget.warn}" style="width:90px"></label>
+          <button onclick="WB.aiBudgetSave()">保存</button>
+        </div>
+      </details>
       <div class="hint" style="margin-bottom:6px">最近明细（时间倒序，最多 500 条）：</div>
       <div style="max-height:44vh;overflow:auto;border:1px solid var(--line);border-radius:10px">
         <table class="tbl" style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:5px 8px">时间</th><th style="text-align:left;padding:5px 8px">任务</th><th style="text-align:left;padding:5px 8px">耗时</th><th style="text-align:left;padding:5px 8px">token(入/出/总)</th><th style="text-align:left;padding:5px 8px">状态</th></tr></thead><tbody>${listRows}</tbody></table>
@@ -736,7 +894,7 @@
     mask.hidden = false;
   }
   async function aiUsageSetWindow(ms) { (S.settings.aiUsageWindow = ms); try { if (window.api && window.api.aiUsageReset) await window.api.aiUsageReset(ms === 0 ? 86400e6 : ms); } catch (_) {} persist(); toast('统计时段已切换'); aiOpenUsagePanel(); }
-  async function aiUsageResetPanel() { try { if (window.api && window.api.aiUsageReset) await window.api.aiUsageReset(0); } catch (_) {} toast('已清零本轮统计'); aiOpenUsagePanel(); }
+  async function aiUsageResetPanel() { try { if (window.api && window.api.aiUsageReset) await window.api.aiUsageReset(0); } catch (_) {} _aiBudgetWarned.level = 0; toast('已清零本轮统计'); aiOpenUsagePanel(); }
   function aiErrText(e) { return eiAIErr(e).msg; }
   function val(rid) { const e = q(rid); return e ? e.value : ''; }
   function fmtBytes(b) { const n = Number(b) || 0; if (n < 1024) return n + ' B'; if (n < 1048576) return (n / 1024).toFixed(1) + ' KB'; if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB'; return (n / 1073741824).toFixed(2) + ' GB'; }
@@ -1044,6 +1202,7 @@
     else if (view === 'help') renderHelp();
     else if (view === 'changelog') renderChangelog();
     else if (view === 'settings') renderSettings();
+    else if (view === 'datasteward') renderDataSteward();
     else if (view === 'maps') renderMaps();
     else if (view === 'dice') renderDice();
     else if (view === 'dicehost') renderDiceHost();
@@ -1194,12 +1353,96 @@
   function emptyStateHTML(o) {
     const opt = o || {};
     const preset = EMPTY_ILLUS[opt.art] || EMPTY_ILLUS.archive;
+    const learn = Array.isArray(opt.learn) ? opt.learn.filter(Boolean) : [];
     return `<div class="empty empty-illus">
       <img class="ei-img" src="${preset.img}" alt="" aria-hidden="true">
       <div class="ei-t">${esc(opt.title || preset.t)}</div>
       ${opt.desc ? `<div class="ei-d">${esc(opt.desc)}</div>` : ''}
+      ${learn.length ? `<div class="ei-learn"><div class="ei-learn-h">这里能做什么</div><ul>${learn.map(x => `<li>${x}</li>`).join('')}</ul></div>` : ''}
       ${opt.act ? `<div class="ei-act">${opt.act}</div>` : ''}
     </div>`;
+  }
+
+  /* ============================================================
+   * U1-4 就地帮助气泡
+   * 关键字段 / 按钮旁挂一个小「?」：悬停给一句话说明，点击直达帮助中心对应小节。
+   * 目的：把「要用时才去翻帮助中心」变成「就地可见 + 一键跳转」，降低上手门槛。
+   * 纯展示组件，不改变原控件的任何行为（stopPropagation 以免误触发所在行的点击）。
+   * ============================================================ */
+  function helpTip(catId, text) {
+    const id = String(catId || 'start');
+    const t = esc(text || '查看相关说明');
+    return `<span class="helptip" role="button" tabindex="0" title="${t}" aria-label="帮助：${t}"`
+      + ` onclick="event.stopPropagation();event.preventDefault();WB.helpGo('${id}')"`
+      + ` onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();WB.helpGo('${id}');}">?</span>`;
+  }
+  /* 跳到帮助中心指定小节：切视图后滚动 + 短暂高亮，让用户一眼看到那一块 */
+  function helpGo(catId) {
+    const id = HELP_CATS.some(c => c.id === catId) ? catId : 'start';
+    switchView('help');
+    requestAnimationFrame(() => {
+      const el = q('help-' + id);
+      if (!el) return;
+      try { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (_) {}
+      el.classList.add('help-flash');
+      setTimeout(() => el.classList.remove('help-flash'), 1600);
+    });
+  }
+
+  /* ============================================================
+   * U1-5 空状态即教学
+   * 空列表页不只说「还没有」，还要说清「这里能做什么」，并能一键载入示例数据，
+   * 让新用户立刻看到「一屏有内容」是什么样，再决定留下、改掉还是删掉。
+   * 示例只在对应类型为空时可载入，避免和真实资料混在一起。
+   * ============================================================ */
+  const EMPTY_LEARN = {
+    pcs: ['记录玩家扮演的角色：姓名 / 属性 / 技能 / 状态', '编辑卡片时可直接用侧栏对话让 AI 帮你补全', '被别的资料提及时会自动出现在关系网与出处清单里'],
+    npcs: ['登记非玩家角色：身份 / 阵营 / 所在地 / 秘密动机', '「秘密 / 动机」只给 KP 看，导出玩家资料包时自动剔除', '可从 NPC 跳去关系网，看它和谁有关系'],
+    regions: ['描述场景地点：类型 / 危险度 / 环境 / 关键地点', '区域可在「地图」里可视化，标出迷雾与标记', '危险度与距离圈可临场直接引用'],
+    logs: ['按次记录跑团：摘要 / 当前钩子 / 出场角色', '「钩子」即待兑现伏笔，会汇总进开团模式提醒你', '记录可交给 AI 批量润色成文章'],
+    mobs: ['登记敌人与遭遇：层级 / 血量 / 护甲 / 特性 / 弱点', '可在「临场战斗」里拉入遭遇并追血量与回合', '投骰会自动并入本场流水'],
+    rules: ['沉淀规则书条目：适用范围 / 要点 / 详细内容', '支持粘贴或导入 txt / md / docx / pdf', 'AI 拆分登记可把长文本一键拆成多张卡'],
+    lore: ['存放世界观与背景设定：概要 / 正文 / 来源', '可作为 AI 对话的参考背景自动注入', '同样支持导入与 AI 拆分']
+  };
+  /* 贴合本工作台世界观（残火纪）的示例内容；字段名与内置 schema 对齐，键值不合法会被 normFields 丢弃 */
+  const DEMO_SEED = {
+    pcs: [
+      { name: '灰烬行者', player: '示例玩家', path: '守夜人', subtitle: '余烬中的拾火者', level: 3, hp: 24, body: 55, agi: 60, wil: 70, per: 50, attribute: '在灰区长大，对雾蚀有天生的耐受力。', skill: ['侦察', '追踪', '残火辨识'], wound: '健康', status: '在队', note: '这是一条示例数据，可自由修改或删除。' },
+      { name: '缄默书记官', player: '示例玩家', path: '记录者', subtitle: '不落一字于纸', level: 2, hp: 18, body: 45, agi: 50, wil: 80, per: 65, attribute: '过目不忘，但拒绝把见闻写下。', skill: ['学识', '洞察', '交涉'], wound: '健康', status: '在队', note: '这是一条示例数据，可自由修改或删除。' }
+    ],
+    npcs: [
+      { name: '老灯匠', role: '灯油铺主', faction: '烬港商会', location: '烬港 · 下城区', rel: '友好', etype: '普通', personality: '唠叨、怕事，但重诺。', appearance: '左眼蒙着布，手上有灯油烧的旧疤。', secret: '替某个不该存在的人保管着一盏不灭的灯。', status: '活跃', note: '示例数据，可自由修改或删除。' },
+      { name: '无名副官', role: '巡查队副官', faction: '灰墙哨所', location: '灰区边缘', rel: '中立', etype: '精英', personality: '公事公办，不近人情。', secret: '私下在记录队里失踪者的名单。', status: '活跃', note: '示例数据，可自由修改或删除。' }
+    ],
+    regions: [
+      { name: '烬港', type: '城市', area: '三层环城，下城最深', danger: '中', env: '普通', dist: '中距', cover: '重掩护', desc: '靠海而建的旧港，地基里还压着上一场大火没烧尽的东西。', key: ['不灭灯塔', '旧船坞'], note: '示例数据，可自由修改或删除。' },
+      { name: '雾蚀带 · 第七折', type: '荒野', area: '沿旧堤延伸约十里', danger: '高', env: '雾蚀带', dist: '远距', cover: '轻掩护', desc: '雾会记住走过的人，重复他们的脚步。', key: ['折痕界碑', '倒行的足迹'], note: '示例数据，可自由修改或删除。' }
+    ],
+    logs: [
+      { name: '第一幕 · 雨夜入港', when: '示例日期', summary: '一行人随货船抵达烬港，在灯油铺避雨时听说了灯塔的怪事。', hook: '老灯匠提到一盏「不该还亮着的灯」——待查。', actors: ['灰烬行者', '老灯匠'], status: '进行中', note: '示例数据，可自由修改或删除。' }
+    ],
+    mobs: [
+      { name: '余烬残影', category: '暗灵', tier: '普通', lv: 2, hp: 12, av: 1, dmg: '1d6 灼烧', trait: ['雾中现身', '怕强光'], weak: '强光与冷铁', note: '示例数据，可自由修改或删除。' },
+      { name: '灰墙巡守·改', category: '构装体', tier: '精英', lv: 4, hp: 30, av: 4, dmg: '2d6 钝击', trait: ['不吃控制', '自我修复'], weak: '核心接缝', note: '示例数据，可自由修改或删除。' }
+    ],
+    rules: [
+      { name: '残火检定', scope: '通用', summary: '以 d100 对比目标值，出目越低越好，96-100 为大失败。', detail: '示例：检索线索 → 1d100 ≤ 感知×2 为成功。', source: '本表示例规则', tags: ['核心', '检定'], note: '示例数据，可自由修改或删除。' }
+    ],
+    lore: [
+      { name: '大熄灭', category: '历史', summary: '数十年前，城中所有明火在一夜之间同时熄灭，只有一盏灯例外。', content: '大熄灭之后，灰区的边界才第一次被人画出来。没人说得清是火先灭，还是雾先来。', origin: '本表示例设定', tags: ['核心', '谜团'], note: '示例数据，可自由修改或删除。' }
+    ]
+  };
+  /* 一键载入示例：仅在对应类型为空时可用，写入后立即持久化并跳回该页，可自由改删 */
+  function loadDemo(kind) {
+    const arr = S.data.entities[kind] || (S.data.entities[kind] = []);
+    if (arr.length) { toast('这里已有内容，示例只在空列表时载入，避免与你的资料混在一起', 'err'); return; }
+    const seed = DEMO_SEED[kind] || [];
+    if (!seed.length) { toast('该类型暂未准备示例', 'err'); return; }
+    for (const it of seed) arr.push(normFields(kind, Object.assign({ id: uid(), source: '示例数据' }, it)));
+    pushAudit('create', kind, '载入示例（' + seed.length + ' 条）');
+    persist();
+    switchView(kind);
+    toast('已载入 ' + seed.length + ' 条示例' + (DATA_TYPE[kind] || '') + '，可直接改或删', 'ok');
   }
 
   /* 参考格局：总览 · 「今天要处理」面板 */
@@ -1597,12 +1840,16 @@
       else {
         const isNote = (kind === 'logs' || kind === 'lore' || kind === 'rules');
         const label = DATA_TYPE[kind] || '内容';
+        const demoN = (DEMO_SEED[kind] || []).length;
         html += emptyStateHTML({
           art: isNote ? 'note' : 'archive',
           title: isNote ? `还没有写下${label}` : `还没有${label}档案`,
           desc: isNote ? `把${label}记下来，之后可随时检索、引用与导出。`
                        : `建立第一条${label}，让故事线逐步铺开。`,
+          learn: EMPTY_LEARN[kind],
           act: `<button onclick="WB.add('${kind}')">＋ 新增${label}</button>`
+            + (demoN ? `<button class="ghost" onclick="WB.loadDemo('${kind}')" title="仅在空列表时可载入，写入后可自由修改或删除">↧ 载入 ${demoN} 条示例，先看看效果</button>` : '')
+            + helpTip('data', `看看「${label}」能做什么`)
         });
       }
     }
@@ -1627,7 +1874,7 @@
                 <button class="ghost" onclick="event.preventDefault();event.stopPropagation();WB.dupCard('${kind}','${it.id}')" title="复制">⧉</button>
                 <button class="danger" onclick="event.preventDefault();event.stopPropagation();WB.del('${kind}','${it.id}')">删除</button>
               </span></summary>
-            <div class="rc-body">${selVals ? `<div class="tags">${selVals}</div>` : ''}${inner || '<div class="row" style="color:var(--ink-faint)">暂无正文</div>'}</div>
+            <div class="rc-body">${selVals ? `<div class="tags">${selVals}</div>` : ''}${relatedChipsHTML(kind, it)}${inner || '<div class="row" style="color:var(--ink-faint)">暂无正文</div>'}</div>
           </details>`;
         }
         const favStar = isFav(kind, it.id) ? '★' : '☆';
@@ -1640,6 +1887,7 @@
             <span class="fav-btn" onclick="WB.toggleFav('${kind}','${it.id}')" title="收藏/取消收藏">${favStar}</span>
           </div>
           ${selVals ? `<div class="tags">${selVals}</div>` : ''}
+          ${relatedChipsHTML(kind, it)}
           <div class="kv">${inner || '<div class="row" style="color:var(--ink-faint)">暂无正文</div>'}</div>
           <div class="card-actions">
             <button class="ghost" onclick="WB.edit('${kind}','${it.id}')">编辑</button>
@@ -1821,7 +2069,11 @@
       <button class="ghost" onclick="WB.tagRenameModal()" title="改正标签的拼写或统一叫法">✎ 重命名</button>
       <button class="ghost" onclick="WB.tagMergeModal()" title="把多个同义标签合并为一个">⧉ 合并标签</button>
       <button onclick="WB.addTagGlobal()" title="新建标签并把它加到指定资料">＋ 新建标签</button></div>`;
-    if (!rows.length) { html += `<div class="empty">还没有标签。可在编辑人物卡/NPC/怪物时，在「标签/关键词」类字段填写逗号分隔的标签。</div>`; contentInner(html); return; }
+    if (!rows.length) { html += `<div class="empty">还没有标签。可在编辑人物卡/NPC/怪物时，在「标签/关键词」类字段填写逗号分隔的标签。
+      <div class="ei-learn" style="text-align:left;margin:14px auto 0;max-width:460px"><div class="ei-learn-h">这里能做什么</div><ul>
+        <li>把散落的资料按标签聚合，开团前快速挑出「这一场要用到的东西」</li>
+        <li>点任意标签即按标签筛选，配合全局搜索能秒定位</li>
+      </ul></div></div>`; contentInner(html); return; }
     html += `<div class="cardgrid">`;
     for (const r of rows) {
       const kindsBadge = Object.keys(r.used).slice(0, 4).map(k => `<span class="ctag">${DATA_TYPE[k] || k}</span>`).join('');
@@ -2706,6 +2958,53 @@
     if (!hits.length) return '';
     return `<span class="xref-badge" onclick="WB.xrefOpen('${escJs(selfKind)}','${escJs(selfId)}')" title="被 ${hits.length} 处提及，点击查看">⇄ 引用 ${hits.length}</span>`;
   }
+  /* ===== U2-3 视图内「相关功能」跳转 =====
+   * 卡片上一排快捷入口：关系网定位 / 所属地区 / 相关遭遇，免去回侧栏重新找路径。
+   * 关联判定复用既有字段与遭遇单位引用，不额外建索引。 */
+  function relatedRegionsOf(kind, it) {
+    if (kind === 'regions' || !it) return [];
+    const regions = (S.data.entities && S.data.entities.regions) || [];
+    if (!regions.length) return [];
+    const LOC_KEYS = ['location', 'region', 'area', 'place', 'city', 'country'];
+    let loc = '';
+    for (const k of LOC_KEYS) { if (it[k]) { loc = String(it[k]); break; } }
+    const body = Object.keys(it)
+      .filter(k => ['id', 'name', 'title', 'source', 'tpl'].indexOf(k) === -1)
+      .map(k => (Array.isArray(it[k]) ? it[k].join(' ') : String(it[k] == null ? '' : it[k])))
+      .join(' ');
+    const hit = [];
+    for (const r of regions) {
+      const rn = String(r.name || '').trim();
+      if (!rn) continue;
+      if ((loc && (loc.indexOf(rn) !== -1 || rn.indexOf(loc) !== -1)) || body.indexOf(rn) !== -1) hit.push(r);
+    }
+    return hit.slice(0, 3);
+  }
+  function relatedEncountersOf(kind, id) {
+    const encs = (S.data.entities && S.data.entities.encounters) || [];
+    return encs.filter(e => Array.isArray(e.units) && e.units.some(u => u && u.refKind === kind && u.refId === id));
+  }
+  function relatedChipsHTML(kind, it) {
+    if (!it || !it.id) return '';
+    const chips = [`<button class="rel-chip" onclick="WB.relGoNode('${escJs(kind)}','${escJs(it.id)}')" title="在关系网中定位该节点">⇄ 关系网</button>`];
+    for (const r of relatedRegionsOf(kind, it)) {
+      chips.push(`<button class="rel-chip" onclick="WB.goToEntity('regions','${escJs(r.id)}')" title="跳转到地区：${esc(r.name)}">📍 ${esc(r.name)}</button>`);
+    }
+    const encs = relatedEncountersOf(kind, it.id);
+    for (const e of encs.slice(0, 3)) {
+      chips.push(`<button class="rel-chip" onclick="WB.encGoFromCard('${escJs(e.id)}')" title="跳转到遭遇：${esc(e.name)}">⚔ ${esc(e.name)}</button>`);
+    }
+    if (encs.length > 3) chips.push(`<span class="rel-chip more">+${encs.length - 3} 场遭遇</span>`);
+    return `<div class="rel-chips">${chips.join('')}</div>`;
+  }
+  /* 跳到关系网并定位同名节点（找不到则提示可新增/导入） */
+  function relGoNode(kind, id) {
+    const it = (S.data.entities[kind] || []).find(x => x.id === id);
+    if (!it) return;
+    _relFocus = { name: String(it.name || '').trim(), kind };
+    switchView('relations');
+  }
+  function encGoFromCard(id) { switchView('encounter'); encOpen(id); }
   /* 打开“被引用”弹窗：列出提及它的卡，点击跳转并高亮 */
   function xrefOpen(kind, id) {
     const it = (S.data.entities[kind] || []).find(x => x.id === id);
@@ -3345,10 +3644,10 @@
   function renderAIConf() {
     const ai = S.settings.ai || {};
     const ready = aiReady();
-    let html = `<div class="page-title"><h2>AI 配置</h2><span class="hint">全局接口地址 / 密钥 / 模型独立一栏；AI 助手、剧本解析、记录润色统一使用</span></div>
+    let html = `<div class="page-title"><h2>AI 配置${helpTip('ai', 'AI 接口怎么填、去哪儿申请 Key')}</h2><span class="hint">全局接口地址 / 密钥 / 模型独立一栏；AI 助手、剧本解析、记录润色统一使用</span></div>
     ${ready ? '' : aiDegradeHTML()}
     <div class="setgrid">
-      <div class="setcard"><h4>接口连接</h4>
+      <div class="setcard"><h4>接口连接${helpTip('ai', '三步配好：选服务商 → 粘 Key → 保存并测试')}</h4>
         <div class="row"><label>快速配置：选择服务商，自动填入地址与推荐模型</label>
           <div class="toolbar" style="flex-wrap:wrap;gap:8px">
             <select id="aif_preset" onchange="WB.applyAiPreset(this.value)">
@@ -3841,8 +4140,14 @@
       <span class="grow"></span>
       <span class="hint">共 ${list.length} 场</span></div>`;
     if (!list.length) html += `<div class="empty">还没有遭遇。先登记 NPC / 怪物 / 人物卡，再点「➕ 新建遭遇」，把交战单位拉入即可开启回合追踪；在「骰娘鉴定」投掷会自动并入本场流水。
-      <div class="toolbar" style="margin-top:10px;justify-content:flex-start;flex-wrap:wrap">
+      <div class="ei-learn" style="text-align:left;margin:14px auto 0;max-width:460px"><div class="ei-learn-h">这里能做什么</div><ul>
+        <li>把交战单位拉进来，逐单位管理血量与状态（昏迷 / 血流 / 中毒 / 狂暴…）</li>
+        <li>开启回合追踪：当前行动者高亮，可前进 / 后退 / 跳转</li>
+        <li>投骰自动并入本场流水，结算时标记我方胜利 / 败北 / 弃置</li>
+      </ul></div>
+      <div class="toolbar" style="margin-top:10px;justify-content:center;flex-wrap:wrap">
         <button onclick="WB.encNew()">➕ 立即新建遭遇</button>
+        ${helpTip('tools', '遭遇战怎么打、回合怎么走')}
         <span class="grow"></span></div></div>`;
     else {
       html += `<div class="enc-list">` + list.map(e => {
@@ -4465,7 +4770,7 @@
     let html = `<div class="page-title"><h2>帮助中心</h2><span class="hint">功能使用手册 · 开团流程 · AI 配置 · 分门别类随时查阅</span></div>`;
     html += `<div class="helpgrid"><aside class="helpnav">`;
     for (const c of HELP_CATS) {
-      html += `<button class="ghost helpnav-item" onclick="document.getElementById('help-${c.id}').scrollIntoView({behavior:'smooth',block:'start'})">${c.ic} ${c.title}</button>`;
+      html += `<button class="ghost helpnav-item" onclick="WB.helpGo('${c.id}')">${c.ic} ${c.title}</button>`;
     }
     html += `</aside><div class="helpbody">`;
     for (const c of HELP_CATS) {
@@ -4831,10 +5136,22 @@
       const memMap = {};
       (Array.isArray(memories) ? memories : []).forEach(m => { memMap[m.key] = m; });
       S._hubMemories = memMap;
+      /* U2-4 叙事风格包：预置文风一键切换，注入所有 AI 场景的最前面（优先级最高） */
+      S._stylePacks = Array.isArray(masterInfo && masterInfo.stylePacks) ? masterInfo.stylePacks : [];
+      const styleNow = ((S.settings.prompts && S.settings.prompts.style) || (masterInfo && masterInfo.style) || {}) || {};
+      const styleKey = styleNow.key || 'none';
+      const styleText = styleNow.text || '';
       let h = `<h4>总提示词（每次 AI 运行都会注入）</h4>
         <div class="note" style="margin-bottom:8px">以下为总则，出现在<strong>每一次</strong> AI 调用（工作台助手、资料生成、剧本解析、骰娘对话/优化/插话、KP 建议）的最前面。留空则使用内置默认。</div>
         <textarea id="hubMaster" rows="4" placeholder="${esc((masterInfo && masterInfo.default) || '')}">${esc(masterVal)}</textarea>
         <div style="margin-top:6px"><button class="ghost small" onclick="WB.hubResetMaster()">恢复默认</button></div>
+        <h4 style="margin-top:20px">叙事风格包（一键切换整体文风）</h4>
+        <div class="note" style="margin-bottom:8px">选一个预设即可让所有 AI 按该文风作答——会作为<strong>最高优先级</strong>偏好注入到每次 AI 运行的最前面。下方文本框可微调，保存后生效；选「不使用」即关闭。</div>
+        <div class="row full">
+          <label>风格预设${helpTip('ai', '风格包会覆盖各场景里的文风描述，适合不熟悉提示词的用户快速切换整体叙事口吻。')}</label>
+          <select id="hubStyle" onchange="WB.hubStyleChange()">${(S._stylePacks || []).map(p => `<option value="${esc(p.key)}"${p.key === styleKey ? ' selected' : ''}>${esc(p.label)}</option>`).join('')}</select>
+          <textarea id="hubStyleText" rows="2" style="margin-top:6px" placeholder="将注入的叙事风格（可自定义）">${esc(styleText)}</textarea>
+        </div>
         <h4 style="margin-top:20px">各场景提示词</h4>
         <div class="note" style="margin-bottom:8px">每个使用 AI 的地方对应一个场景。留空 = 使用内置模板；修改后点下方「保存总提示词 + 场景提示词」生效。占位符（如 {world}、{label}）运行时会自动替换。</div>`;
       for (const sc of S._hubScenes) {
@@ -4867,6 +5184,13 @@
     ta.value = (sc && sc.sys) || '';
     toast('已恢复「' + ((sc && sc.label) || key) + '」内置模板（保存后生效）');
   }
+  /* U2-4 切换风格预设：把预置文本填入可编辑文本框（保存后才生效） */
+  function hubStyleChange() {
+    const sel = q('hubStyle'); const ta = q('hubStyleText');
+    if (!sel || !ta) return;
+    const pack = (S._stylePacks || []).find(p => p.key === sel.value);
+    ta.value = (pack && pack.text) || '';
+  }
   async function hubSave() {
     const scenes = {};
     for (const sc of (S._hubScenes || [])) {
@@ -4875,12 +5199,15 @@
     }
     const masterTa = q('hubMaster');
     const master = masterTa ? masterTa.value.trim() : '';
+    const styleSel = q('hubStyle'); const styleTa = q('hubStyleText');
+    const style = { key: styleSel ? styleSel.value : 'none', text: styleTa ? styleTa.value.trim() : '' };
     try {
-      await window.api.promptHubSave({ master, scenes });
+      await window.api.promptHubSave({ master, scenes, style });
       S.settings.prompts = S.settings.prompts || {};
       S.settings.prompts.master = master;
+      S.settings.prompts.style = style;
       S.settings.prompts.scenes = Object.assign(S.settings.prompts.scenes || {}, scenes);
-      toast('提示词中枢已保存（总提示词 + 各场景提示词）', 'ok');
+      toast(style.text ? ('提示词中枢已保存，风格包「' + ((S._stylePacks || []).find(p => p.key === style.key) || {}).label + '」已生效') : '提示词中枢已保存（总提示词 + 各场景提示词）', 'ok');
     } catch (e) { toast('保存失败：' + ((e && e.message) || e), 'bad'); }
   }
   async function hubViewMemory(key) {
@@ -5866,6 +6193,107 @@
     setTimeout(() => location.reload(), 900);
   }
 
+  /* ========== U1-10 数据管家 ==========
+   * 把此前散落在顶栏 / 设置 / 状态条的「数据在哪」集中成一页：数据路径 + 占用体积 +
+   * 备份时间线 + 一键全量导出 / 恢复。降低「找不到、不敢动」的迁移焦虑。 */
+  /* 顶层条目 → 中文分桶名（未识别的归入其它，不丢信息） */
+  function dsKindLabel(e) {
+    const MAP = { backups: '自动备份', snapshots: '版本快照', maps: '地图底图', memories: '场景记忆', logs: '运行记录', uploads: '上传附件' };
+    if (MAP[e.name]) return MAP[e.name];
+    if (e.name === 'kp-data.json') return '主档案数据';
+    if (/^kp-/.test(e.name)) return '团档案数据';
+    return e.dir ? '其它文件夹' : '配置文件';
+  }
+  async function renderDataSteward() {
+    contentInner(`<div class="page-title"><h2>数据管家</h2><span class="hint">数据存放在哪、占多大、有哪些备份、如何整包带走或恢复，一页看全</span></div>
+      <div class="toolbar"><button class="ghost" onclick="WB.go('datasteward')">↻ 刷新</button>
+        <button class="ghost" onclick="WB.dsBackupNow()">🛟 立即备份</button>
+        <span class="grow"></span>
+        <button class="ghost" onclick="WB.dsOpenFolder()">📂 打开数据文件夹</button>
+        <button onclick="WB.dsExportFull()">📦 一键全量导出</button>
+        <button class="ghost" onclick="WB.dsImportFull()">↥ 从全量备份恢复…</button>
+      </div>
+      <div id="dsBody"><div class="note">读取中…</div></div>`);
+    dsRefresh();
+  }
+  async function dsRefresh() {
+    const box = q('dsBody'); if (!box) return;
+    let info; try { info = await window.api.dataSteward(); } catch (_) { info = null; }
+    if (!info) { box.innerHTML = '<div class="note">读取数据信息失败</div>'; return; }
+    const mode = info.portable ? '绿色版 / 便携版（数据随包，可整个文件夹拷贝搬迁）' : '安装版（数据在系统用户目录，用新安装包覆盖升级不丢数据）';
+    const total = info.total || 0;
+    const rows = (info.entries || []).map(e => {
+      const pct = total ? Math.max(1, Math.round(e.bytes / total * 100)) : 0;
+      return `<div class="ds-row"><span class="ds-name">${esc(dsKindLabel(e))}<span class="hint"> · ${esc(e.name)}</span></span>
+        <span class="ds-bar"><i style="width:${pct}%"></i></span>
+        <span class="ds-size">${fmtBytes(e.bytes)}</span></div>`;
+    }).join('') || '<div class="hint">暂无数据文件</div>';
+    const tlRow = (b, kind) => {
+      const fn = 'WB.' + (kind === 'backup' ? 'dsRestoreBackup' : 'dsRestoreSnapshot');
+      const label = kind === 'backup' ? '还原' : '回滚到此';
+      return `<div class="ds-tl-row"><span class="ds-tl-dot ${kind}"></span>
+      <span class="ds-tl-time">${new Date(b.modified).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+      <span class="hint">${fmtBytes(b.size)}</span><span class="grow"></span>
+      <button class="ghost small" onclick="${fn}('${escJs(b.file)}')">${label}</button></div>`;
+    };
+    const bkRows = (info.backups || []).slice(0, 15).map(b => tlRow(b, 'backup')).join('')
+      || '<div class="hint">尚无自动备份，可点上方「立即备份」或等待自动备份。</div>';
+    const snRows = (info.snapshots || []).slice(0, 15).map(b => tlRow(b, 'snap')).join('')
+      || '<div class="hint">尚无版本快照：编辑数据后会自动沉淀（保留最近 40 份）。</div>';
+    const lastBk = info.lastBackupAt ? new Date(info.lastBackupAt).toLocaleString('zh-CN') : '—';
+    const cnt = info.counts || {};
+    const cntHtml = KINDS.map(k => `<span class="ds-chip">${esc(DATA_TYPE[k])} <b>${cnt[k] || 0}</b></span>`).join('');
+    box.innerHTML = `
+      <div class="setcard"><h4>① 数据在哪</h4>
+        <div class="ds-path"><code>${esc(info.folder)}</code></div>
+        <div class="hint" style="margin-top:6px">${esc(mode)}</div>
+        <div class="hint" style="margin-top:6px">当前档案：<b>${esc(info.archive || 'main')}</b> · 自动备份间隔 ${info.autoBackupMinutes || 30} 分钟 · 最近备份 ${esc(lastBk)}</div>
+        ${info.writeError ? `<div class="ds-warn">⚠️ 上次写盘失败：${esc(info.writeError.error || '')} —— 建议立即「一键全量导出」留档，并检查磁盘空间。</div>` : ''}
+      </div>
+      <div class="setcard"><h4>② 占用体积 <span class="hint">合计 ${fmtBytes(total)}</span></h4>${rows}</div>
+      <div class="setcard"><h4>③ 备份时间线 <span class="hint">各显示最近 15 份</span></h4>
+        <div class="ds-tl"><div class="ds-tl-title">自动备份（整档还原）</div>${bkRows}
+          <div class="ds-tl-title" style="margin-top:12px">版本快照（回滚到某一版）</div>${snRows}</div></div>
+      <div class="setcard"><h4>④ 一键全量导出 / 恢复</h4>
+        <div class="note">「全量导出」把整个数据目录（含团档案、备份、快照、底图、场景记忆）原样打包到你选定的位置，换机交接或整包留档都靠它；「从全量备份恢复」选定一个备份文件夹整包并回，恢复前会自动为当前数据留一份安全备份。</div>
+        <div class="toolbar" style="margin-top:10px"><button onclick="WB.dsExportFull()">📦 一键全量导出</button>
+          <button class="ghost" onclick="WB.dsImportFull()">↥ 从全量备份恢复…</button>
+          <button class="ghost" onclick="WB.dsOpenFolder()">📂 打开数据文件夹</button></div>
+        <div class="hint" style="margin-top:8px">只想带走/合并「资料 + AI 内容」时，可继续用「偏好设置 → 数据」里的「导出 JSON / 导入 JSON」。</div>
+      </div>
+      <div class="setcard"><h4>数据构成</h4><div class="ds-chips">${cntHtml}</div></div>`;
+  }
+  async function dsBackupNow() { await doBackup(); dsRefresh(); }
+  async function dsOpenFolder() { try { await window.api.openFolder(); } catch (_) {} }
+  async function dsExportFull() {
+    const r = await window.api.dataExportFull();
+    if (!r) { toast('导出失败', 'err'); return; }
+    if (r.canceled) return;
+    if (!r.ok) { toast(r.error || '导出失败', 'err'); return; }
+    toast('已导出全量备份（' + r.files + ' 个文件）到：' + r.target, 'ok');
+  }
+  async function dsImportFull() {
+    if (!(await appConfirm('从全量备份恢复', '将选定一个全量备份文件夹并把内容并入当前数据目录，当前档案会被覆盖。\n\n恢复前会自动为当前数据留一份安全备份。确定继续？'))) return;
+    const r = await window.api.dataImportFull();
+    if (!r) { toast('恢复失败', 'err'); return; }
+    if (r.canceled) return;
+    if (!r.ok) { toast(r.error || '恢复失败', 'err'); return; }
+    toast('已从全量备份恢复 ' + r.copied + ' 个文件，正在刷新…' + (r.safety ? '（已为原数据留安全备份）' : ''), 'ok');
+    setTimeout(() => location.reload(), 900);
+  }
+  async function dsRestoreBackup(file) {
+    if (!(await appConfirm('还原备份', '将从备份「' + file + '」还原当前档案，当前数据会被覆盖。确定？'))) return;
+    const r = await window.api.backups.restore(file);
+    if (!r.ok) { toast('还原失败：' + (r.error || ''), 'err'); return; }
+    await reloadAll(); toast('已从备份还原', 'ok');
+  }
+  async function dsRestoreSnapshot(file) {
+    if (!(await appConfirm('回滚快照', '将回滚到版本快照「' + file + '」，当前未备份的改动会丢失。确定？'))) return;
+    const r = await window.api.snapshots.restore(file);
+    if (!r.ok) { toast('回滚失败：' + (r.error || ''), 'err'); return; }
+    await reloadAll(); toast('已回滚到该版本快照', 'ok');
+  }
+
   /* ========== 原始文本界面（去除无效乱码 → 纯净文本 → AI 带团建议） ========== */
   /* 去除无效乱码：只保留常见可见字符与排版字符，尽量保留原文结构（换行/段落/常见标点） */
   function cleanText(raw) {
@@ -6536,7 +6964,14 @@
   /* ========== 地图 · 列表 ========== */
   function mapsListHtml() {
     const list = mapsData();
-    if (!list.length) return `<div class="empty">还没有地图，点击“＋ 新建地图”导入底图开始布置，或用 AI 快速生成一版。</div>`;
+    if (!list.length) return `<div class="empty">还没有地图，点击“＋ 新建地图”导入底图开始布置，或用 AI 快速生成一版。
+      <div class="ei-learn" style="text-align:left;margin:14px auto 0;max-width:480px"><div class="ei-learn-h">这里能做什么</div><ul>
+        <li>上传底图 + 网格 + 标记 + 区域 + 迷雾，支持缩放平移，全程无需 AI</li>
+        <li>或粘贴一段文字描述，让 AI 生成一版草案，预览确认后再应用</li>
+        <li>可导出 PNG，开团时投给玩家看（KP 专属信息不会被导出）</li>
+      </ul></div>
+      <div class="toolbar" style="margin-top:10px;justify-content:center">${helpTip('tools', '地图怎么建、怎么投给玩家')}</div>
+    </div>`;
     return `<div class="map-grid">${list.map(m => `
       <div class="map-card">
         <div class="map-thumb">${m.img ? `<img src="${esc(m.img)}" alt="">` : '<span class="map-ph">占位底图</span>'}</div>
@@ -7597,7 +8032,7 @@
   }
 
   function renderDice() {
-    contentInner(diceBoardHTML(`<div class="page-title"><h2>骰娘鉴定</h2>
+    contentInner(diceBoardHTML(`<div class="page-title"><h2>骰娘鉴定${helpTip('tools', '支持哪些规则、表达式怎么写、AI 判定怎么用')}</h2>
       <span class="hint">离线通用投掷 · 规则检定 · 可接 AI 或人物卡 Excel 定向判定</span></div>`));
     bindDice();
   }
@@ -8048,8 +8483,66 @@
   const _dw = { simMsgs: [], logPanel: null, replyPack: null, filter: '' };
   function dwApi() { return (window.api && window.api.diceCore) ? window.api.diceCore : null; }
   function dwNetCfg() {
-    if (!S.settings.diceNet) S.settings.diceNet = { onebot11: { host: '127.0.0.1', port: 6700 }, qqofficial: {}, sim: {} };
+    if (!S.settings.diceNet) S.settings.diceNet = { qqdirect: { uin: '' }, onebot11: { host: '127.0.0.1', port: 6700 }, qqofficial: {}, sim: {} };
+    if (!S.settings.diceNet.qqdirect) S.settings.diceNet.qqdirect = { uin: '' };
     return S.settings.diceNet;
+  }
+  /* ===== QQ 直连登入：状态面板重绘 + 动作分发 =====
+   * 只替换 #qqdPanel 片段，不重建账号输入框（避免用户输入被抹掉）；状态一律以主进程 status() 为准，
+   * 因为它持有二维码 / 验证阶段的权威状态，登录事件到达时也会经 onQqEvent 主动推送。 */
+  function paintQqDirect() {
+    const panel = document.getElementById('qqdPanel'); if (!panel) return;
+    const CC = window.DiceUIConnCenter || {};
+    const st = _dw.qqStatus || { state: 'stopped' };
+    panel.innerHTML = (CC.renderQqDirectPanel || (() => ''))(st);
+    const light = document.getElementById('qqdLight');
+    if (light) {
+      const running = st.state === 'running', err = st.state === 'error';
+      light.className = 'dice-light ' + (running ? 'on' : (err ? 'fail' : 'off'));
+      light.textContent = running ? '在线' : (err ? '异常' : '未在线');
+    }
+  }
+  async function refreshQqDirect() {
+    const api = dwApi();
+    if (!api || !api.diceQq) return;
+    if (!document.getElementById('qqdPanel')) return;
+    try { _dw.qqStatus = await api.diceQq.status(); } catch (_) { _dw.qqStatus = _dw.qqStatus || { state: 'stopped' }; }
+    paintQqDirect();
+  }
+  function subscribeQqEvents() {
+    if (_dw.qqSub) return;
+    const api = dwApi();
+    if (!api || !api.diceQq || !api.diceQq.onQqEvent) return;
+    _dw.qqSub = true;
+    api.diceQq.onQqEvent((v) => {
+      _dw.qqStatus = v || _dw.qqStatus; paintQqDirect();
+      if (!v) return;
+      if (v.type === 'online') toast('QQ 骰娘已登入' + (v.nickname || v.uin ? '：' + (v.nickname || v.uin) : ''), 'ok');
+      else if (v.type === 'offline' || v.type === 'login-error') toast('QQ 登入异常：' + (v.lastError || ''), 'err');
+      else if (v.type === 'engine-missing') toast(v.lastError || '未找到 QQ 协议引擎', 'err');
+    });
+  }
+  async function qqDirectAct(act) {
+    const api = dwApi();
+    if (!api || !api.diceQq) { toast('当前环境未暴露 QQ 直连接口', 'err'); return; }
+    const uinEl = document.querySelector('[data-channel="qqdirect"] input[data-field="uin"]');
+    const pwdEl = document.getElementById('qqdPassword');
+    const uin = uinEl ? uinEl.value.trim() : '';
+    if (uin) { const c = dwNetCfg(); c.qqdirect.uin = uin; persist(); }
+    try {
+      if (act === 'qq-qr') { toast('正在获取二维码…', ''); await api.diceQq.login({ mode: 'qr', uin }); }
+      else if (act === 'qq-pwd') {
+        const password = pwdEl ? pwdEl.value : '';
+        if (!uin) { toast('请先填写 QQ 账号', 'err'); return; }
+        if (!password) { toast('请填写密码，或改用扫码登录', 'err'); return; }
+        toast('正在登录…', ''); await api.diceQq.login({ mode: 'password', uin, password });
+        if (pwdEl) pwdEl.value = ''; // 密码不落地、不驻留
+      } else if (act === 'qq-confirm') { await api.diceQq.confirmQr(); }
+      else if (act === 'qq-slider') { await api.diceQq.slider((document.getElementById('qqdSlider') || {}).value || ''); }
+      else if (act === 'qq-sms') { await api.diceQq.sms((document.getElementById('qqdSms') || {}).value || ''); }
+      else if (act === 'qq-logout') { await api.diceQq.logout(); toast('已退出 QQ 登录', 'ok'); }
+    } catch (e) { toast('QQ 直连操作失败：' + ((e && e.message) || e), 'err'); }
+    await refreshQqDirect();
   }
   async function refreshConnCenter() {
     const CC = window.DiceUIConnCenter || {};
@@ -8060,11 +8553,16 @@
       try {
         const list = await dwApi().diceNet.list();
         for (const item of list || []) {
+          if (item.id === 'qqdirect') continue; // 直连状态由 #qqdPanel 专用区展示（含二维码/验证），不走通用状态灯
           const h = el.querySelector(`[data-channel="${item.id}"] h4`);
           if (h) h.insertAdjacentHTML('beforeend', ' ' + ((CC.renderStatusLight || (() => ''))(item.status)));
         }
       } catch (_) {}
     }
+    // QQ 直连：绑定专属按钮 + 事件订阅 + 首次拉取状态
+    el.querySelectorAll('[data-qact]').forEach((btn) => { btn.onclick = () => qqDirectAct(btn.getAttribute('data-qact')); });
+    subscribeQqEvents();
+    await refreshQqDirect();
     // 输入框：实时写回配置并持久化。这是关键——否则用户填写后一重渲染就被清空，启动也读不到值（旧 bug：点启动内容消失 + 提示缺少 appId/clientSecret）。
     el.querySelectorAll('[data-channel]').forEach((card) => {
       const ch = card.getAttribute('data-channel');
@@ -8540,12 +9038,13 @@
     setAiGenType, aiGenForType, globalSearch, setGType, goToEntity,
     importContent, doImport, doImportAndIntegrate, aiIntegrate, aiGenForView, doSplitRegister,
     savePrompts, resetPrompt, promptVersionList, promptCompare, promptRestoreVersion,
-    hubResetMaster, hubResetScene, hubSave, hubViewMemory, hubSaveMemory, hubClearMemory,
+    hubResetMaster, hubResetScene, hubStyleChange, hubSave, hubViewMemory, hubSaveMemory, hubClearMemory,
     runAudit,
     createArchive, createArchiveHome, switchArchive, switchHome: switchArchive, dupArchive, delArchive, restoreBackup, restoreSnapshot,
     setSettingsTab, setAiFlag, saveAutoBackup,
     shortcutEdit, shortcutReset, shortcutEditEnd, setSingleKeyNav,
     openQuickNote, closeQuickNote, quickNoteAdd, quickNoteDel, quickNoteArchive, quickNoteArchiveAll,
+    helpGo, loadDemo,
     toggleSidebar, openPalette, openGlobalSearch, closeGlobalSearch, onboardDismiss, exportView, exportPick,
     openChat, doParse, scriptImportFile, captureScript, commitScript, clearScript, editPersona, savePersona, testPersona, delPersona, setActive, togglePersona,
     setFieldKind: (v) => { S.editFieldKind = v; paintFieldEditor(v); },
@@ -8556,7 +9055,7 @@
     readSheet, sheetUsage, aiJudge, aiJudgeExplain, checkUpdate,
     startUpdateDownload, restartUpdate, laterUpdate, openReleasePage, saveUpdateSettings,
     relAddNode, relSaveNewNode, relSaveNode, relDelNode, relAddEdge, relSaveNewEdge, relSaveEdge, relDelEdge,
-    relEdgePick, relConfirmEdge, relLayout, relUndo, relClear, relImportEnts, relAiSuggest,
+    relEdgePick, relConfirmEdge, relLayout, relUndo, relClear, relImportEnts, relAiSuggest, relGoNode,
     relToggleList, relListPick, relFilter, relZoomIn, relZoomOut, relFit, relCenter, toggleDrawerScript, setImportTpl,
     relToggleAll, relApplyOps,
     rawInput, rawClear, rawSuggest, rawExport, removePendFile, clearPendFiles,
@@ -8570,16 +9069,18 @@
     mapAi, mapAiFillText, mapAiFillChat, mapAiRun, mapAiApply,
     toggleFav, toggleBatch, toggleSel, batchSelectAll, batchFav, batchDel, batchExport,
     dupCard, dedupKind,
+    dsRefresh, dsBackupNow, dsOpenFolder, dsExportFull, dsImportFull, dsRestoreBackup, dsRestoreSnapshot,
     navBack, navForward, toggleWizard,
     openAiLedger, aiLandRevert, aiLandRevertAll,
-    aiCancelCurrent, aiOpenUsagePanel, aiUsageResetPanel, aiUsageSetWindow,
+    aiCancelCurrent, aiAbortAll, aiOpenUsagePanel, aiUsageResetPanel, aiUsageSetWindow,
+    aiBudgetSave, aiBudgetPresetApply,
     xrefOpen, xrefGo, consistencyOpen,
     tagJump, tagFilter, tagRenameModal, tagMergeModal, tagMergeInto, addTagGlobal,
     handoutOpen, handoutExport, toggleHandoutAll,
     toggleMoreMenu, setDensity, toggleDensity, openCtx, setCustomOrder, applyCustomOrder, bindCardDrag,
     toggleCabinet, cabPick,
     encNew, encOpen, closeEnc, encDel, encSetFlow, encPull, encAddManual, encDelUnit, encHp, encToggleStatus,
-    encNext, encPrev, encNextTo, encGoRef, encSettle,
+    encNext, encPrev, encNextTo, encGoRef, encGoFromCard, encSettle,
     polishLogs, aiWriteScript, saveNarrStyle,
     statsExport, statsCopy,
     runlogRefresh, runlogFilter, runlogPickDay, runlogClearFilter, runlogExport, runlogOpen
@@ -8625,6 +9126,7 @@
   const REL_ECOLOR = { ally: '#3fa37f', enemy: '#e05d5d', sub: '#5d7fd6', un: '#9aa3b5', def: '#8a93a6' };
   function relEdgeColor(t) { return REL_ECOLOR[t] || REL_ECOLOR.def; }
   const _rel = { tx: 80, ty: 60, k: 1, W: 900, H: 600, sel: null, drag: null, pan: null, edgeMode: false, pendingFrom: null, svg: null, _escInstalled: false, _resizeInstalled: false, undo: [], filter: '' };
+  let _relFocus = null;   // U2-3：由卡片「⇄ 关系网」带入的待定位节点（进入关系网视图后消费一次）
 
   function relData() {
     if (!S.data.relations) S.data.relations = { nodes: [], edges: [] };
@@ -8635,6 +9137,25 @@
   }
   function relPersist(msg) { pushAudit('关系网', 'edit', '关系网'); persist(); if (msg) toast(msg, 'ok'); }
   function relGetNode(r, id) { return r.nodes.find(n => n.id === id); }
+  /* U2-3：把关系网定位到指定名称的节点（优先同名同类型，其次同名），居中并选中 */
+  function relFocusNode(name, kind) {
+    const r = relData();
+    if (!name) return false;
+    const n = r.nodes.find(x => (x.label || '') === name && (!kind || !x.kind || x.kind === kind))
+      || r.nodes.find(x => (x.label || '') === name);
+    if (!n) {
+      toast('关系网里还没有「' + name + '」节点：可点「＋ 新增节点」或「从资料导入」后再来定位', 'warn');
+      return false;
+    }
+    _rel.sel = n.id;
+    if (typeof n.x === 'number' && typeof n.y === 'number') {
+      _rel.tx = _rel.W / 2 - n.x * _rel.k;
+      _rel.ty = _rel.H / 2 - n.y * _rel.k;
+    }
+    relPaint();
+    toast('已定位到关系网节点「' + name + '」', 'ok');
+    return true;
+  }
   function relKindLabel(v) { const f = REL_KINDS.find(k => k[0] === v); return f ? f[1] : ''; }
   /* 关系网撤销：在“一键整理/删除节点/删除连线/清空”等破坏性操作前，把当前布点存档，可一键还原 */
   function relPushUndo() {
@@ -8703,6 +9224,8 @@
     /* 必须先绑定新 svg 再绘制：contentInner 已卸载旧 svg，_rel.svg 仍指向旧节点会让画布空白 */
     const svg = q('relSvg'); _rel.svg = svg;
     relPaint();
+    /* U2-3：若由卡片「⇄ 关系网」带入待定位节点，进入后消费一次（居中并选中） */
+    if (_relFocus) { const f = _relFocus; _relFocus = null; relFocusNode(f.name, f.kind); }
     svg.addEventListener('pointerdown', relPointerDown);
     svg.addEventListener('pointermove', relPointerMove);
     svg.addEventListener('pointerup', relPointerUp);

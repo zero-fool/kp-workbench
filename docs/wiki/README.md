@@ -14,7 +14,7 @@
 | 01 | [架构总览](01-架构总览.md) | 进程模型、分层结构、数据流、目录结构 |
 | 02 | [主进程](02-主进程.md) | Electron 主进程职责、IPC 通道清单、入口与生命周期 |
 | 03 | [骰娘内核 dice-core](03-骰娘内核-dice-core.md) | expr / calc / rules / brain / plugin / ports / reply / state / hub |
-| 04 | [网络通道 dice-net](04-网络通道-dice-net.md) | OneBot 11 / QQ 官方机器人 / 应用内测试通道 / WS 传输 |
+| 04 | [网络通道 dice-net](04-网络通道-dice-net.md) | QQ 直连（扫码/账密） / OneBot 11 / QQ 官方机器人 / 应用内测试通道 / WS 传输 |
 | 05 | [渲染层 renderer](05-渲染层-renderer.md) | 页面结构、preload 契约、UI 组件、交互模型 |
 | 06 | [数据存储与持久化](06-数据存储与持久化.md) | DataStore、分片存储、备份/快照/档案、迁移 |
 | 07 | [AI 能力集成](07-AI能力集成.md) | ai.js、dice-ai、prompt-hub、请求守卫与任务队列 |

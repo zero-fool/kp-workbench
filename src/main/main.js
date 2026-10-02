@@ -32,6 +32,17 @@ function copyDirRec(from, to) {
   return n;
 }
 function dirContentCount(d) { try { return fs.readdirSync(d).length; } catch (_) { return 0; } }
+/* 递归统计目录占用字节（供「数据管家」显示体积）；读不到的文件按 0 计，不抛错 */
+function dirSize(dir) {
+  let n = 0;
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return 0; }
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    try { n += e.isDirectory() ? dirSize(p) : fs.statSync(p).size; } catch (_) {}
+  }
+  return n;
+}
 function autoMigrateLegacyData(target) {
   if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_DIR) return false;
   if (dirContentCount(target) > 0) return false; // 用户目录已有数据，不迁移
@@ -132,6 +143,10 @@ if (!Array.isArray(doc.settings.templates)) doc.settings.templates = [];
   for (const key of Object.keys(promptHub.defaultScenes())) {
     if (!sp.scenes[key] || typeof sp.scenes[key] !== 'object') sp.scenes[key] = {};
   }
+  /* U2-4 叙事风格包：选中键 + 生效文本（非空文本才注入） */
+  if (!sp.style || typeof sp.style !== 'object') sp.style = { key: 'none', text: '' };
+  if (typeof sp.style.key !== 'string') sp.style.key = 'none';
+  if (typeof sp.style.text !== 'string') sp.style.text = '';
 }
 /* 分场景记忆文件目录：data/memories/<scene>.md，供每次 AI 运行按场景注入"本场景"记忆尾部 */
 const memoryDirPath = promptHub.memoryDir(dataDir);
@@ -418,6 +433,74 @@ function registerIpc() {
     folder: store.folder,
     portable: !!process.env.PORTABLE_EXECUTABLE_DIR && app.isPackaged
   }));
+  /* ---- U1-10 数据管家：一页看清「数据在哪 / 多大 / 有哪些备份 / 一键整包导出入 ---- */
+  ipcMain.handle('data:steward', () => {
+    const folder = store.folder;
+    const m = store.meta();
+    /* 顶层条目逐个计体积，便于渲染层分桶展示（数据 / 备份 / 快照 / 底图 / 记忆 / 档案） */
+    const entries = [];
+    try {
+      for (const e of fs.readdirSync(folder, { withFileTypes: true })) {
+        const p = path.join(folder, e.name);
+        let bytes = 0;
+        try { bytes = e.isDirectory() ? dirSize(p) : fs.statSync(p).size; } catch (_) {}
+        entries.push({ name: e.name, dir: e.isDirectory(), bytes });
+      }
+    } catch (_) {}
+    entries.sort((a, b) => b.bytes - a.bytes);
+    return {
+      folder, portable: !!process.env.PORTABLE_EXECUTABLE_DIR && app.isPackaged,
+      archive: store.name, total: dirSize(folder), entries,
+      backups: store.listBackups(), snapshots: store.listSnapshots(),
+      lastBackupAt: store.lastBackupAt(), autoBackupMinutes: store.autoBackupMinutes(),
+      counts: m.counts, archives: m.archives, writeError: m.writeError
+    };
+  });
+  /* 全量导出：把整个数据目录原样复制到用户选定位置（含档案 / 备份 / 快照 / 底图 / 记忆），
+   * 换机交接、整包留档皆可；返回目标路径供界面回显。 */
+  ipcMain.handle('data:exportFull', async () => {
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择“全量备份”保存到的文件夹（会在其中新建一个备份子文件夹）',
+      buttonLabel: '导出到此文件夹', properties: ['openDirectory', 'createDirectory']
+    });
+    if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+    const base = path.resolve(store.folder);
+    const parent = path.resolve(r.filePaths[0]);
+    if (parent === base || parent.startsWith(base + path.sep)) return { ok: false, error: '不能导出到当前数据目录内部，请另选位置' };
+    const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+    const dest = path.join(parent, 'KP跑团工作台-全量备份-' + stamp);
+    try {
+      const n = copyDirRec(store.folder, dest);
+      runlog.info('全量导出', { target: dest, files: n });
+      return { ok: true, target: dest, files: n };
+    } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+  });
+  /* 全量恢复：选定一个「全量备份」文件夹，先给当前数据自动留一份安全备份，再并入恢复。 */
+  ipcMain.handle('data:importFull', async () => {
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择要恢复的“全量备份”文件夹（内含 kp-data.json）',
+      buttonLabel: '从此文件夹恢复', properties: ['openDirectory']
+    });
+    if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+    const src = r.filePaths[0];
+    if (path.resolve(src) === path.resolve(store.folder)) return { ok: false, error: '所选即当前数据目录，无需恢复' };
+    let looksValid = false;
+    try {
+      looksValid = fs.existsSync(path.join(src, 'kp-data.json'))
+        || fs.existsSync(path.join(src, 'backups'))
+        || fs.readdirSync(src).some(f => /^kp-/.test(f));
+    } catch (_) {}
+    if (!looksValid) return { ok: false, error: '所选文件夹不像全量备份（未找到 kp-data.json）' };
+    let safety = null;
+    try { const b = store.backup(); safety = b && b.name; } catch (_) {}
+    try {
+      const n = copyDirRec(src, store.folder);
+      doc = store.load();
+      if (!doc.fields) doc.fields = ai.defaultFields();
+      runlog.warn('全量恢复', { source: src, files: n, safety });
+      return { ok: true, copied: n, target: store.folder, safety };
+    } catch (e) { return { ok: false, error: '恢复失败：' + ((e && e.message) || e) }; }
+  });
   ipcMain.handle('ai:chat', async (e, messages) => {
     const opts = Object.assign(aiOpFlags(), { settings: doc.settings, loreText: buildLoreText(), memoryText: memoryText(), userPrefsText: userPrefsText(), toolContext: { entities: doc.entities || {}, uploads: recentUploads.slice(-20), relations: doc.relations || { nodes: [], edges: [] } } });
     const reply = await ai.chat(currentProfile(), messages || [], ai.effectiveFields(doc), aiCfg('chat', 'AI 对话'), worldName(), opts);
@@ -1167,7 +1250,12 @@ function registerIpc() {
 
   /* ---- 提示词中枢（promptHub）：总提示词 + 各场景可编辑提示词 + 分场景记忆文件 ---- */
   ipcMain.handle('promptHub:listScenes', () => (promptHub.list() || []).map(s => Object.assign({}, s, promptHub.effective(s.key, doc.settings))));
-  ipcMain.handle('promptHub:masterOf', () => ({ master: promptHub.masterOf(doc.settings), default: promptHub.DEFAULT_MASTER }));
+  ipcMain.handle('promptHub:masterOf', () => ({
+    master: promptHub.masterOf(doc.settings),
+    default: promptHub.DEFAULT_MASTER,
+    style: (doc.settings.prompts && doc.settings.prompts.style) || { key: 'none', text: '' },
+    stylePacks: promptHub.stylePacks()
+  }));
   ipcMain.handle('promptHub:savePrompts', (e, prompts) => {
     prompts = prompts || {};
     if (!doc.settings.prompts) doc.settings.prompts = {};
@@ -1181,6 +1269,12 @@ function registerIpc() {
         if (typeof ov.user === 'string') sc[key].user = ov.user;
       }
       for (const key of Object.keys(promptHub.defaultScenes())) if (!sc[key] || typeof sc[key] !== 'object') sc[key] = {};
+    }
+    /* U2-4 风格包：key + text 一并落盘 */
+    if (prompts.style && typeof prompts.style === 'object') {
+      const st = doc.settings.prompts.style || (doc.settings.prompts.style = { key: 'none', text: '' });
+      if (typeof prompts.style.key === 'string') st.key = prompts.style.key;
+      if (typeof prompts.style.text === 'string') st.text = prompts.style.text;
     }
     store.save(doc);
     doc = store.load();
@@ -1410,7 +1504,12 @@ function registerIpc() {
     memes: memeStore,
     getConfig() { return diceAiSwitches(); }
   });
-  const diceWorkbench = createDiceRuntime({ store: diceStorePort, ai: diceAI, transformReplies, cfg: { onebot11: {}, qqofficial: {}, sim: {} } });
+  const diceWorkbench = createDiceRuntime({
+    store: diceStorePort, ai: diceAI, transformReplies,
+    cfg: { qqdirect: {}, onebot11: {}, qqofficial: {}, sim: {} },
+    dataDir: path.join(dataDir, 'qq'),           // QQ 直连引擎登录态存放目录
+    onQqEvent: (payload) => { try { if (win && win.webContents) win.webContents.send('dice-qq:event', payload); } catch (_) {} },
+  });
   global.diceNetAdapters = diceWorkbench.adapters; // 兼容既有 before-quit 回收逻辑
 
   // 连接中心（分区 2）
@@ -1418,6 +1517,13 @@ function registerIpc() {
   ipcMain.handle('diceNet:start', async (e, id, cfg) => diceWorkbench.netStart(id, cfg));
   ipcMain.handle('diceNet:stop', async (e, id) => diceWorkbench.netStop(id));
   ipcMain.handle('diceNet:status', (e, id) => diceWorkbench.status(id));
+  // QQ 直连登入（软件内扫码 / 账密，不经 OneBot 中转）
+  ipcMain.handle('diceQq:login', async (e, opts) => diceWorkbench.qqLogin(opts || {}));
+  ipcMain.handle('diceQq:confirmQr', () => diceWorkbench.qqConfirmQr());
+  ipcMain.handle('diceQq:slider', async (e, ticket) => diceWorkbench.qqSubmitSlider(ticket));
+  ipcMain.handle('diceQq:sms', async (e, code) => diceWorkbench.qqSubmitSms(code));
+  ipcMain.handle('diceQq:logout', () => diceWorkbench.qqLogout());
+  ipcMain.handle('diceQq:status', () => diceWorkbench.qqStatus());
   // 指令日志（分区 3）
   ipcMain.handle('diceLog:query', (e, opts) => diceWorkbench.logQuery(opts || {}));
   ipcMain.handle('diceLog:export', () => diceWorkbench.logExport());

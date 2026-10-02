@@ -20,8 +20,12 @@ function createDiceRuntime(deps) {
   const stateBox = createStateBox();
   const hub = createHub({ store, ai: o.ai, transformReplies: o.transformReplies });
 
-  // 三通道装配（Tasks 2/5/6 已完成真实实现），统一接入 hub
-  const adapters = createChannelAdapters({ state: stateBox, cfg, store, hub });
+  // 四通道装配（qqdirect 直连 / onebot11 中继 / qqofficial 官方 / sim），统一接入 hub。
+  // dataDir 供 QQ 直连引擎存放登录态；onQqEvent 把登录/二维码/掉线变化上报主进程再广播渲染层。
+  const adapters = createChannelAdapters({
+    state: stateBox, cfg, store, hub,
+    dataDir: o.dataDir, onQqEvent: o.onQqEvent,
+  });
   for (const a of adapters) hub.attach(a);
 
   // 分区 3 指令日志（单一数据源：hub 事件流）。{time, sessionId, user, text, reply}
@@ -123,6 +127,21 @@ function createDiceRuntime(deps) {
   function status(id) { const a = adapters.find((x) => x.id === id) || { status: () => ({ state: 'stopped' }) }; return a.status(); }
   function netList() { return adapters.map((a) => ({ id: a.id, status: a.status() })); }
 
+  // QQ 直连（qqdirect）：软件内扫码 / 账密登入，不经 OneBot 中转。
+  // 适配器自身在登录过程里通过 onQqEvent 持续上报二维码与状态，这里只做转发与状态回执。
+  function qqAdapter() { return adapters.find((a) => a.id === 'qqdirect'); }
+  async function qqLogin(opts) {
+    const a = qqAdapter();
+    if (!a) throw new Error('QQ 直连通道未装配');
+    await a.start(opts || {});
+    return a.status();
+  }
+  async function qqConfirmQr() { const a = qqAdapter(); return a ? a.confirmQr() : false; }
+  async function qqSubmitSlider(ticket) { const a = qqAdapter(); if (!a) throw new Error('QQ 直连通道未装配'); await a.submitSlider(ticket); return a.status(); }
+  async function qqSubmitSms(code) { const a = qqAdapter(); if (!a) throw new Error('QQ 直连通道未装配'); await a.submitSms(code); return a.status(); }
+  async function qqLogout() { const a = qqAdapter(); return a ? a.logout() : { state: 'stopped' }; }
+  function qqStatus() { const a = qqAdapter(); return a ? a.status() : { state: 'stopped' }; }
+
   // 分区 3 日志查询/导出
   function logQuery({ sessionId = '', limit = 200, keyword = '' } = {}) {
     for (const id of Array.from(logPending.keys())) flushPending(id); // 冲刷未回显的指令，确保不漏记
@@ -164,7 +183,12 @@ function createDiceRuntime(deps) {
     for (const a of adapters) { try { await a.stop(); } catch (_) {} }
   }
 
-  return { hub, adapters, stateBox, netStart, netStop, status, netList, simSend, logQuery, logExport, replyLoad, replySave, replyImport, dispose };
+  return {
+    hub, adapters, stateBox,
+    netStart, netStop, status, netList, simSend,
+    qqLogin, qqConfirmQr, qqSubmitSlider, qqSubmitSms, qqLogout, qqStatus,
+    logQuery, logExport, replyLoad, replySave, replyImport, dispose,
+  };
 }
 
 module.exports = { createDiceRuntime };

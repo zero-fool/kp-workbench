@@ -59,32 +59,103 @@ const AI_GROUPS = {
 const AI_GROUP_LABEL = { chat: '对话类任务', cards: '资料类任务', scenario: '剧本分幕', map: '地图生成', tpl: '模板生成', sys: '连接测试/审查', misc: 'AI 任务' };
 const aiGroupState = {}; // group -> { count, label }
 function aiGroupRunningCount() { let n = 0; for (const g in aiGroupState) n += aiGroupState[g].count; return n; }
+/* ===== U1-8 AI 任务队列 =====
+ * 原策略是「同类型任务一次只放行一项，再点直接拒绝」，用户连点多个生成只会被拦。
+ * 现改为：同类型已在跑时把新任务「排队」，跑完自动按顺序接力；跨类型仍并行。
+ * 队列只存在内存（关掉应用即清空），上限防止无节制堆积把内存和 token 打爆。 */
+const aiQueue = [];        // [{ id, name, label, group, reject, start }]
+const AI_QUEUE_MAX = 20;
+let _aiQid = 0;
+function aiQueueInfo() { return aiQueue.map(q => ({ id: q.id, name: q.name, label: q.label, group: q.group })); }
+function aiActiveInfo() {
+  return Object.keys(aiGroupState).filter(g => aiGroupState[g].count > 0)
+    .map(g => ({ group: g, label: aiGroupState[g].label, count: aiGroupState[g].count }));
+}
 function aiBroadcast() {
   const active = Object.keys(aiGroupState).filter(g => aiGroupState[g].count > 0);
   const label = active.map(g => (active.length === 1 ? '' : (AI_GROUP_LABEL[g] || g) + '：') + aiGroupState[g].label).join('；');
-  try { ipcRenderer.send('ai:busy', { on: active.length > 0, label, count: aiGroupRunningCount(), groups: active }); } catch (_) {}
+  try {
+    ipcRenderer.send('ai:busy', {
+      on: active.length > 0 || aiQueue.length > 0,
+      label, count: aiGroupRunningCount(), groups: active,
+      active: aiActiveInfo(), queued: aiQueue.length, queue: aiQueueInfo()
+    });
+  } catch (_) {}
 }
-/* 对某类型发起取消（请求新会话中止，安全幂等） */
+/* 实际执行一项（已在跑或刚从队列取出时调用）：计数 + 广播 + 结束递减并接力下一项 */
+function aiRunTask(task) {
+  const group = task.group;
+  const st = aiGroupState[group] || (aiGroupState[group] = { count: 0, label: '' });
+  st.count++; st.label = task.label; aiBroadcast();
+  const done = () => {
+    const s = aiGroupState[group];
+    if (s) { s.count = Math.max(0, s.count - 1); if (!s.count) s.label = ''; }
+    aiPump(group);
+    aiBroadcast();
+  };
+  let p;
+  try { p = Promise.resolve(task.run()); } catch (err) { done(); return Promise.reject(err); }
+  return p.then(v => { done(); return v; }, e => { done(); throw e; });
+}
+/* 该组空闲时，把队列里同组的下一项取出来执行（保持同组严格串行） */
+function aiPump(group) {
+  const st = aiGroupState[group];
+  if (st && st.count > 0) return;
+  const i = aiQueue.findIndex(q => q.group === group);
+  if (i < 0) return;
+  const task = aiQueue.splice(i, 1)[0];
+  try { task.start(); } catch (_) {}
+}
+/* 对某类型发起取消（请求新会话中止，安全幂等）；同时清掉该组排队中的任务 */
 function aiCancel(group) {
   try { ipcRenderer.send('ai:cancel', { group }); } catch (_) {}
-  return { ok: true, group };
+  let dropped = 0;
+  for (let i = aiQueue.length - 1; i >= 0; i--) {
+    if (aiQueue[i].group === group) {
+      const q = aiQueue.splice(i, 1)[0];
+      try { q.reject(new Error('AI_CANCELLED 该任务已取消（排队中）')); } catch (_) {}
+      dropped++;
+    }
+  }
+  aiBroadcast();
+  return { ok: true, group, dropped };
+}
+/* 清空排队 + 中止全部在飞任务（渲染层「清空排队」用） */
+function aiAbortAll() {
+  let dropped = 0;
+  while (aiQueue.length) {
+    const q = aiQueue.shift();
+    try { q.reject(new Error('AI_CANCELLED 该任务已取消（排队中）')); } catch (_) {}
+    dropped++;
+  }
+  const groups = Object.keys(aiGroupState).filter(g => aiGroupState[g].count > 0);
+  for (const g of groups) { try { ipcRenderer.send('ai:cancel', { group: g }); } catch (_) {} }
+  aiBroadcast();
+  return { ok: true, dropped, cancelled: groups.length };
 }
 /* 包一层：按组计数并广播；结束（无论成功或失败）递减并广播，绝不漏掉收尾。
- * 同组在飞时拦截并说明原因；跨组并行不受影响。 */
+ * 同组在飞时不再拒绝，而是排队等待接力；跨组并行不受影响。 */
 function aiGuard(name, call) {
   const label = AI_LABELS[name] || 'AI 处理中';
   const group = AI_GROUPS[name] || 'misc';
   return function () {
-    const st = aiGroupState[group] || (aiGroupState[group] = { count: 0, label: '' });
-    if (st.count > 0) {
-      return Promise.reject(new Error('AI_BUSY 正在处理「' + (st.label || label)
-        + '」。同类型任务一次只发一项，请等它完成后再试；不同类型（如对话/地图）可同时进行。'));
+    const args = arguments;
+    const st = aiGroupState[group];
+    if (st && st.count > 0) {
+      if (aiQueue.length >= AI_QUEUE_MAX) {
+        return Promise.reject(new Error('AI_BUSY 排队已满（上限 ' + AI_QUEUE_MAX + ' 项），请等前面的任务跑完，或点「排队」清空后重试。'));
+      }
+      return new Promise((resolve, reject) => {
+        const task = { id: ++_aiQid, name, label, group, reject, start: null };
+        task.start = () => {
+          try { resolve(aiRunTask({ group, label, run: () => call.apply(null, args) })); }
+          catch (e) { reject(e); }
+        };
+        aiQueue.push(task);
+        aiBroadcast();
+      });
     }
-    st.count++; st.label = label; aiBroadcast();
-    const done = () => { const s = aiGroupState[group]; if (s) { s.count = Math.max(0, s.count - 1); if (!s.count) s.label = ''; } aiBroadcast(); };
-    let p;
-    try { p = Promise.resolve(call.apply(null, arguments)); } catch (err) { done(); return Promise.reject(err); }
-    return p.then(v => { done(); return v; }, e => { done(); throw e; });
+    return aiRunTask({ group, label, run: () => call.apply(null, args) });
   };
 }
 
@@ -98,6 +169,10 @@ contextBridge.exposeInMainWorld('api', {
   openFolder: () => ipcRenderer.invoke('store:openFolder'),
   importLegacyData: () => ipcRenderer.invoke('store:importLegacyData'),
   dataInfo: () => ipcRenderer.invoke('store:dataInfo'),
+  /* U1-10 数据管家：数据路径 / 体积 / 备份时间线 / 全量整包导出与恢复 */
+  dataSteward: () => ipcRenderer.invoke('data:steward'),
+  dataExportFull: () => ipcRenderer.invoke('data:exportFull'),
+  dataImportFull: () => ipcRenderer.invoke('data:importFull'),
   /* —— 以下为 AI 接口：均已套上「提示 + 防重复」守卫 ——
    * 注意末尾的 ()：aiGuard 返回的是「被守卫过的函数」，这里必须立刻调用它才会真正走守卫，
    * 只写 aiGuard(...) 而不调用，等于守卫没生效（请求照发、提示不亮）。 */
@@ -128,6 +203,8 @@ contextBridge.exposeInMainWorld('api', {
   },
   /* 取消某一类型在飞 AI 任务（形参为 AI_GROUPS 中的组名，如 'chat'/'cards'/'map'） */
   aiCancel: (group) => aiCancel(group),
+  /* 清空排队并中止全部在飞任务（渲染层「清空排队」按钮用） */
+  aiAbortAll: () => aiAbortAll(),
   /* 用量面板：读取/重置本轮 AI 用量统计（token + 耗时） */
   aiUsage: () => ipcRenderer.invoke('ai:usage'),
   aiUsageReset: (bucketMs) => ipcRenderer.invoke('ai:usageReset', bucketMs),
@@ -235,6 +312,17 @@ contextBridge.exposeInMainWorld('api', {
       start: (id, cfg) => ipcRenderer.invoke('diceNet:start', id, cfg),
       stop: (id) => ipcRenderer.invoke('diceNet:stop', id),
       status: (id) => ipcRenderer.invoke('diceNet:status', id)
+    },
+    /* QQ 直连登入：软件内扫码 / 账密直接登入 QQ，无需 OneBot 协议端中转。
+     * login(opts) 的 opts = { mode:'qr'|'password', uin, password }；登录过程状态经 onQqEvent 持续推送。 */
+    diceQq: {
+      login: (opts) => ipcRenderer.invoke('diceQq:login', opts || {}),
+      confirmQr: () => ipcRenderer.invoke('diceQq:confirmQr'),
+      slider: (ticket) => ipcRenderer.invoke('diceQq:slider', ticket),
+      sms: (code) => ipcRenderer.invoke('diceQq:sms', code),
+      logout: () => ipcRenderer.invoke('diceQq:logout'),
+      status: () => ipcRenderer.invoke('diceQq:status'),
+      onQqEvent: (cb) => { ipcRenderer.on('dice-qq:event', (_e, v) => cb(v)); }
     },
     state: {
       load: (key) => ipcRenderer.invoke('diceState:load', key),

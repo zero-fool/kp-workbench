@@ -576,17 +576,33 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
 });
 
 (async () => {
-  await checkAsync('AI 守卫：未完成时重复点击会被拦下（不重复发车）', async () => {
-    const { api } = loadPreload();
+  /* U1-8 起：同类型在飞不再直接拒绝，而是排队接力（旧断言「重复点击被拦下」随之更新） */
+  await checkAsync('AI 守卫：同类型在飞时排队接力（不再直接拒绝）+ 跑完自动释放', async () => {
+    const { api, events } = loadPreload();
     if (!api) return 'preload 未加载';
     const first = api.aiTest();
-    let blocked = '';
-    try { await api.aiTest(); } catch (e) { blocked = String((e && e.message) || e); }
-    if (!/AI_BUSY/.test(blocked)) return '重复请求未被拦下，实际=' + JSON.stringify(blocked);
-    await first;
+    const second = api.aiTest(); // 同类型：应入队等待，而不是被拒
+    let secondErr = '';
+    const secondP = second.catch(e => { secondErr = String((e && e.message) || e); });
+    const sawQueued = events.some(([, v]) => v && Number(v.queued) >= 1);
+    await first; await secondP;
+    if (secondErr) return '第二个请求被拒绝（应排队等待）: ' + secondErr;
+    if (!sawQueued) return '排队时未广播 queued 状态';
     let after = '';
     try { await api.aiTest(); } catch (e) { after = String((e && e.message) || e); }
     return /AI_BUSY/.test(after) ? '结束后仍未释放（一直被判为忙）' : true;
+  });
+  await checkAsync('AI 守卫：排队上限保护（超过 20 项才报 AI_BUSY）', async () => {
+    const { api } = loadPreload();
+    if (!api) return 'preload 未加载';
+    const ps = [];
+    for (let i = 0; i < 22; i++) ps.push(api.aiTest().catch(e => String((e && e.message) || e)));
+    const r = await Promise.all(ps);
+    const full = r.filter(x => /AI_BUSY/.test(String(x))).length;
+    const ok = r.filter(x => x && typeof x === 'object').length;
+    if (full < 1) return '超过上限仍未拦截';
+    if (ok < 20) return '正常排队项被误伤（成功 ' + ok + ' 项）: ' + JSON.stringify(r.slice(0, 3));
+    return true;
   });
   await checkAsync('AI 守卫：开始广播 on=true、结束广播 on=false 且带可读标签', async () => {
     const { api, events } = loadPreload();
@@ -1683,6 +1699,194 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       && /gmEnter, gmExit, toggleGmMode, gmSceneGo, gmRoll,/.test(src) ? true : '开团模式门控样式或挂载缺失';
   });
 
+  /* ---- U1-4 就地帮助气泡 ---- */
+  check('U1-4 气泡组件：helpTip 定义 + 键盘可达 + 直跳帮助锚点', () => {
+    return /function helpTip\(catId, text\)/.test(src) && /role="button" tabindex="0"/.test(src)
+      && /WB\.helpGo\('\$\{id\}'\)/.test(src) ? true : 'helpTip 组件缺失';
+  });
+  check('U1-4 跳转：helpGo 切到帮助视图并滚动 + 高亮对应小节', () => {
+    return /function helpGo\(catId\)/.test(src) && /switchView\('help'\)/.test(src)
+      && /q\('help-' \+ id\)/.test(src) && /classList\.add\('help-flash'\)/.test(src) ? true : 'helpGo 跳转/高亮缺失';
+  });
+  check('U1-4 接线：帮助中心导航走 helpGo，卡片带可定位锚点', () => {
+    return /helpnav-item" onclick="WB\.helpGo\('\$\{c\.id\}'\)"/.test(src)
+      && /id="help-\$\{c\.id\}"/.test(src) ? true : '帮助中心锚点接线缺失';
+  });
+  check('U1-4 就地接入：AI 配置 / 骰娘 / 地图 / 遭遇 / 资料 等关键处已挂「?」', () => {
+    const n = (src.match(/helpTip\(/g) || []).length;
+    return (n >= 6 && /helpTip\('ai'/.test(src) && /helpTip\('tools'/.test(src) && /helpTip\('data'/.test(src))
+      ? true : '就地帮助接入点不足（实际 ' + n + ' 处）';
+  });
+  check('U1-4 挂载与样式：WB.helpGo + .helptip 样式 + 高亮动画', () => {
+    return /helpGo, loadDemo,/.test(src) && /\.helptip/.test(U0css) && /help-flash/.test(U0css) ? true : 'helpTip 未挂载或样式缺失';
+  });
+
+  /* ---- U1-5 空状态即教学 ---- */
+  const U1learnBlk = src.slice(src.indexOf('const EMPTY_LEARN'), src.indexOf('const DEMO_SEED'));
+  const U1seedBlk = src.slice(src.indexOf('const DEMO_SEED'), src.indexOf('function loadDemo'));
+  check('U1-5 教学空态：emptyStateHTML 支持「这里能做什么」清单', () => {
+    return /const learn = Array\.isArray\(opt\.learn\)/.test(src) && /ei-learn-h">这里能做什么/.test(src)
+      ? true : '空态教学清单缺失';
+  });
+  check('U1-5 内容：EMPTY_LEARN 与 DEMO_SEED 各覆盖 7 类资料', () => {
+    const kinds = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
+    return kinds.every(k => new RegExp('\\b' + k + ': \\[').test(U1learnBlk))
+      && kinds.every(k => new RegExp('\\b' + k + ': \\[').test(U1seedBlk)) ? true : '教学/示例未覆盖 7 类';
+  });
+  check('U1-5 载入：loadDemo 仅空列表可用 + 落盘 + 回跳该页', () => {
+    return /function loadDemo\(kind\)/.test(src) && /if \(arr\.length\) \{ toast\('这里已有内容/.test(src)
+      && /normFields\(kind, Object\.assign\(\{ id: uid\(\), source: '示例数据' \}, it\)\)/.test(src)
+      && /function loadDemo\(kind\)[\s\S]{0,700}?persist\(\);[\s\S]{0,60}?switchView\(kind\)/.test(src)
+      ? true : 'loadDemo 缺失或未落盘';
+  });
+  check('U1-5 接线：资料页空态给教学 + 载入示例；地图/遭遇/标签亦有教学', () => {
+    return /learn: EMPTY_LEARN\[kind\]/.test(src) && /WB\.loadDemo\('\$\{kind\}'\)/.test(src)
+      && /载入 \$\{demoN\} 条示例/.test(src) && /ei-learn/.test(src) ? true : '空态教学接线缺失';
+  });
+  check('U1-5 挂载与样式：WB.loadDemo + .ei-learn 样式', () => {
+    return /helpGo, loadDemo,/.test(src) && /\.ei-learn/.test(U0css) && /\.ei-learn-h/.test(U0css) ? true : 'loadDemo 未挂载或样式缺失';
+  });
+
+  /* ---- U1-8 AI 任务队列（同类型排队接力 + 可视化） ---- */
+  const U1qPre = preloadSrc.slice(preloadSrc.indexOf('const aiQueue'), preloadSrc.indexOf("contextBridge.exposeInMainWorld('diceCore'"));
+  check('U1-8 队列内核：同组排队 + 上限 + 接力（aiQueue/aiRunTask/aiPump）', () => {
+    return /const aiQueue = \[\]/.test(U1qPre) && /AI_QUEUE_MAX = \d+/.test(U1qPre)
+      && /function aiRunTask\(task\)/.test(U1qPre) && /function aiPump\(group\)/.test(U1qPre)
+      && /aiQueue\.findIndex\(q => q\.group === group\)/.test(U1qPre) ? true : '队列内核缺失';
+  });
+  check('U1-8 守卫改造：同组在飞改为入队（不再直接拒绝）+ 满队才报错', () => {
+    return /if \(st && st\.count > 0\)/.test(U1qPre) && /aiQueue\.push\(task\)/.test(U1qPre)
+      && /aiQueue\.length >= AI_QUEUE_MAX/.test(U1qPre) && /排队已满/.test(U1qPre) ? true : '守卫未改为排队';
+  });
+  check('U1-8 取消/清空：aiCancel 清同组排队 + aiAbortAll 清全部并中止在飞', () => {
+    return /function aiCancel\(group\)/.test(U1qPre) && /if \(aiQueue\[i\]\.group === group\)/.test(U1qPre)
+      && /function aiAbortAll\(\)/.test(U1qPre) && /while \(aiQueue\.length\)/.test(U1qPre) ? true : '取消/清空缺失';
+  });
+  check('U1-8 广播：ai:busy 载荷含 active 与 queued/queue 明细', () => {
+    return /active: aiActiveInfo\(\), queued: aiQueue\.length, queue: aiQueueInfo\(\)/.test(U1qPre)
+      && /function aiQueueInfo\(\)/.test(U1qPre) && /function aiActiveInfo\(\)/.test(U1qPre) ? true : '队列广播缺失';
+  });
+  check('U1-8 视图：aiQueuePaint 渲染「进行中 / 排队中」逐项列表', () => {
+    return /function aiQueuePaint\(s\)/.test(src) && /ai-queue-h/.test(src)
+      && /排队中 ' \+ queue\.length/.test(src) && /ai-queue-idx/.test(src) ? true : '队列视图缺失';
+  });
+  check('U1-8 接线：aiBusySet 期间刷队列 + 有排队才显示清空按钮', () => {
+    return /function aiBusySet\(s\)[\s\S]{0,1200}?aiQueuePaint\(s\)/.test(src)
+      && /qc\.hidden = !\(Number\(s\.queued\) > 0\)/.test(src)
+      && /qe\.innerHTML = ''/.test(src) ? true : '队列未接线到 AI 提示';
+  });
+  check('U1-8 界面：提示条含 aiQueue 容器 + 清空排队按钮', () => {
+    return /id="aiQueue"/.test(html) && /id="aiQueueClear"/.test(html)
+      && /WB\.aiAbortAll\(\)/.test(html) ? true : '队列 UI 元素缺失';
+  });
+  check('U1-8 挂载与样式：WB.aiAbortAll + api.aiAbortAll + .ai-queue 样式', () => {
+    return /aiCancelCurrent, aiAbortAll,/.test(src) && /aiAbortAll: \(\) => aiAbortAll\(\)/.test(preloadSrc)
+      && /\.ai-queue\{/.test(U0css) && /\.ai-queue-row\{/.test(U0css) ? true : '队列未挂载或样式缺失';
+  });
+
+  /* ---- U1-9 AI 批量写入一键撤销（落地记录 + 快照回滚） ---- */
+  check('U1-9 数据层：落地记录落 settings + 快照登记/提交/取消三件套', () => {
+    return /function aiLedgerArr\(\)/.test(src) && /settings\.aiLedger/.test(src)
+      && /function aiLandBefore\(action\)/.test(src) && /function aiLandCommit\(extra\)/.test(src)
+      && /function aiLandCancel\(\)/.test(src) ? true : '落地记录数据层缺失';
+  });
+  check('U1-9 回滚：逐条还原到该次落地前 + 全部回滚到最早一次前', () => {
+    return /function aiLandRevert\(id\)/.test(src) && /function aiLandRevertAll\(\)/.test(src)
+      && /function aiRestoreSnap\(s\)/.test(src) && /S\.settings\.aiLedger = \[\]/.test(src) ? true : '回滚逻辑缺失';
+  });
+  check('U1-9 覆盖：资料写入 / 文件整理 / 地图采纳 / 长期记忆 / 关系应用 均已留快照', () => {
+    return /aiLandBefore\('AI 写入资料卡'\)/.test(src) && /aiLandBefore\('AI 文件分析整理成卡'\)/.test(src)
+      && /aiLandBefore\('AI 采纳地图要素'\)/.test(src) && /aiLandBefore\('AI 沉淀长期记忆'\)/.test(src)
+      && /aiLandBefore\('AI 应用关系操作'\)/.test(src) ? true : '部分 AI 写入路径未接快照';
+  });
+  check('U1-9 界面与挂载：落地记录面板 + WB 暴露 openAiLedger/revert/revertAll', () => {
+    return /function openAiLedger\(\)/.test(src) && /AI 落地记录/.test(src)
+      && /openAiLedger, aiLandRevert, aiLandRevertAll,/.test(src) ? true : '落地记录面板未挂载';
+  });
+
+  /* ---- U2-4 提示词风格包（一键切换整体文风） ---- */
+  const hubPre = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'main', 'prompt-hub.js'), 'utf8');
+  const mainSrc = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.js'), 'utf8');
+  const aiSrc2 = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+  check('U2-4 预设表：prompt-hub 定义风格包并导出（含严谨考据/爽文/克苏鲁等）', () => {
+    return /const STYLE_PACKS = \[/.test(hubPre) && /严谨考据/.test(hubPre)
+      && /爽快热血/.test(hubPre) && /克苏鲁压抑/.test(hubPre)
+      && /function styleOf\(settings\)/.test(hubPre) && /STYLE_PACKS, stylePacks, styleOf,/.test(hubPre) ? true : '风格包预设缺失';
+  });
+  check('U2-4 注入：systemFor 把风格置于最前（最高优先级）', () => {
+    return /const style = styleOf\(settings\)/.test(hubPre)
+      && /【叙事风格（最高优先级，覆盖其他风格描述）】/.test(hubPre) ? true : '提示词中枢未注入风格';
+  });
+  check('U2-4 全链路：ai.js hubPrefix 同样注入风格（覆盖非 systemFor 的调用路径）', () => {
+    return /promptHub\.styleOf\(settings\)/.test(aiSrc2) && /【叙事风格（最高优先级，覆盖其他风格描述）】/.test(aiSrc2) ? true : 'ai.js 未注入风格';
+  });
+  check('U2-4 持久化：main 归一化 sp.style + masterOf 返回 stylePacks + savePrompts 落盘 style', () => {
+    return /sp\.style = \{ key: 'none', text: '' \}/.test(mainSrc) && /stylePacks: promptHub\.stylePacks\(\)/.test(mainSrc)
+      && /prompts\.style && typeof prompts\.style === 'object'/.test(mainSrc) && /st\.text = prompts\.style\.text/.test(mainSrc) ? true : '风格包未落盘/未回传';
+  });
+  check('U2-4 界面：风格下拉 + 可编辑文本框 + 切换填充 + 保存携带 style', () => {
+    return /id="hubStyle"/.test(src) && /id="hubStyleText"/.test(src)
+      && /function hubStyleChange\(\)/.test(src) && /S\._stylePacks/.test(src)
+      && /promptHubSave\(\{ master, scenes, style \}\)/.test(src) ? true : '风格包界面接线缺失';
+  });
+  check('U2-4 挂载：WB 暴露 hubStyleChange', () => {
+    return /hubResetScene, hubStyleChange, hubSave,/.test(src) ? true : 'hubStyleChange 未挂载';
+  });
+
+  /* ---- U2-5 费用估算 + 预算告警 ---- */
+  check('U2-5 价格预设：AI_PRICE_PRESETS + 按模型自动匹配 aiPricePresetFor', () => {
+    return /const AI_PRICE_PRESETS = \[/.test(src) && /deepseek-chat/.test(src)
+      && /function aiPricePresetFor\(model\)/.test(src) && /qwen.*turbo/.test(src) ? true : '价格预设/匹配缺失';
+  });
+  check('U2-5 估算：aiCostOf 按 入/出 token × 单价 计算，aiMoney 格式化', () => {
+    return /function aiCostOf\(data, cfg\)/.test(src) && /it \* pin \+ ot \* pout\) \/ 1e6/.test(src)
+      && /function aiMoney\(v\)/.test(src) ? true : '费用估算缺失';
+  });
+  check('U2-5 预算：配置归一化 + 超阈值/超上限告警（各提醒一次）', () => {
+    return /function aiBudgetCfg\(\)/.test(src) && /function aiBudgetCheck\(\)/.test(src)
+      && /ratio >= 1 \? 2 : \(ratio >=/.test(src) && /_aiBudgetWarned\.level = level/.test(src) ? true : '预算告警缺失';
+  });
+  check('U2-5 触发：AI 收尾（on→off）时核对预算', () => {
+    return /const wasBusy = _aiWasBusy;/.test(src) && /if \(!s\.on && wasBusy\) aiBudgetCheck\(\)/.test(src) ? true : '预算核对未接在 AI 收尾';
+  });
+  check('U2-5 面板：费用 chip + 预算进度条 + 设置卡（预设/单价/上限/阈值）+ 保存', () => {
+    return /估算花费/.test(src) && /ai-budget-bar/.test(src) && /aiBudgetPreset/.test(src)
+      && /aiBudgetIn/.test(src) && /aiBudgetLimit/.test(src) && /aiBudgetWarn/.test(src)
+      && /function aiBudgetSave\(\)/.test(src) ? true : '预算面板缺失';
+  });
+  check('U2-5 挂载与样式：WB 暴露 aiBudgetSave/PresetApply + .ai-budget-fill 样式', () => {
+    return /aiBudgetSave, aiBudgetPresetApply,/.test(src)
+      && /\.ai-budget-bar\{/.test(U0css) && /\.ai-budget-fill\.over\{/.test(U0css) ? true : '预算未挂载或样式缺失';
+  });
+
+  /* ---- U1-10 数据管家（数据路径 / 体积 / 备份时间线 / 全量导出入） ---- */
+  check('U1-10 主进程：dirSize 体积统计 + data:steward 汇总（路径/体积/备份/快照）', () => {
+    return /function dirSize\(dir\)/.test(mainSrc) && /ipcMain\.handle\('data:steward'/.test(mainSrc)
+      && /total: dirSize\(folder\), entries/.test(mainSrc) && /snapshots: store\.listSnapshots\(\)/.test(mainSrc)
+      ? true : '数据管家主进程接口缺失';
+  });
+  check('U1-10 全量导出入：exportFull 复制整目录 + importFull 先留安全备份再并入', () => {
+    return /ipcMain\.handle\('data:exportFull'/.test(mainSrc) && /copyDirRec\(store\.folder, dest\)/.test(mainSrc)
+      && /ipcMain\.handle\('data:importFull'/.test(mainSrc) && /const b = store\.backup\(\)/.test(mainSrc)
+      && /copyDirRec\(src, store\.folder\)/.test(mainSrc) ? true : '全量导出/恢复逻辑缺失';
+  });
+  check('U1-10 桥接：preload 暴露 dataSteward / dataExportFull / dataImportFull', () => {
+    return /dataSteward: \(\) => ipcRenderer\.invoke\('data:steward'\)/.test(preloadSrc)
+      && /dataExportFull: \(\) => ipcRenderer\.invoke\('data:exportFull'\)/.test(preloadSrc)
+      && /dataImportFull: \(\) => ipcRenderer\.invoke\('data:importFull'\)/.test(preloadSrc) ? true : '数据管家未桥接';
+  });
+  check('U1-10 视图：renderDataSteward 四段（数据在哪/体积/备份时间线/全量导出入）', () => {
+    return /function renderDataSteward\(\)/.test(src) && /function dsRefresh\(\)/.test(src)
+      && /① 数据在哪/.test(src) && /② 占用体积/.test(src) && /③ 备份时间线/.test(src) && /④ 一键全量导出 \/ 恢复/.test(src)
+      ? true : '数据管家视图缺失';
+  });
+  check('U1-10 接线：switchView 分支 + 侧栏入口 + WB 挂载 + 样式', () => {
+    return /view === 'datasteward'\) renderDataSteward\(\)/.test(src)
+      && /data-view="datasteward"/.test(html)
+      && /dsRefresh, dsBackupNow, dsOpenFolder, dsExportFull, dsImportFull, dsRestoreBackup, dsRestoreSnapshot,/.test(src)
+      && /\.ds-path\{/.test(U0css) && /\.ds-tl-row\{/.test(U0css) ? true : '数据管家未接线';
+  });
+
   console.log('\n[M3] 自研骰娘内核：退役清零 + 新接口收口 + 版本 3.0.0');
   const M3pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   const M3cl = src.slice(src.indexOf('const CHANGELOG'), src.indexOf('const CHANGELOG') + 20000);
@@ -1717,6 +1921,64 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
   check('M3 指令④回归：dice-regression.js 含 kp/ai 用例', () => {
     const reg = fs.readFileSync(path.join(__dirname, '..', 'tools', 'dice-regression.js'), 'utf8');
     return (/name: 'kp-list'/.test(reg) && /name: 'ai-judge'/.test(reg)) ? true : '缺指令④回归用例';
+  });
+
+  console.log('\n[QQD] QQ 直连通道：软件内扫码/账密登入，不经 OneBot 中转');
+  const qqdDir = path.join(__dirname, '..', 'src', 'dice-net', 'qqdirect');
+  check('QQD 文件齐备：normalize / engine / index 三件套', () => {
+    return ['normalize.js', 'engine.js', 'index.js'].every((f) => fs.existsSync(path.join(qqdDir, f)))
+      ? true : 'qqdirect 模块文件缺失';
+  });
+  check('QQD 归一：icqq 群/私聊事件 → MessageIn（channel/groupId/role）', () => {
+    const { normalizeQqEvent, makeSessionId } = require(path.join(qqdDir, 'normalize'));
+    const g = normalizeQqEvent({
+      message_type: 'group', group_id: 20002, user_id: 30003, raw_message: '.r1d100',
+      sender: { card: '甲', role: 'admin' },
+    });
+    const p = normalizeQqEvent({ message_type: 'private', user_id: 30003, raw_message: '.h', sender: {} });
+    return (g.channel === 'qqdirect' && g.groupId === '20002' && g.user.role === 'admin'
+      && makeSessionId(g) === 'qqdirect:20002'
+      && makeSessionId(p) === 'qqdirect:private:30003' && p.user.role === 'member')
+      ? true : 'QQ 直连消息归一不符合 MessageIn 契约';
+  });
+  check('QQD 出站：ReplyOut → icqq 群/私聊发送调用（带 at）', () => {
+    const { planQqDirectMessages } = require(path.join(qqdDir, 'normalize'));
+    const g = planQqDirectMessages('qqdirect:20002', { segments: [{ type: 'text', text: 'x' }], at: 7 });
+    const p = planQqDirectMessages('qqdirect:private:30003', { segments: [{ type: 'text', text: 'y' }] });
+    return (g[0].kind === 'group' && g[0].groupId === 20002 && g[0].message[0].type === 'at'
+      && p[0].kind === 'private' && p[0].userId === 30003) ? true : 'QQ 直连发送规划错误';
+  });
+  check('QQD 引擎注入点：cfg.engine.createClient 被适配器采用（可换库/单测）', () => {
+    const qqdSrc = fs.readFileSync(path.join(qqdDir, 'index.js'), 'utf8');
+    return (/typeof\s+engine\.createClient\s*===\s*'function'/.test(qqdSrc) && /loadEngine\(\{\s*enginePath/.test(qqdSrc))
+      ? true : '引擎装载层未解耦';
+  });
+  check('QQD 回归：start/logout 取状态须走 this.status()（裸调用会 ReferenceError）', () => {
+    const qqdSrc = fs.readFileSync(path.join(qqdDir, 'index.js'), 'utf8');
+    return (/\breturn this\.status\(\);/.test(qqdSrc) && !/^\s{6}return status\(\);/m.test(qqdSrc))
+      ? true : 'start/logout 仍在调用未定义的 status()';
+  });
+  check('QQD 装配：dice-net 四通道且 qqdirect 在册', () => {
+    const netSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'dice-net', 'index.js'), 'utf8');
+    return (/createQqDirectAdapter/.test(netSrc) && /return \[qqdirect, onebot11, qqofficial, sim\]/.test(netSrc))
+      ? true : 'dice-net 未装配 qqdirect';
+  });
+  check('QQD 主进程：diceQq:* IPC + onQqEvent 广播渲染层', () => {
+    return (/ipcMain\.handle\('diceQq:login'/.test(M3main) && /ipcMain\.handle\('diceQq:status'/.test(M3main)
+      && /dice-qq:event/.test(M3main)) ? true : '主进程 QQ 直连 IPC 缺失';
+  });
+  check('QQD 桥接：preload 暴露 diceQq（login/qr/slider/sms/logout/status/onQqEvent）', () => {
+    return (/diceQq:\s*\{/.test(M3pre) && /'diceQq:login'/.test(M3pre) && /'diceQq:status'/.test(M3pre))
+      ? true : 'preload 未暴露 QQ 直连接口';
+  });
+  check('QQD 界面：连接中心 QQ 直连卡片 + 状态区 + 事件订阅接线', () => {
+    return (/data-channel="qqdirect"/.test(src) && /id="qqdPanel"/.test(src)
+      && /renderQqDirectPanel/.test(src) && /subscribeQqEvents/.test(src) && /refreshQqDirect/.test(src))
+      ? true : '连接中心 QQ 直连界面未接线';
+  });
+  check('QQD 样式：二维码 / 验证 / 状态灯样式已定义', () => {
+    return (/\.qqd-card\{/.test(U0css) && /\.qrcode-pane\{/.test(U0css) && /\.qqd-err\{/.test(U0css))
+      ? true : 'QQ 直连样式缺失';
   });
 
   console.log('\n[回归测试汇总] GREEN ' + pass + ' · RED ' + fail);

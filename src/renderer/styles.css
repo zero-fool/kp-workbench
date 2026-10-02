@@ -419,9 +419,30 @@ input.search{min-width:220px}
 .ai-busy b{color:var(--accent2);font-weight:700;white-space:nowrap}
 .ai-busy-tip{color:var(--ink-faint);font-size:12px;white-space:nowrap}
 #aiBusyCancel{white-space:nowrap;flex:0 0 auto;color:var(--danger)!important;border-color:color-mix(in srgb,var(--danger) 45%,transparent)!important}
+#aiQueueClear{white-space:nowrap;flex:0 0 auto}
+/* ===== U1-8 AI 任务队列可视化：出现排队时把胶囊展开成卡片，逐项列出「进行中 / 排队中」 ===== */
+.ai-busy{flex-wrap:wrap}
+.ai-busy:has(.ai-queue:not([hidden])){border-radius:14px;align-items:flex-start;padding:12px 16px}
+.ai-queue{flex:1 1 100%;margin-top:8px;padding-top:8px;border-top:1px dashed var(--line2);
+  display:flex;flex-direction:column;gap:5px;max-height:min(30vh,190px);overflow:auto}
+.ai-queue[hidden]{display:none}
+.ai-queue-h{font-size:11.5px;font-weight:600;color:var(--ink-faint);letter-spacing:.4px;margin-top:2px}
+.ai-queue-row{display:flex;align-items:center;gap:7px;font-size:12.5px;line-height:1.5;color:var(--ink-soft)}
+.ai-queue-dot{flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:var(--accent);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+.ai-queue-idx{flex:0 0 16px;width:16px;height:16px;border-radius:50%;background:var(--panel2);border:1px solid var(--line2);
+  font-size:10.5px;line-height:1;display:inline-flex;align-items:center;justify-content:center;color:var(--ink-soft)}
 .usage-chip{display:inline-flex;align-items:baseline;gap:6px;padding:8px 14px;border-radius:12px;
   background:var(--panel);border:1px solid var(--line);font-size:13px;color:var(--ink-faint)}
 .usage-chip b{font-size:18px;color:var(--accent2);font-weight:700}
+/* ===== U2-5 费用估算 + 预算告警 ===== */
+.ai-budget-bar{height:8px;border-radius:5px;background:var(--line);overflow:hidden}
+.ai-budget-fill{height:100%;width:0;background:var(--ok);transition:width .3s}
+.ai-budget-fill.warn{background:var(--warn)}
+.ai-budget-fill.over{background:var(--danger)}
+.ai-budget-card{margin-bottom:12px;border:1px solid var(--line);border-radius:10px;padding:8px 12px;background:var(--panel2)}
+.ai-budget-card>summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink-soft);user-select:none}
+.ai-budget-card input,.ai-budget-card select{font-size:12px}
 .ai-busy-spin{flex:0 0 14px;width:14px;height:14px;border-radius:50%;
   border:2px solid color-mix(in srgb,var(--accent) 28%,transparent);border-top-color:var(--accent);
   animation:aispin .8s linear infinite}
@@ -1145,6 +1166,22 @@ button.ghost.small-secondary{opacity:.85}
 .dice-light.on{color:var(--ok);border-color:var(--ok)}
 .dice-light.off{color:var(--ink-faint)}
 .dice-light.recon{color:var(--warn);border-color:var(--warn)}
+.dice-light.fail{color:var(--danger);border-color:var(--danger)}
+/* QQ 直连登入卡片（扫码 / 账密）：卡身 + 动态状态区（二维码/滑动/短信） */
+.qqd-card{border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.qqd-hint{font-size:12px;color:var(--ink-soft);line-height:1.6;margin:2px 0 8px}
+.qqd-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.qqd-actions button{margin-right:0}
+.qqd-panel{margin-top:10px}
+.qqd-status{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.qqd-err{margin-top:6px;font-size:12px;color:var(--danger);word-break:break-word}
+.qqd-verify{margin-top:8px;border:1px dashed var(--line);border-radius:10px;padding:10px;background:color-mix(in srgb,var(--line) 10%,transparent)}
+.qqd-inline{display:flex;gap:6px;margin-top:6px}
+.qqd-inline input{flex:1;box-sizing:border-box;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--ink);font-family:monospace}
+.qqd-inline button{flex:0 0 auto}
+.qqd-adv{margin:2px 0}
+.qqd-adv>summary{cursor:pointer;font-size:12px;color:var(--ink-soft);padding:4px 2px}
+.qqd-adv[open]>summary{margin-bottom:8px}
 .dice-cmd-log{height:260px;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;font-size:12px}
 .dice-log-row{display:grid;grid-template-columns:64px 120px 84px 1fr 1fr;gap:6px;padding:4px 8px;border-bottom:1px dashed var(--line)}
 .dice-log-row .t{color:var(--ink-faint)}.dice-log-row .sid{color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1737,3 +1774,40 @@ button:hover>.ic{transform:translateY(-1px)}
 .gm-rollres{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .gm-total{font-size:18px;font-weight:700;color:var(--accent)}
 .gm-grade{margin-left:8px;padding:2px 8px;border-radius:10px;font-size:12px;background:var(--panel)}
+
+/* ===== U1-4 就地帮助气泡 ===== */
+.helptip{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:6px;
+  border-radius:50%;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-soft);
+  font-size:11px;font-weight:700;line-height:1;cursor:pointer;user-select:none;vertical-align:middle;flex:0 0 auto}
+.helptip:hover{color:var(--accent);border-color:var(--accent)}
+.helptip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+h2>.helptip,h4>.helptip{width:15px;height:15px;font-size:10px}
+.helpcard.help-flash{animation:helpflash 1.6s ease}
+@keyframes helpflash{0%,100%{box-shadow:var(--shadow)}25%,75%{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 45%,transparent)}}
+
+/* ===== U1-5 空状态即教学 ===== */
+.ei-learn{margin-top:14px;padding:12px 14px;border:1px dashed var(--line2);border-radius:10px;
+  background:var(--panel2);max-width:520px}
+.ei-learn-h{font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:6px;letter-spacing:.5px}
+.ei-learn ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
+.ei-learn li{font-size:12.5px;line-height:1.6;color:var(--ink-soft)}
+
+/* ===== U1-10 数据管家 ===== */
+.ds-path{margin:4px 0 2px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);overflow:auto}
+.ds-path code{font-size:12.5px;word-break:break-all;color:var(--ink-soft)}
+.ds-warn{margin-top:8px;padding:8px 10px;border-radius:8px;font-size:12.5px;line-height:1.6;
+  background:color-mix(in srgb,var(--danger) 12%,transparent);color:var(--danger);border:1px solid color-mix(in srgb,var(--danger) 30%,transparent)}
+.ds-row{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:12.5px}
+.ds-name{flex:0 0 220px;display:flex;gap:4px;align-items:baseline;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ds-bar{flex:1 1 auto;height:8px;border-radius:5px;background:var(--line);overflow:hidden;min-width:60px}
+.ds-bar>i{display:block;height:100%;background:var(--accent);border-radius:5px}
+.ds-size{flex:0 0 84px;text-align:right;color:var(--ink-faint);font-variant-numeric:tabular-nums}
+.ds-tl{margin-top:4px}
+.ds-tl-title{font-size:12px;font-weight:600;color:var(--ink-soft);letter-spacing:.4px;margin-bottom:4px}
+.ds-tl-row{display:flex;align-items:center;gap:9px;padding:5px 2px;font-size:12.5px;border-bottom:1px dashed var(--line)}
+.ds-tl-dot{flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.ds-tl-dot.snap{background:var(--warn)}
+.ds-tl-time{font-variant-numeric:tabular-nums;min-width:118px}
+.ds-chips{display:flex;flex-wrap:wrap;gap:8px}
+.ds-chip{padding:4px 10px;border-radius:14px;border:1px solid var(--line2);background:var(--panel2);font-size:12.5px;color:var(--ink-soft)}
+.ds-chip b{color:var(--ink)}

@@ -15,10 +15,10 @@ test('state 门面：非法 JSON 入参被拒绝', () => {
   assert.throws(() => createStateBox({ users: 'not-an-object' }), TypeError);
 });
 
-test('createChannelAdapters：返回三通道且符合 ChannelAdapter 形状', async () => {
+test('createChannelAdapters：返回四通道且符合 ChannelAdapter 形状', async () => {
   const { createChannelAdapters } = require('../../src/dice-net');
   const list = createChannelAdapters({ state: require('../../src/dice-core/state').createStateBox(), cfg: {} });
-  assert.deepStrictEqual(list.map((a) => a.id).sort(), ['onebot11', 'qqofficial', 'sim']);
+  assert.deepStrictEqual(list.map((a) => a.id).sort(), ['onebot11', 'qqdirect', 'qqofficial', 'sim']);
   for (const a of list) {
     for (const m of ['start', 'stop', 'onInbound', 'send', 'status']) assert.strictEqual(typeof a[m], 'function');
     assert.strictEqual(a.status().state, 'stopped');

@@ -1,20 +1,9 @@
 'use strict';
-// 通道装配入口：deps = { state, cfg, store, hub, log }
+// 通道装配入口：deps = { state, cfg, store, hub, dataDir, onQqEvent }
 const { createSimChannel } = require('./sim');
 const { createOnebot11Adapter } = require('./onebot11');
 const { createQqOfficialAdapter } = require('./qqofficial');
-
-function stubAdapter(id) {
-  let cb = null;
-  return {
-    id,
-    async start() { this._state = 'running'; },
-    async stop() { this._state = 'stopped'; },
-    onInbound(fn) { cb = fn; },
-    async send() {},
-    status() { return { state: this._state || 'stopped' }; },
-  };
-}
+const { createQqDirectAdapter } = require('./qqdirect');
 
 // M1 sim 导出名为 createSimChannel(opts)；装配层包装为 createSimAdapter(deps)。
 function createSimAdapter(deps) {
@@ -22,10 +11,10 @@ function createSimAdapter(deps) {
 }
 
 function createChannelAdapters(deps) {
-  // Task 2/5/6 会把 stubAdapter 替换为真实实现，本步先保证形状契约可测
-  const onebot11 = createOnebot11Adapter(deps);
+  const qqdirect = createQqDirectAdapter(deps);   // 软件内扫码/账密直连 QQ（默认推荐方式）
+  const onebot11 = createOnebot11Adapter(deps);   // 高级：用户自备 OneBot 协议端中转
   const qqofficial = createQqOfficialAdapter(deps);
   const sim = createSimAdapter(deps);
-  return [onebot11, qqofficial, sim];
+  return [qqdirect, onebot11, qqofficial, sim];
 }
 module.exports = { createChannelAdapters };
