@@ -438,6 +438,120 @@
     return { msg: s.length > 300 ? s.slice(0, 300) + '…' : s, cfg: /AI|上游|配置/i.test(s) };
   }
 
+  /* ================= 全局快捷键（可自定义） =================
+   * 每个动作一个默认组合；用户在「设置 → 外观 → 快捷键」里可改，覆盖值存 settings.shortcuts。
+   * allowInField：输入框聚焦时是否仍响应（命令面板/搜索需要，其余不需要以免误触）。 */
+  const SHORTCUT_ACTIONS = [
+    { id: 'palette', label: '命令面板', def: 'Ctrl+K', allowInField: true, run: () => openPalette() },
+    { id: 'search', label: '全局搜索', def: 'Ctrl+Shift+F', allowInField: true, run: () => openGlobalSearch() },
+    { id: 'newCard', label: '新建卡片（当前视图）', def: 'Ctrl+N', allowInField: false, run: () => { if (KINDS.includes(S.view)) add(S.view); else if (S.view === 'relations') relAddNode(); } },
+    { id: 'dice', label: '本地掷骰', def: 'Ctrl+D', allowInField: false, run: () => switchView('dice') },
+    { id: 'encounter', label: '临场战斗', def: 'Ctrl+E', allowInField: false, run: () => switchView('encounter') },
+    { id: 'stats', label: '统计分析', def: 'Ctrl+T', allowInField: false, run: () => switchView('stats') },
+    { id: 'backup', label: '立即备份', def: 'Ctrl+S', allowInField: false, run: () => doBackup() },
+    { id: 'settings', label: '打开设置', def: 'Ctrl+,', allowInField: false, run: () => switchView('settings') },
+    { id: 'navBack', label: '后退', def: 'Alt+ArrowLeft', allowInField: false, run: () => navBack() },
+    { id: 'navForward', label: '前进', def: 'Alt+ArrowRight', allowInField: false, run: () => navForward() }
+  ];
+  /* 单键快速跳转（需在设置里显式开启，默认关闭，避免与输入/其它操作冲突）。 */
+  const SINGLE_KEY_VIEWS = [
+    ['1', 'dash', '总览'], ['2', 'pcs', '人物卡'], ['3', 'npcs', 'NPC 图鉴'], ['4', 'regions', '地区场景'],
+    ['5', 'logs', '战役日志'], ['6', 'mobs', '怪物图鉴'], ['7', 'rules', '规则速查'], ['8', 'lore', '背景城设'],
+    ['9', 'maps', '地图'], ['0', 'encounter', '临场战斗'], ['-', 'stats', '统计分析'], ['=', 'dice', '本地掷骰']
+  ];
+  function shortcutOf(id) {
+    const a = SHORTCUT_ACTIONS.find(x => x.id === id);
+    const ov = (S.settings && S.settings.shortcuts) || {};
+    return (typeof ov[id] === 'string' && ov[id]) ? ov[id] : (a ? a.def : '');
+  }
+  function comboFromEvent(e) {
+    const mods = [];
+    if (e.ctrlKey || e.metaKey) mods.push('Ctrl');
+    if (e.altKey) mods.push('Alt');
+    if (e.shiftKey) mods.push('Shift');
+    let k = e.key;
+    if (!k) return '';
+    if (k === ' ' || k === 'Spacebar') k = 'Space';
+    else if (k.length === 1) k = k.toUpperCase();
+    if (['Control', 'Alt', 'Shift', 'Meta'].indexOf(k) !== -1) return '';
+    return mods.concat([k]).join('+');
+  }
+  function matchesCombo(e, combo) {
+    if (!combo) return false;
+    const want = combo.split('+');
+    const key = want[want.length - 1];
+    if ((e.ctrlKey || e.metaKey) !== (want.indexOf('Ctrl') !== -1)) return false;
+    if (!!e.altKey !== (want.indexOf('Alt') !== -1)) return false;
+    if (!!e.shiftKey !== (want.indexOf('Shift') !== -1)) return false;
+    let k = e.key || '';
+    if (k === ' ' || k === 'Spacebar') k = 'Space';
+    else if (k.length === 1) k = k.toUpperCase();
+    return k === key;
+  }
+  /* 快捷键录制：捕获下一个组合键并写入覆盖值（settings.shortcuts）。 */
+  let _recKeyHandler = null;
+  function shortcutEditEnd() {
+    if (_recKeyHandler) { document.removeEventListener('keydown', _recKeyHandler, true); _recKeyHandler = null; }
+  }
+  function setShortcut(id, combo) {
+    for (const a of SHORTCUT_ACTIONS) {
+      if (a.id !== id && shortcutOf(a.id) === combo) { toast('该组合已被「' + a.label + '」占用', 'err'); return false; }
+    }
+    if (!S.settings.shortcuts) S.settings.shortcuts = {};
+    S.settings.shortcuts[id] = combo;
+    persist();
+    return true;
+  }
+  function shortcutEdit(id) {
+    const a = SHORTCUT_ACTIONS.find(x => x.id === id); if (!a) return;
+    const mask = q('modalMask'); const box = q('modalBox');
+    box.innerHTML = `<h3>设置快捷键 · ${esc(a.label)}</h3>
+      <div class="note">请按下新的组合键。需至少包含 Ctrl / Alt / Shift 之一（F1~F12 除外）；按 Esc 取消。</div>
+      <div class="rec-cap" id="recCap">按下组合键…</div>
+      <div class="foot"><button class="ghost" onclick="WB.shortcutReset('${id}')">恢复默认（${esc(a.def)}）</button><span class="grow"></span><button class="ghost" onclick="WB.shortcutEditEnd();WB.closeModal()">取消</button></div>`;
+    mask.hidden = false;
+    shortcutEditEnd();
+    _recKeyHandler = (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      if (ev.key === 'Escape') { shortcutEditEnd(); closeModal(); return; }
+      const c = comboFromEvent(ev);
+      if (!c) return;
+      if (!/(Ctrl|Alt|Shift)\+/.test(c) && !/^F\d+$/.test(c)) { const cap = q('recCap'); if (cap) cap.textContent = '需包含 Ctrl / Alt / Shift'; return; }
+      if (!setShortcut(id, c)) return;
+      shortcutEditEnd(); closeModal();
+      toast('「' + a.label + '」已设为 ' + c, 'ok');
+      if (S.view === 'settings') paintShortcuts();
+    };
+    document.addEventListener('keydown', _recKeyHandler, true);
+  }
+  function shortcutReset(id) {
+    const a = SHORTCUT_ACTIONS.find(x => x.id === id); if (!a) return;
+    if (S.settings.shortcuts) delete S.settings.shortcuts[id];
+    persist();
+    shortcutEditEnd(); closeModal();
+    toast('「' + a.label + '」已恢复默认（' + a.def + '）');
+    if (S.view === 'settings') paintShortcuts();
+  }
+  function setSingleKeyNav(on) {
+    S.settings.singleKeyNav = !!on;
+    persist();
+    paintShortcuts();
+    toast(on ? '已开启单键快速跳转' : '已关闭单键快速跳转');
+  }
+  /* 浮层（弹窗/命令面板/全局搜索/新手引导）打开时不响应单键跳转，避免误切背后视图 */
+  function anyOverlayOpen() {
+    return ['modalMask', 'confirmMask', 'paletteMask', 'gSearchMask', 'onboardMask'].some(id => { const el = q(id); return el && !el.hidden; });
+  }
+  function paintShortcuts() {
+    const box = q('shortcutList'); if (!box) return;
+    box.innerHTML = SHORTCUT_ACTIONS.map(a => `<div class="sc-row"><b>${esc(a.label)}</b><span class="grow"></span>
+      <code class="sc-cap">${esc(shortcutOf(a.id))}</code>
+      <button class="ghost small" onclick="WB.shortcutEdit('${a.id}')">修改</button>
+      <button class="ghost small" onclick="WB.shortcutReset('${a.id}')" title="恢复默认">↺</button></div>`).join('');
+    const hint = q('singleKeyHint');
+    if (hint) hint.innerHTML = '当前映射：' + SINGLE_KEY_VIEWS.map(([k, , l]) => `<code class="sc-cap">${esc(k)}</code> ${esc(l)}`).join(' · ');
+  }
+
   /* ================= 全局「AI 处理中」提示 =================
    * 每项 AI 请求在 preload 层已被守卫，这里只负责界面表现：
    * 请求一开始就亮起提示条（显示当前在做什么 + 已用秒数）并禁用刚点下的那个按钮，
@@ -887,7 +1001,7 @@
   /* ========== 开团向导（总览顶部的一条龙引导） ========== */
   function wizardHTML() {
     const ai = S.settings.ai || {};
-    const aiOk = !!(ai.baseUrl && ai.apiKey && ai.model);
+    const aiOk = aiReady();
     const entTotal = KINDS.reduce((n, k) => n + ((S.data.entities[k] || []).length), 0);
     const personaOk = !!S.activeProfile;
     const steps = [
@@ -910,7 +1024,7 @@
       <div class="wizard-head" onclick="WB.toggleWizard()" style="cursor:pointer;user-select:none">
         <b>🚀 开团向导</b><span class="hint"> · 按 5 步依次点亮，即可开起一团</span>
         <span class="grow"></span><span class="hint">${collapsed ? '展开 ▸' : '收起 ▾'}</span></div>
-      <div id="wizardBody" class="wizard-body" ${collapsed ? 'style="display:none"' : ''}>${stepHTML}</div>
+      <div id="wizardBody" class="wizard-body" ${collapsed ? 'style="display:none"' : ''}>${stepHTML}${aiOk ? '' : '<div class="hint" style="margin:8px 0 2px">提示：不配置 AI 也能正常开团——建档、掷骰、地图、日志、导出等完全离线可用；AI 仅用于拆分登记 / 生成 / 润色等增强功能。</div>'}</div>
     </div>`;
   }
   function toggleWizard() {
@@ -3125,11 +3239,52 @@
   async function testPersona() { await aiTestCfg(); }
 
   /* ========== AI 配置（全局接口，独立一栏） ========== */
+  /* 服务商预设：一键填入 baseUrl 与推荐模型，用户只需再粘 API Key。
+   * 全部为兼容 OpenAI Chat Completions 格式的服务；本地 Ollama 可完全离线。 */
+  const AI_PRESETS = [
+    { id: 'deepseek', label: 'DeepSeek 深度求索', base: 'https://api.deepseek.com/v1', model: 'deepseek-chat', keyUrl: 'https://platform.deepseek.com/api_keys', note: '性价比高、国内可直连，推荐新手首选。' },
+    { id: 'qwen', label: '通义千问（阿里云百炼）', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus', keyUrl: 'https://bailian.console.aliyun.com/', note: '使用“兼容 OpenAI”模式，地址须带 /compatible-mode/v1。' },
+    { id: 'zhipu', label: '智谱 GLM', base: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys', note: 'glm-4-flash 通常有免费额度，适合试用。' },
+    { id: 'moonshot', label: '月之暗面 Kimi', base: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k', keyUrl: 'https://platform.moonshot.cn/console/api-keys', note: '长文本处理见长，适合大剧本。' },
+    { id: 'openai', label: 'OpenAI', base: 'https://api.openai.com/v1', model: 'gpt-4o-mini', keyUrl: 'https://platform.openai.com/api-keys', note: '需要可访问其网络环境的网络。' },
+    { id: 'ollama', label: '本地 Ollama（完全离线）', base: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b', keyUrl: 'https://ollama.com/download', note: '模型跑在本机，不联网也不消耗费用；API Key 随便填一个非空值即可。' }
+  ];
+  function aiPresetOf(id) { return AI_PRESETS.find(p => p.id === id) || null; }
+  function applyAiPreset(id) {
+    const p = aiPresetOf(id); if (!p) return;
+    const b = q('aif_base'); if (b) b.value = p.base;
+    const m = q('aif_model'); if (m) m.value = p.model;
+    const link = q('aif_keylink');
+    if (link) { if (p.keyUrl) { link.href = p.keyUrl; link.style.display = ''; } else { link.style.display = 'none'; } }
+    const note = q('aif_preset_note'); if (note) note.textContent = p.note || '';
+    toast('已填入「' + p.label + '」的地址与模型，请再填 API Key 并点「保存配置」');
+    const k = q('aif_key'); if (k) k.focus();
+  }
+  /* AI 是否已配置完整（地址 / 密钥 / 模型三者齐备）。 */
+  function aiReady() { const a = (S.settings && S.settings.ai) || {}; return !!(a.baseUrl && a.apiKey && a.model); }
+  /* 统一的「未配置 AI 不影响离线功能」说明，用于 AI 相关界面顶部提示。 */
+  function aiDegradeHTML() {
+    return `<div class="setcard ai-degrade"><h4>AI 尚未配置（不影响离线功能）</h4>
+      <div class="hint" style="line-height:1.7">掷骰 / 骰娘、资料建档与编辑、地图、关系网、战役日志、导入导出、备份等<b>全部离线可用</b>，不需要 AI。<br>
+      配置 AI 后才会解锁：导入内容一键拆分登记、AI 生成资料卡、记录润色、地图草案、剧情建议等。上方选择服务商 → 填入 API Key → 点「保存配置」即可。</div></div>`;
+  }
   function renderAIConf() {
     const ai = S.settings.ai || {};
+    const ready = aiReady();
     let html = `<div class="page-title"><h2>AI 配置</h2><span class="hint">全局接口地址 / 密钥 / 模型独立一栏；AI 助手、剧本解析、记录润色统一使用</span></div>
+    ${ready ? '' : aiDegradeHTML()}
     <div class="setgrid">
       <div class="setcard"><h4>接口连接</h4>
+        <div class="row"><label>快速配置：选择服务商，自动填入地址与推荐模型</label>
+          <div class="toolbar" style="flex-wrap:wrap;gap:8px">
+            <select id="aif_preset" onchange="WB.applyAiPreset(this.value)">
+              <option value="">— 选择服务商（可选）—</option>
+              ${AI_PRESETS.map(p => `<option value="${p.id}">${esc(p.label)}</option>`).join('')}
+            </select>
+            <a id="aif_keylink" class="ghost small linkbtn" href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer" style="display:none">获取 API Key ↗</a>
+          </div>
+          <div class="hint" id="aif_preset_note" style="margin-top:6px">选择后会自动填写下方两项，只需再粘 API Key。</div>
+        </div>
         <div class="row"><label>接口地址 baseUrl（如 https://api.deepseek.com/v1）</label><input id="aif_base" value="${esc(ai.baseUrl || '')}" placeholder="https://api.deepseek.com/v1"></div>
         <div class="row"><label>模型 model</label><input id="aif_model" value="${esc(ai.model || '')}" placeholder="deepseek-chat"></div>
         <div class="row"><label>API Key</label><span class="keywrap"><input id="aif_key" type="password" value="${esc(ai.apiKey || '')}" autocomplete="off">
@@ -8126,7 +8281,7 @@
     setViewSort, setViewSrc, setViewTpl, editSetTpl,
     aiUpload, aiExportLast, addLongMemory, delLongMemory, saveMemoModal, addModRule, delModRule,
     addUserPref, editUserPref, saveUserPrefModal, delUserPref,
-    aiImportLast, aiTestCfg, saveAIConf, polishRun, polishExport, polishExportMd, buildBattleReport, saveAppName, toggleAiKey,
+    aiImportLast, aiTestCfg, saveAIConf, applyAiPreset, polishRun, polishExport, polishExportMd, buildBattleReport, saveAppName, toggleAiKey,
     setAiGenType, aiGenForType, globalSearch, setGType, goToEntity,
     importContent, doImport, doImportAndIntegrate, aiIntegrate, aiGenForView, doSplitRegister,
     savePrompts, resetPrompt, promptVersionList, promptCompare, promptRestoreVersion,
@@ -8975,23 +9130,24 @@
     q('btnChatToggle').addEventListener('click', () => openChat());
     q('btnChatClose').addEventListener('click', () => openChat(false));
     q('btnSidebarToggle').addEventListener('click', () => toggleSidebar());
-    /* 全局快捷键：Ctrl+K 命令面板 / Ctrl+Shift+F 全局搜索 / Ctrl+N 新建卡片 / Ctrl+D 骰娘 / Esc 关闭浮层 */
+    /* 全局快捷键：默认绑定见 SHORTCUT_ACTIONS，用户可在「设置 → 外观 → 快捷键」自定义。
+     * 处理顺序：Esc 关浮层 → 有修饰键的组合（按动作 allowInField 决定输入框内是否生效）→
+     * 输入框内直接返回 → 单键快速跳转（可选）→ Esc 失焦。 */
     document.addEventListener('keydown', (e) => {
       const inField = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '');
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); openGlobalSearch(); return; }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openPalette(); return; }
-      if (inField) { if (e.key === 'Escape') { e.target.blur(); } return; }
-      if (e.altKey && !e.ctrlKey && (e.key === 'ArrowLeft')) { e.preventDefault(); navBack(); return; }
-      if (e.altKey && !e.ctrlKey && (e.key === 'ArrowRight')) { e.preventDefault(); navForward(); return; }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'n' || e.key === 'N')) {
-        e.preventDefault();
-        if (KINDS.includes(S.view)) add(S.view);
-        else if (S.view === 'relations') relAddNode();
-        return;
+      if (e.key === 'Escape') {
+        if (!q('gSearchMask').hidden) { closeGlobalSearch(); return; }
+        if (!q('paletteMask').hidden) { closePalette(); return; }
       }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); switchView('dice'); return; }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'e' || e.key === 'E')) { e.preventDefault(); switchView('encounter'); return; }
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 't' || e.key === 'T')) { e.preventDefault(); switchView('stats'); return; }
+      for (const a of SHORTCUT_ACTIONS) {
+        if (inField && !a.allowInField) continue;
+        if (matchesCombo(e, shortcutOf(a.id))) { e.preventDefault(); a.run(); return; }
+      }
+      if (inField) { if (e.key === 'Escape') e.target.blur(); return; }
+      if (S.settings.singleKeyNav && !e.ctrlKey && !e.altKey && !e.metaKey && !anyOverlayOpen()) {
+        const hit = SINGLE_KEY_VIEWS.find(v => v[0] === e.key);
+        if (hit && hit[1] !== S.view) { e.preventDefault(); switchView(hit[1]); return; }
+      }
       if (e.key === 'Escape') { if (!q('gSearchMask').hidden) closeGlobalSearch(); else closePalette(); }
     });
     const palIn = q('palIn'), palList = q('palList'), palMask = q('paletteMask');

@@ -140,6 +140,12 @@ button.danger{background:color-mix(in srgb,var(--danger) 18%,transparent);color:
 .keywrap{display:flex;gap:6px;align-items:center}
 .keywrap input{flex:1}
 button.ghost.small{padding:6px 8px}
+/* AI 服务商预设的「获取 API Key」链接：与 ghost 按钮同观感 */
+a.linkbtn{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:8px;
+  background:transparent;color:var(--ink-soft);border:1px solid var(--line);text-decoration:none;font-size:12.5px}
+a.linkbtn:hover{color:var(--ink);border-color:var(--accent)}
+/* 未配置 AI 的降级说明卡：左侧强调条，避免与普通设置卡混淆 */
+.setcard.ai-degrade{border-left:3px solid var(--accent)}
 .search-item .cname .ctag{background:color-mix(in srgb,var(--accent) 24%,transparent)}
 .row.long b{color:var(--ink-faint);font-weight:500;margin-right:5px}
 
