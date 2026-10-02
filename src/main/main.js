@@ -1513,7 +1513,8 @@ app.whenReady().then(() => {
     try {
       const mins = store.autoBackupMinutes();
       const elapsed = Date.now() - store.lastBackupAt();
-      if (elapsed >= mins * 60 * 1000) store.backup();
+      // 周期备份走异步写，避免含大底图的整档同步落盘卡住主进程；退出前的同步 backup() 另行保证
+      if (elapsed >= mins * 60 * 1000) store.backupAsync().catch(() => {});
     } catch (_) {}
   }, 60 * 1000);
   // 启动即记录一次基准时间，避免刚打开就触发备份

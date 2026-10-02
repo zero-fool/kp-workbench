@@ -660,12 +660,30 @@
     };
     return out;
   }
+  /* 写盘失败提示：同一错误只弹一次，恢复正常后重置，避免自动保存反复刷屏。
+   * 主进程 store:save 会返回 { ok:false, error }（磁盘满/权限错/分片写失败），此前被直接丢弃，
+   * 用户会在毫无察觉的情况下继续编辑并丢数据，因此这里必须显式告知。 */
+  let _lastWriteErr = null;
+  function reportWriteError(err) {
+    const msg = String((err && err.message) || err || '未知错误');
+    if (msg === _lastWriteErr) return;
+    _lastWriteErr = msg;
+    toast('数据未能写入磁盘：' + msg + '。请检查磁盘空间或数据目录权限，避免继续编辑导致丢失。', 'err');
+  }
+  function clearWriteError() { _lastWriteErr = null; }
   async function _doSave() {
     _saveTimer = null;
     if (!_pendSave) return;
     _pendSave = false;
-    await window.api.save(makeSavePayload());
-    if (_saveResolve) { const r = _saveResolve; _saveResolve = null; r(); }
+    try {
+      const res = await window.api.save(makeSavePayload());
+      if (res && res.ok === false) reportWriteError(res.error);
+      else clearWriteError();
+    } catch (e) {
+      reportWriteError(e);   // IPC 层异常同样视为未落盘
+    } finally {
+      if (_saveResolve) { const r = _saveResolve; _saveResolve = null; r(); }
+    }
   }
   function persist() {
     _xrefBump();
@@ -728,6 +746,26 @@
     const h = Math.min(cap, Math.max(34, el.scrollHeight));
     el.style.height = h + 'px';
     el.style.overflowY = el.scrollHeight > cap ? 'auto' : 'hidden';
+  }
+
+  /* ---------- 通用节流/去抖（统一入口，避免各处置散落 setTimeout） ---------- */
+  function debounce(fn, ms) {
+    let t = null;
+    return function (...args) {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => { t = null; fn.apply(this, args); }, ms);
+    };
+  }
+  /* rAF 节流：同一帧内多次触发只执行一次。用于随输入触发的读布局操作（如 autosize 读 scrollHeight
+   * 会强制回流），避免每个按键都同步重排一次。 */
+  function rafThrottle(fn) {
+    let queued = false, lastArgs = null, ctx = null;
+    return function (...args) {
+      lastArgs = args; ctx = this;
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => { queued = false; fn.apply(ctx, lastArgs); });
+    };
   }
 
   /* ---------- 顶栏 ---------- */
@@ -4763,6 +4801,7 @@
     if (r) { S.data = r.data; S.fields = r.fields; S.settings = r.settings || {}; S.profiles = r.profiles || []; S.activeProfile = r.activeProfile; S.meta = r.meta || {}; S.rawText = (r.data && typeof r.data.rawText === 'string') ? r.data.rawText : ''; S.rawSuggested = (r.data && typeof r.data.rawSuggested === 'string') ? r.data.rawSuggested : ''; S.rawScript = (r.data && r.data.rawScript) ? r.data.rawScript : null; if (!Array.isArray(S.data.maps)) S.data.maps = []; applyAppName();
       if (r.recovered) { const src = r.recovered === 'backup' ? '最近一次备份' : '最近一个版本快照'; toast('检测到数据异常，已自动恢复为' + src + '的数据', 'warn'); }
       if (r.sessionRecovered) toast('上次可能未正常退出，已为你保留此前工作数据 ㊙——如异常可到「数据管理→备份」恢复', 'warn');
+      if (r.meta && r.meta.writeError) reportWriteError(r.meta.writeError.error);   // 启动时兜底：上次会话遗留的写盘失败
     }
     paintNavCounts(); paintStatusBar(); refreshStatusBar();
     switchView(S.view === 'search' ? 'dash' : S.view);
@@ -8985,8 +9024,13 @@
       if (e.key === 'Escape') { if (!q('gSearchMask').hidden) closeGlobalSearch(); else closePalette(); }
     });
     const palIn = q('palIn'), palList = q('palList'), palMask = q('paletteMask');
+    const _palInput = rafThrottle(() => { _palIdx = 0; S._palQuery = palIn.value; _paintPal(); });
     if (palIn) {
-      palIn.addEventListener('input', () => { _palIdx = 0; S._palQuery = palIn.value; _paintPal(); });
+      palIn.addEventListener('input', (e) => {
+        if (e.isComposing) return;                       // 输入法组合中不重绘，等 compositionend 收尾
+        _palInput();
+      });
+      palIn.addEventListener('compositionend', () => { _palIdx = 0; S._palQuery = palIn.value; _paintPal(); });
       palIn.addEventListener('keydown', (e) => {
         if (e.key === 'ArrowDown') { e.preventDefault(); _palIdx++; _paintPal(); }
         else if (e.key === 'ArrowUp') { e.preventDefault(); _palIdx--; _paintPal(); }
@@ -9000,8 +9044,13 @@
     if (palMask) palMask.addEventListener('click', (ev) => { if (ev.target === palMask) closePalette(); });
     /* 全局搜索浮层：输入实时过滤 / ↑↓选择 / Enter 跳转 / Esc 关闭 / 点击遮罩关闭 */
     const gIn = q('gSearchIn'), gList = q('gSearchList'), gMask = q('gSearchMask');
+    const _gInput = rafThrottle(() => { _gIdx = 0; _gPaint(gIn.value); });
     if (gIn) {
-      gIn.addEventListener('input', () => { _gIdx = 0; _gPaint(gIn.value); });
+      gIn.addEventListener('input', (e) => {
+        if (e.isComposing) return;                       // 输入法组合中不重绘，等 compositionend 收尾
+        _gInput();
+      });
+      gIn.addEventListener('compositionend', () => { _gIdx = 0; _gPaint(gIn.value); });
       gIn.addEventListener('keydown', (e) => {
         if (e.key === 'ArrowDown') { e.preventDefault(); _gIdx++; _gPaint(gIn.value); }
         else if (e.key === 'ArrowUp') { e.preventDefault(); _gIdx--; _gPaint(gIn.value); }
@@ -9037,9 +9086,11 @@
     if (q('drawerScriptBtn')) q('drawerScriptBtn').addEventListener('click', () => toggleDrawerScript());
     if (q('drawerScriptImport')) q('drawerScriptImport').addEventListener('click', () => scriptImportFile());
     if (q('drawerScriptParse')) q('drawerScriptParse').addEventListener('click', () => doParse());
-    if (q('drawerScriptText')) q('drawerScriptText').addEventListener('input', (e) => { S.scriptText = e.target.value; autosize(e.target); });
-    /* 输入框自适应：任何 .autoarea 文本框随内容自动伸缩 */
-    document.addEventListener('input', (e) => { autosize(e.target); });
+    if (q('drawerScriptText')) q('drawerScriptText').addEventListener('input', (e) => { S.scriptText = e.target.value; });
+    /* 输入框自适应：事件委托到 textarea，并用 rAF 节流合并同一帧内的多次输入，
+     * 避免每个按键都同步读 scrollHeight 触发一次全页回流。 */
+    const _autosizeThrottled = rafThrottle(autosize);
+    document.addEventListener('input', (e) => { if (e.target && e.target.tagName === 'TEXTAREA') _autosizeThrottled(e.target); });
     installDrop();
     installInputGuard();
     init();

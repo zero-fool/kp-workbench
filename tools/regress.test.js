@@ -935,8 +935,8 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
   const storeSrc = fs.readFileSync(STORE, 'utf8');
   /* 函数签名抽取：用于从 store.js 源码加载 write / load / rehydrateMaps 实现 */
   function storeExtract(name) {
-    /* 匹配类方法 function write(d) 或顶层 function rehydrateMaps(d, dir) */
-    const re = new RegExp('(?:^\\s{2}|^)(?:function\\s+' + name + '\\s*\\(|' + name + '\\s*\\()', 'm');
+    /* 匹配类方法 function write(d) / async maybeSnapshot(d) 或顶层 function rehydrateMaps(d, dir) */
+    const re = new RegExp('(?:^\\s{2}|^)(?:async\\s+)?(?:function\\s+' + name + '\\s*\\(|' + name + '\\s*\\()', 'm');
     const m = re.exec(storeSrc);
     if (!m) return null;
     let i = -1, par = 0;
@@ -1371,7 +1371,7 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
   check('P6 store 内存文档缓存（_remember/_doc，save 回写）', () => {
     const st = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'store.js'), 'utf8');
     if (!/_remember/.test(st) || !/this\._doc/.test(st)) return '缺少内存文档缓存';
-    return /save\(d\) \{ this\._doc = d;/.test(st) ? true : 'save 未回写 _doc';
+    return /save\(d\)\s*\{\s*this\._doc\s*=\s*d;/.test(st) ? true : 'save 未回写 _doc';
   });
   check('P6 备份/自动备份/ meta 不再整档读盘（backup+autoBackupMinutes+meta 走 _doc）', () => {
     const st = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'store.js'), 'utf8');

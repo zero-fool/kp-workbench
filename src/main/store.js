@@ -42,6 +42,7 @@ class DataStore {
     this._lastWriteHash = null;                          // write() 已算好的哈希，供 maybeSnapshot 复用
     this._shardDir = null;                               // 分片目录路径（load 时确定）
     this._entityHashes = {};                             // 各实体类型的上次写入哈希，用于增量写入
+    this._snapBusy = false;                              // 快照异步写入进行中标记，避免并发写重名
     this._doc = null;                                    // 内存态文档缓存：供备份轮询/meta 复用，避免周期性整档读盘
     fs.mkdirSync(this.folder, { recursive: true });
     fs.mkdirSync(this.backups, { recursive: true });
@@ -177,19 +178,26 @@ class DataStore {
     } catch (e) { return { ok: false, error: String(e) }; }
   }
 
-  /* ===== 自动「版本快照」：在保存时按内容变更去重沉淀最近 N 份，可随时回滚 ===== */
-  maybeSnapshot(d) {
+  /* ===== 自动「版本快照」：在保存时按内容变更去重沉淀最近 N 份，可随时回滚 =====
+   * 异步写入（fs.promises）：整档序列化可能很大，避免在保存路径上同步阻塞主进程。
+   * 快照属尽力而为的历史留存，即便应用立刻退出未写完也不影响主数据。 */
+  async maybeSnapshot(d) {
+    if (this._snapBusy) return;                                       // 上一次快照未落地，本轮回退跳过，避免并发写重名
     const now = Date.now();
-    if (this._lastSnapTs && now - this._lastSnapTs < 8000) return;   // 8 秒节流，避免高频改动的磁盘压力
-    const h = this._lastWriteHash;                                    // 复用 write() 已算好的哈希，不再重复序列化 8 MB 底图
+    if (this._lastSnapTs && now - this._lastSnapTs < 8000) return;    // 8 秒节流，避免高频改动的磁盘压力
+    const h = this._lastWriteHash;                                    // 复用 write() 已算好的哈希，不再重复序列化
     if (!h || h === this._lastSnapHash) { this._lastSnapTs = now; return; }
     const ts = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19) + '-' + Math.floor(now / 1000);
     const name = 'snap-' + ts + '.json';
+    this._snapBusy = true;
     try {
-      fs.writeFileSync(path.join(this.snapshots, name), JSON.stringify(d, null, 2), 'utf8');
+      await fs.promises.writeFile(path.join(this.snapshots, name), JSON.stringify(d, null, 2), 'utf8');
       this._lastSnapHash = h; this._lastSnapTs = now;
       pruneSnapshots(this.snapshots, 40);                             // 只保留最近 40 份，防止无限增长
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      this._snapBusy = false;
+    }
   }
   listSnapshots() {
     const out = [];
@@ -425,7 +433,12 @@ class DataStore {
     for (const s of _saved) d.maps[s.i].img = s.img;
   }
 
-  save(d) { this._doc = d; this.write(d); this.maybeSnapshot(d); return d; }
+  save(d) {
+    this._doc = d;
+    this.write(d);
+    try { const p = this.maybeSnapshot(d); if (p && typeof p.catch === 'function') p.catch(() => {}); } catch (_) {}
+    return d;
+  }
 
   /* 缓存当前权威文档到内存，供 backup/autoBackupMinutes/meta 复用，避免每 60s 整档读盘 */
   _remember(d) { this._doc = d; return d; }
@@ -436,6 +449,20 @@ class DataStore {
     fs.writeFileSync(path.join(this.backups, name), JSON.stringify(d, null, 2), 'utf8');
     this._lastBackup = Date.now();
     return { ok: true, name };
+  }
+
+  /* 异步备份：供周期性自动备份使用，避免整档（可能含大底图）同步写阻塞主进程。
+   * 退出前的同步 backup() 保持不变，保证最后一刻一定落盘。永不 reject，失败以 { ok:false } 返回。 */
+  async backupAsync() {
+    const d = this._doc || this.load();
+    const name = 'kp-backup-' + new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19) + '.json';
+    try {
+      await fs.promises.writeFile(path.join(this.backups, name), JSON.stringify(d, null, 2), 'utf8');
+      this._lastBackup = Date.now();
+      return { ok: true, name };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) || String(e) };
+    }
   }
 
   /* 读取用户设置的自动备份间隔（分钟）。未设置时回退 30 分钟。走内存缓存，不再读盘。 */

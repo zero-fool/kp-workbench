@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.ecache/
+data/
+build/
+package-lock.json
+src/renderer/test_dice.html
