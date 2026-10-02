@@ -15,9 +15,16 @@
   const DATA_TYPE = { pcs: '人物卡', npcs: 'NPC', regions: '地区', logs: '日志', mobs: '怪物', rules: '规则', lore: '背景' };
   const KINDS = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
   const TPL_KINDS = ['pcs', 'npcs', 'mobs']; // 仅「卡片类」实体支持切换模板（模板改变显示字段集）
-  const THEMES = [['ember', '残火纪·暗黑'], ['parchment', '羊皮纸手账'], ['lite', '极简浅色'], ['neon', '赛博霓虹'], ['dusk', '暮光护眼']];
-  const APP_VERSION = '3.2.0';
+  const THEMES = [['ember', '残火纪·暗黑'], ['parchment', '现代卷宗'], ['lite', '极简浅色'], ['neon', '赛博霓虹'], ['dusk', '暮光护眼']];
+  const APP_VERSION = '3.2.1';
   const CHANGELOG = [
+    { version: '3.2.1', date: '2026-10-01', type: '测试版·界面重构', items: [
+      '界面整体改为「现代卷宗」视觉：暖纸底、衬线大标题、火漆红强调色、14px 统一圆角与发丝分隔线，顶栏、侧栏、卡片、档案柜成套替换，信息层级更清楚。',
+      '图标全面换装：侧栏、顶栏、命令面板与看板原先的 emoji 图标，全部改为自绘内联 SVG 线性图标（40 余枚），统一 24 格栅与描边粗细、随文字颜色取色，并补齐悬停与选中的过渡动效，各主题下都能自动跟随配色。',
+      '新增图像资产：顶栏品牌徽记、总览看板头图、档案柜与笔记空状态插画，统一「火漆余烬」画风（暗红 / 铜金 / 羊皮纸质感）。',
+      '无障碍：五个主题的次要文本（--ink-faint）逐个重算并提高对比度，对各自的各层底色最差对比度均达到 WCAG AA 的 4.5:1 以上。',
+      '默认主题更名为「现代卷宗」（原「羊皮纸手账」），顶栏下拉、设置页按钮与状态条同步。'
+    ] },
     { version: '3.2.0', date: '2026-10-01', type: '正式版·骰娘', items: [
       '完整对照 DiceZone/Dice-Next 补齐骰娘指令：在原有骰点/检定基础上，新增大批骰点、人物卡、设置与平台管理类指令，指令总数扩充到 130 余条，均可在本地工作台脱离 AI 独立运转。',
       '骰点/检定类：新增 .dx 双十字骰池（含 .dx <骰数>a<加骰线> 数成功/WoD 模式）、.rdc DnD 5e 属性检定（支持 轮数# 连投、B/P 优势劣势、±加值或骰式、理由与 DC 紧贴写法，如 .rdc3#+1d4力量 15）、.ww 骰池、.ba/.bav 对抗检定、.rx 暗骰、.rav 对抗骰、.rahb*/.rahp* 批量奖励惩罚骰；.rb2~.rb9 / .rp2~.rp9 支持奖励/惩罚骰数量前缀（如 .rb2 侦查 60）。',
@@ -662,6 +669,7 @@
   }
   function persist() {
     _xrefBump();
+    paintNavCounts();          // 数据变更后同步侧栏档案索引计数
     _pendSave = true;
     return new Promise((resolve) => {
       _saveResolve = resolve;
@@ -672,7 +680,11 @@
     S.data.audit.unshift({ t: new Date().toISOString(), op, kind, name, at: '工作台' });
     S.data.audit = S.data.audit.slice(0, 400);
   }
-  function contentInner(html) { q('content').innerHTML = html; }
+  function contentInner(html) {
+    const c = q('content');
+    c.classList.remove('cab-mode');   // 档案柜外壳仅在资料视图内显式加回，其余视图一律复位
+    c.innerHTML = html;
+  }
 
   /* ========== 地图：数据工具 ========== */
   function mapsData() { if (!S.data.maps) S.data.maps = []; S.data.maps.forEach(ensureMapShape); return S.data.maps; }
@@ -724,11 +736,12 @@
     sel.innerHTML = THEMES.map(([k, l]) => `<option value="${k}" ${S.settings.theme === k ? 'selected' : ''}>${l} ${k}</option>`).join('');
   }
   function applyTheme(name, skipPersist) {
-    if (!name) name = S.settings.theme || 'ember';
+    if (!name) name = S.settings.theme || 'parchment';
     document.documentElement.dataset.theme = name;
     S.settings.theme = name;
     pushDensityAttr((S.settings.layout && S.settings.layout.density) || 'comfortable');
     buildThemeSelect();
+    paintStatusBar();
     if (!skipPersist && window.api) persist();
   }
   function updateTopProfile() {
@@ -736,10 +749,58 @@
     updateDrawerProfile();
   }
 
+  /* ---------- 侧栏档案索引计数 & 底部状态条 ---------- */
+  /* 侧栏「工作台功能」各项右侧显示该类资料条目数（0 条时隐藏，见 .navc:empty） */
+  function paintNavCounts() {
+    const ent = (S.data && S.data.entities) || {};
+    document.querySelectorAll('#sidebar [data-nc]').forEach(el => {
+      const n = (ent[el.dataset.nc] || []).length;
+      el.textContent = n ? String(n) : '';
+    });
+  }
+  /* 底部状态条：档案 / 主题 / 版本（同步，随视图与设置即时刷新） */
+  function paintStatusBar() {
+    const set = (id, txt) => { const el = q(id); if (el) el.textContent = txt; };
+    const arch = (S.settings && S.settings.archiveLabel) || (S.meta && S.meta.archive) || 'main';
+    set('sbArchive', '档案：' + arch);
+    const th = THEMES.find(t => t[0] === (S.settings && S.settings.theme));
+    set('sbTheme', '主题：' + (th ? th[1] : '—'));
+    set('sbVersion', 'v' + APP_VERSION);
+  }
+  /* 底部状态条：骰娘连接 / 最近备份（异步，低频轮询） */
+  const DICE_CH_LABEL = { onebot11: 'OneBot', qqofficial: 'QQ官方', sim: '本地测试' };
+  async function refreshStatusBar() {
+    const diceEl = q('sbDice'), chEl = q('sbDiceCh'), bkEl = q('sbBackup');
+    if (diceEl && window.api && window.api.diceCore && window.api.diceCore.diceNet) {
+      try {
+        const list = await window.api.diceCore.diceNet.list();
+        const on = (list || []).filter(x => x && x.status && x.status.state === 'running');
+        if (on.length) {
+          diceEl.innerHTML = '<span class="sb-dot"></span>骰娘运行中';
+          if (chEl) chEl.textContent = on.map(x => DICE_CH_LABEL[x.id] || x.id).join(' · ');
+        } else {
+          diceEl.innerHTML = '<span class="sb-dot off"></span>骰娘未连接';
+          if (chEl) chEl.textContent = '—';
+        }
+      } catch (_) { diceEl.innerHTML = '<span class="sb-dot off"></span>骰娘未连接'; if (chEl) chEl.textContent = '—'; }
+    }
+    if (bkEl && window.api && window.api.backups) {
+      try {
+        const list = await window.api.backups.list();
+        if (list && list.length) {
+          const d = new Date(list[0].modified);
+          bkEl.textContent = '备份 ' + (isNaN(d.getTime()) ? '—' :
+            d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }));
+        } else bkEl.textContent = '尚未备份';
+      } catch (_) { bkEl.textContent = '尚未备份'; }
+    }
+  }
+
   /* ---------- 导航 ---------- */
   function switchView(view) {
     S.view = view;
     navPush(view);
+    paintStatusBar();
     document.querySelectorAll('#sidebar .nav').forEach(n => n.classList.toggle('active', n.dataset.view === view));
     // 自动展开当前视图所在的分组
     const activeNav = document.querySelector('#sidebar .nav[data-view="' + view + '"]');
@@ -773,7 +834,14 @@
   function applyAppName() {
     const name = (S.settings && S.settings.appName) || '残火纪';
     const sub = (S.settings && S.settings.appSub) || (name + ' · KP 团工作台');
-    if (q('appLogo')) q('appLogo').textContent = (name.trim().charAt(0)) || '残';
+    /* 徽记已换成 AI 生成图像：仅在仍是文字徽记时才写入首字，避免把 <img> 覆盖掉；
+     * 同时把图像 alt 跟着主题名刷新，读屏时也能读到正确的品牌名。 */
+    const lg = q('appLogo');
+    if (lg) {
+      const img = lg.querySelector('img');
+      if (img) img.alt = name + ' 徽记';
+      else lg.textContent = (name.trim().charAt(0)) || '残';
+    }
     if (q('appSub')) q('appSub').textContent = sub;
     document.title = name + ' · KP 跑团工作台';
   }
@@ -826,7 +894,8 @@
     const ord = order.filter(k => get(k)).concat(tiles.filter(t => !order.includes(t[0])).map(t => t[0]));
     const shown = ord.filter(k => !hidden.includes(k));
 
-    let html = `<div class="page-title"><h2>总览</h2><span class="hint">资料总计：${KINDS.map(k => `${DATA_TYPE[k]} ${(S.data.entities[k] || []).length}`).join(' · ')}　拖拽卡片可自由排序</span></div>`;
+    let html = dashHeroHTML();
+    html += `<div class="page-title"><h2>总览</h2><span class="hint">资料总计：${KINDS.map(k => `${DATA_TYPE[k]} ${(S.data.entities[k] || []).length}`).join(' · ')}　拖拽卡片可自由排序</span></div>`;
     html += dashTodayHTML();
     html += dashOverviewHTML();
     html += `<div class="homearch setcard"><div class="home-sh">
@@ -874,6 +943,37 @@
     contentInner(html);
     bindDashDrag(shown);
     paintHomeArchives();
+  }
+
+  /* 总览 · 战役头图：AI 生成的氛围插画作背景，前景叠主题名与副标题。
+   * 文字色随主题令牌走，暗角用当前主题底色叠出，因此五套皮肤下都读得清。 */
+  function dashHeroHTML() {
+    const name = (S.settings && S.settings.appName) || '残火纪';
+    const sub = (S.settings && S.settings.appSub) || (name + ' · KP 团工作台');
+    return `<section class="dash-hero">
+      <img class="dh-img" src="assets/hero.jpg" alt="" aria-hidden="true">
+      <div class="dh-cap">
+        <span class="dh-kicker">战役总览</span>
+        <h2 class="dh-title">${esc(name)}</h2>
+        <p class="dh-sub">${esc(sub)}</p>
+      </div>
+    </section>`;
+  }
+
+  /* 空状态插画：按资料类型分配图像（卷宗 / 手记两套），未覆盖的类型回落档案柜图。 */
+  const EMPTY_ILLUS = {
+    archive: { img: 'assets/empty-archive.jpg', t: '档案柜还是空的' },
+    note: { img: 'assets/empty-note.jpg', t: '还没有写下任何内容' }
+  };
+  function emptyStateHTML(o) {
+    const opt = o || {};
+    const preset = EMPTY_ILLUS[opt.art] || EMPTY_ILLUS.archive;
+    return `<div class="empty empty-illus">
+      <img class="ei-img" src="${preset.img}" alt="" aria-hidden="true">
+      <div class="ei-t">${esc(opt.title || preset.t)}</div>
+      ${opt.desc ? `<div class="ei-d">${esc(opt.desc)}</div>` : ''}
+      ${opt.act ? `<div class="ei-act">${opt.act}</div>` : ''}
+    </div>`;
   }
 
   /* 参考格局：总览 · 「今天要处理」面板 */
@@ -968,7 +1068,10 @@
         ${!active ? `<button data-ar="${esc(a.name)}" data-open>打开</button>` : '<button class="ghost" disabled>当前档案</button>'}
         <button class="ghost" data-ar="${esc(a.name)}" data-dup>复制</button></div>`;
     }
-    box.innerHTML = h || '<div class="empty">暂无档案，在下方新建即可。</div>';
+    box.innerHTML = h || emptyStateHTML({
+      art: 'archive', title: '暂无档案',
+      desc: '在下方输入档案名新建即可，多套团各自独立、互不干扰。'
+    });
   }
   async function createArchiveHome() {
     const name = (q('homeNewAr') && q('homeNewAr').value || '').trim();
@@ -1084,6 +1187,86 @@
   }
 
   /* ========== 资料视图 ========== */
+  /* 单条实体的字段行（供卡片网格与档案柜详情共用）：过滤空值、封顶 12 行 */
+  function entityRows(kind, it) {
+    const cs = schemaFor(kind, it);
+    const tagsF = new Set(cs.filter(f => f.t === 'tags').map(f => f.k));
+    const selectF = new Set(cs.filter(f => ['select', 'number'].includes(f.t)).map(f => f.k));
+    const rows = []; let shown = 0;
+    for (const f of cs) {
+      if (f.k === 'name') continue;
+      const v = it[f.k];
+      if (v === undefined || v === null || v === '') continue;
+      if (Array.isArray(v) && !v.length) continue;
+      shown++; if (shown > 12) break;
+      if (tagsF.has(f.k)) rows.push({ l: f.l, t: 'tags', ts: Array.isArray(v) ? v : tagsToArr(v) });
+      else rows.push({ l: f.l, t: 'text', v: String(Array.isArray(v) ? v.join('、') : v) });
+    }
+    const selVals = cs.filter(f => selectF.has(f.k) && it[f.k])
+      .map(f => `<span class="tag">${esc(f.l)}·${esc(it[f.k])}</span>`).join('');
+    return { rows, selVals };
+  }
+  /* 档案柜：左侧一条记录行 */
+  function cabRowHTML(kind, it, on) {
+    const name = it.name || '未命名';
+    const { rows } = entityRows(kind, it);
+    let sum = '';
+    for (const r of rows) { if (r.t === 'text' && r.v) { sum = r.v; break; } }
+    const chips = [];
+    for (const r of rows) { if (r.t === 'tags') chips.push(...r.ts); }
+    const l3 = chips.slice(0, 4).map(t => `<span class="cr-tag">＃${esc(t)}</span>`).join('')
+      + (it.source ? `<span class="cr-tag">${esc(it.source)}</span>` : '');
+    const fav = isFav(kind, it.id);
+    return `<div class="cab-row${on ? ' on' : ''}" data-id="${esc(it.id)}" onclick="WB.cabPick('${kind}','${escJs(it.id)}')">
+      <div class="cr-l1"><span class="cr-nm cnm">${esc(name)}</span><span class="cr-fav${fav ? '' : ' dim'}">${fav ? '★' : '☆'}</span></div>
+      ${sum ? `<div class="cr-l2">${esc(sum)}</div>` : ''}
+      ${l3 ? `<div class="cr-l3">${l3}</div>` : ''}
+    </div>`;
+  }
+  /* 档案柜：右侧卷宗详情 */
+  function cabDetailHTML(kind, it) {
+    const name = it.name || '未命名';
+    const { rows, selVals } = entityRows(kind, it);
+    let fields = rows.map(r => r.t === 'tags'
+      ? `<div class="cab-field"><b>${esc(r.l)}</b><div class="v"><span class="tags">${r.ts.map(x => `<span class="tag">${esc(x)}</span>`).join('')}</span></div></div>`
+      : `<div class="cab-field${r.v.length > 120 ? ' wide' : ''}"><b>${esc(r.l)}</b><div class="v">${esc(r.v)}</div></div>`
+    ).join('');
+    if (!fields) fields = '<div class="cab-field wide"><div class="v" style="color:var(--ink-faint)">暂无正文</div></div>';
+    const tplTag = it.tpl ? `<span class="ctag tpl" title="模板：${esc(tplName(it.tpl))}">${esc(tplName(it.tpl))}</span>` : '';
+    const fav = isFav(kind, it.id);
+    return `<div class="cab-dhead">
+        <div class="dh-t"><h2>${esc(name)}</h2>
+          <div class="dh-sub">${esc(DATA_TYPE[kind] || kind)} · ${esc(it.id || '')}</div>
+          <div class="dh-tags">${selVals}${tplTag}${it.source ? `<span class="ctag">${esc(it.source)}</span>` : ''}${xrefBadgeHTML(name, kind, it.id)}</div>
+        </div>
+        <span class="cab-stamp">ARCHIVED</span>
+        <div class="dh-acts">
+          <button class="ghost" onclick="WB.toggleFav('${kind}','${it.id}')">${fav ? '★ 已收藏' : '☆ 收藏'}</button>
+          <button class="ghost" onclick="WB.edit('${kind}','${it.id}')">编辑</button>
+          <button class="ghost" onclick="WB.dupCard('${kind}','${it.id}')" title="复制一张含全部字段与模板的副本">⧉ 复制</button>
+          <button class="danger" onclick="WB.del('${kind}','${it.id}')">删除</button>
+        </div></div>
+      <div class="cab-fields">${fields}</div>`;
+  }
+  /* 点击左列记录：仅换选中态与右侧详情，不整页重绘（保留列表滚动与搜索焦点） */
+  function cabPick(kind, id) {
+    const it = (S.data.entities[kind] || []).find(x => x.id === id);
+    if (!it) return;
+    S._cabSel = S._cabSel || {}; S._cabSel[kind] = id;
+    const listEl = q('cabList');
+    if (listEl) listEl.querySelectorAll('.cab-row').forEach(r => r.classList.toggle('on', r.dataset.id === id));
+    const d = q('cabDetail');
+    if (d) d.innerHTML = cabDetailHTML(kind, it);
+  }
+  /* 档案柜视图 / 卡片网格视图切换（默认档案柜） */
+  function toggleCabinet() {
+    if (!S.settings.layout) S.settings.layout = {};
+    S.settings.layout.cabinet = (S.settings.layout.cabinet === false);   // undefined/true → false；false → true
+    persist();
+    if (S.data.entities[S.view]) renderDataView(S.view); else switchView(S.view);
+    toast(S.settings.layout.cabinet ? '已切换到档案柜视图' : '已切换到卡片视图');
+  }
+
   function renderDataView(kind) {
     const schema = S.fields[kind] || [];
     const arr = S.data.entities[kind] || [];
@@ -1110,6 +1293,7 @@
     }
     S._sel = (S._sel || {}); const selSet = S._sel[kind] = S._sel[kind] || {};
     const batchMode = !!S.batchMode;
+    const cabOn = ((S.settings.layout || {}).cabinet !== false) && !batchMode;   // 档案柜视图：默认开启；多选模式回落卡片网格
     const isRuled = (kind === 'rules' || kind === 'lore');   // 参考格局：规则/背景用可折叠「速查卡」
     const sel = (v, key) => v === key ? ' selected' : '';
     const sortOpts = [['none', '排序：添加顺序'], ['fav', '★ 收藏置顶'], ['name', '名称 A→Z'], ['named', '名称 Z→A'], ['custom', '排序：自定义']]
@@ -1120,7 +1304,7 @@
     const tplSel = (S.viewTpl && S.viewTpl[kind]) || '';
     const tplOpts = TPL_KINDS.includes(kind) ? tplList().map(t => `<option value="${esc(t.id)}"${t.id === tplSel ? ' selected' : ''}>${esc(t.name)}</option>`).join('') : '';
 
-    let html = `<div class="page-title"><h2>${DATA_TYPE[kind]}</h2><span class="hint">共 ${arr.length} 条 · ${schema.length} 个字段${isCustomSort ? ' · 拖动卡片左侧手柄（或卡片本体）可自定义排序' : ''}${tagF ? ` · 已按标签 <b>＃${esc(tagF)}</b> 筛选` : ''}</span></div>`;
+    let html = `<div class="page-title"><h2>${DATA_TYPE[kind]}</h2><span class="hint">共 ${arr.length} 条 · ${schema.length} 个字段${isCustomSort ? (cabOn ? ' · 自定义排序：切回卡片视图拖动调整' : ' · 拖动卡片左侧手柄（或卡片本体）可自定义排序') : ''}${tagF ? ` · 已按标签 <b>＃${esc(tagF)}</b> 筛选` : ''}</span></div>`;
     html += `<div class="toolbar">
       <button class="ghost" onclick="WB.navBack()" title="返回 (Alt+←)">←</button>
       <button class="ghost" onclick="WB.navForward()" title="前进 (Alt+→)">→</button>
@@ -1128,6 +1312,7 @@
       <select onchange="WB.setViewSort(this.value)" title="排序方式">${sortOpts}</select>
       <select onchange="WB.setViewSrc(this.value)" title="按来源筛选">${srcOpts}</select>
       ${tagF ? `<button class="ghost tag-filter" onclick="WB.tagFilter(null)" title="清除标签筛选">＃${esc(tagF)} ✕</button>` : ''}
+      <button class="ghost" onclick="WB.toggleCabinet()" title="${cabOn ? '当前：档案柜视图（点击切回卡片网格）' : '当前：卡片网格（点击切换档案柜视图）'}">${cabOn ? '▤ 档案柜' : '▦ 卡片'}</button>
       <span class="grow"></span>
       <span class="more-anchor">
         <button class="ghost more-trigger" id="tbMoreBtn" onclick="WB.toggleMoreMenu()" title="更多操作">⋯ 更多</button>
@@ -1160,33 +1345,51 @@
       </div>`;
     }
 
-    if (!list.length) { html += `<div class="empty">${arr.length ? '无匹配结果' : '还没有内容，点击右上角新增'}</div>`; }
+    /* 档案柜视图：左列记录 + 右侧卷宗详情同屏（宽窗口主打形态） */
+    if (cabOn && list.length) {
+      const prevSel = S._cabSel && S._cabSel[kind];
+      const cur = (prevSel && list.find(x => x.id === prevSel)) || list[0];
+      S._cabSel = S._cabSel || {}; S._cabSel[kind] = cur.id;
+      const CAP = 1000;                                   // 超大档案：先渲染前 1000 条，其余提示用筛选缩小范围
+      const shown = list.slice(0, CAP);
+      const rowsHTML = shown.map(it => cabRowHTML(kind, it, it.id === cur.id)).join('')
+        + (list.length > CAP ? `<div class="cab-more">另有 ${list.length - CAP} 条未显示，请用搜索 / 来源筛缩小范围</div>` : '');
+      contentInner(`<div class="cabwrap">${html}
+        <div class="cab">
+          <div class="cab-list" id="cabList">${rowsHTML}</div>
+          <div class="cab-detail" id="cabDetail">${cabDetailHTML(kind, cur)}</div>
+        </div></div>`);
+      q('content').classList.add('cab-mode');
+      const lst = q('cabList');
+      if (lst && S._cabScroll && S._cabScroll[kind]) lst.scrollTop = S._cabScroll[kind];
+      return;
+    }
+
+    if (!list.length) {
+      /* 真·空档案（不是搜索无结果）才上插画，搜索无结果保持一行文字，避免抢戏 */
+      if (arr.length) html += `<div class="empty">无匹配结果</div>`;
+      else {
+        const isNote = (kind === 'logs' || kind === 'lore' || kind === 'rules');
+        const label = DATA_TYPE[kind] || '内容';
+        html += emptyStateHTML({
+          art: isNote ? 'note' : 'archive',
+          title: isNote ? `还没有写下${label}` : `还没有${label}档案`,
+          desc: isNote ? `把${label}记下来，之后可随时检索、引用与导出。`
+                       : `建立第一条${label}，让故事线逐步铺开。`,
+          act: `<button onclick="WB.add('${kind}')">＋ 新增${label}</button>`
+        });
+      }
+    }
     else {
       /* 单卡渲染（数据视图内联）：逻辑与原循环体完全一致，供普通/分帧两条路径共用。 */
       const cardHTML = (it) => {
-        const cs = schemaFor(kind, it);
+        const { rows, selVals } = entityRows(kind, it);
         const name = it.name || '未命名';
-        const tagsF = new Set(cs.filter(f => f.t === 'tags').map(f => f.k));
-        const selectF = new Set(cs.filter(f => ['select', 'number'].includes(f.t)).map(f => f.k));
         let inner = '';
-        let shown = 0;
-        for (const f of cs) {
-          if (f.k === 'name') continue;
-          const v = it[f.k];
-          if (v === undefined || v === null || v === '') continue;
-          if (Array.isArray(v) && !v.length) continue;
-          shown++;
-          if (shown > 12) break;
-          if (tagsF.has(f.k)) {
-            const ts = Array.isArray(v) ? v : tagsToArr(v);
-            inner += `<div class="row"><b>${esc(f.l)}</b><span class="tags">${ts.map(x => `<span class="tag">${esc(x)}</span>`).join('')}</span></div>`;
-          } else {
-            const long = Array.isArray(v) ? v.join('、') : v;
-            const cmp = String(long).length > 46;
-            inner += `<div class="row${cmp ? ' long' : ''}"><b>${esc(f.l)}</b>${esc(long)}</div>`;
-          }
+        for (const r of rows) {
+          if (r.t === 'tags') inner += `<div class="row"><b>${esc(r.l)}</b><span class="tags">${r.ts.map(x => `<span class="tag">${esc(x)}</span>`).join('')}</span></div>`;
+          else inner += `<div class="row${r.v.length > 46 ? ' long' : ''}"><b>${esc(r.l)}</b>${esc(r.v)}</div>`;
         }
-        const selVals = cs.filter(f => selectF.has(f.k) && it[f.k]).map(f => `<span class="tag">${esc(f.l)}·${esc(it[f.k])}</span>`).join('');
         const tplTag = it.tpl ? `<span class="ctag tpl" title="模板：${esc(tplName(it.tpl))}">${esc(tplName(it.tpl))}</span>` : '';
         if (isRuled) {
           /* 参考格局：规则/背景一条 = 一张可折叠速查卡 */
@@ -4556,6 +4759,7 @@
       if (r.recovered) { const src = r.recovered === 'backup' ? '最近一次备份' : '最近一个版本快照'; toast('检测到数据异常，已自动恢复为' + src + '的数据', 'warn'); }
       if (r.sessionRecovered) toast('上次可能未正常退出，已为你保留此前工作数据 ㊙——如异常可到「数据管理→备份」恢复', 'warn');
     }
+    paintNavCounts(); paintStatusBar(); refreshStatusBar();
     switchView(S.view === 'search' ? 'dash' : S.view);
   }
   async function createArchive(name) {
@@ -4765,7 +4969,13 @@
   function fieldOptsChanged() {}
 
   /* ========== 全局动作 ========== */
-  function search(v) { S.search = v; switchView(S.view); }
+  function search(v) {
+    S.search = v;
+    switchView(S.view);
+    /* 视图整体重绘会销毁原输入框，重绘后把焦点与光标还给搜索框，保证连续输入不中断 */
+    const el = document.querySelector('#content .toolbar input.search');
+    if (el) { try { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } catch (_) {} }
+  }
   /* 全局跨实体搜索（侧栏输入） */
   function globalSearch(v) {
     S.globalQuery = (v || '').trim();
@@ -7959,6 +8169,7 @@
     tagJump, tagFilter, tagRenameModal, tagMergeModal, tagMergeInto, addTagGlobal,
     handoutOpen, handoutExport, toggleHandoutAll,
     toggleMoreMenu, setDensity, toggleDensity, openCtx, setCustomOrder, applyCustomOrder, bindCardDrag,
+    toggleCabinet, cabPick,
     encNew, encOpen, closeEnc, encDel, encSetFlow, encPull, encAddManual, encDelUnit, encHp, encToggleStatus,
     encNext, encPrev, encNextTo, encGoRef, encSettle,
     polishLogs, aiWriteScript, saveNarrStyle,
@@ -8916,7 +9127,7 @@
       S.rawScript = (r.data && r.data.rawScript) ? r.data.rawScript : null;
       if (!Array.isArray(S.data.maps)) S.data.maps = [];
       if (Array.isArray(S.settings.chat)) CH.push(...S.settings.chat.slice(-CH_CAP)); // 恢复侧栏对话历史
-      if (!S.settings.theme) S.settings.theme = 'ember';
+      if (!S.settings.theme) S.settings.theme = 'parchment';
       applyTheme(S.settings.theme, true);
       applySidebar();
       updateTopProfile(); updateDrawerProfile();
@@ -8931,6 +9142,8 @@
       });
       if (S.settings.chatOpen) openChat(true);
       switchView('dash');
+      paintNavCounts(); paintStatusBar(); refreshStatusBar();
+      setInterval(() => { if (!document.hidden) refreshStatusBar(); }, 5000);   // 状态条低频轮询（骰娘连接 / 备份）
       setTimeout(() => maybeOnboard(), 600);
       /* 同步一次主进程当前更新状态：清理跨启动残留的瞬时状态，并提示上次未完成的更新 */
       if (window.api.updater && window.api.updater.status) {

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="ember">
+<html lang="zh-CN" data-theme="parchment">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
@@ -7,12 +7,57 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+
+<!-- 图标精灵：统一 24 格栅、线性描边、随文字颜色（currentColor）取色 -->
+<svg class="iconsprite" aria-hidden="true" focusable="false"><defs>
+  <symbol id="i-overview" viewBox="0 0 24 24"><rect x="3" y="3" width="7.6" height="7.6" rx="2.2"/><rect x="13.4" y="3" width="7.6" height="7.6" rx="2.2"/><rect x="3" y="13.4" width="7.6" height="7.6" rx="2.2"/><rect x="13.4" y="13.4" width="7.6" height="7.6" rx="2.2"/></symbol>
+  <symbol id="i-toolbox" viewBox="0 0 24 24"><rect x="3" y="7.6" width="18" height="11.9" rx="2.6"/><path d="M3 12.2h18"/><path d="M8.6 7.6V6.2A2.2 2.2 0 0 1 10.8 4h2.4a2.2 2.2 0 0 1 2.2 2.2v1.4"/><path d="M10.4 12.2v1.6h3.2v-1.6"/></symbol>
+  <symbol id="i-person" viewBox="0 0 24 24"><rect x="3.2" y="4.2" width="17.6" height="15.6" rx="2.6"/><circle cx="9.2" cy="10.2" r="2.3"/><path d="M5.4 16.9c.7-1.9 2.1-2.9 3.8-2.9s3.1 1 3.8 2.9"/><path d="M15.4 9.6h3.2M15.4 13h3.2"/></symbol>
+  <symbol id="i-hood" viewBox="0 0 24 24"><path d="M12 3.4c3.7 0 6.2 2.7 6.2 6.4 0 4.5-2.5 8.5-6.2 11-3.7-2.5-6.2-6.5-6.2-11 0-3.7 2.5-6.4 6.2-6.4Z"/><path d="M9.4 10.6c.7-.9 1.6-1.4 2.6-1.4s1.9.5 2.6 1.4"/><path d="M12 14.8v2.6"/></symbol>
+  <symbol id="i-peaks" viewBox="0 0 24 24"><path d="M2.8 19.2h18.4"/><path d="M4.6 19.2 10 6.8l3.4 7.2 1.9-3.3 4.1 8.5"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 6.6C10.4 5.2 8.4 4.5 5.8 4.5H3.6v13.1h2.2c2.6 0 4.6.7 6.2 2.1 1.6-1.4 3.6-2.1 6.2-2.1h2.2V4.5h-2.2c-2.6 0-4.6.7-6.2 2.1Z"/><path d="M12 6.6v13.1"/></symbol>
+  <symbol id="i-skull" viewBox="0 0 24 24"><path d="M12 3.4A6.6 6.6 0 0 0 5.4 10c0 2.1.9 3.6 2.1 4.6v2.4a1.4 1.4 0 0 0 1.4 1.4h6.2a1.4 1.4 0 0 0 1.4-1.4v-2.4c1.2-1 2.1-2.5 2.1-4.6A6.6 6.6 0 0 0 12 3.4Z"/><circle cx="9.6" cy="10.1" r="1.25" fill="currentColor" stroke="none"/><circle cx="14.4" cy="10.1" r="1.25" fill="currentColor" stroke="none"/><path d="M10.6 16.6v1.8M13.4 16.6v1.8"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><rect x="4.6" y="3.4" width="14.8" height="17.2" rx="2.4"/><path d="M8.4 8h7.2M8.4 12h7.2M8.4 16h4.2"/></symbol>
+  <symbol id="i-castle" viewBox="0 0 24 24"><path d="M4.2 20V9.4l1.9-2 1.9 2 .9-2.6L12 8.9l3.1-2.1.9 2.6 1.9-2 1.9 2V20"/><path d="M3.2 20h17.6"/><path d="M10.2 20v-4.4h3.6V20"/></symbol>
+  <symbol id="i-network" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.2"/><circle cx="5.4" cy="17.4" r="2.2"/><circle cx="18.6" cy="17.4" r="2.2"/><path d="M10.7 6.9 6.7 15.6M13.3 6.9l4 8.7M7.6 17.4h8.8"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M11.6 3.4H19a1.6 1.6 0 0 1 1.6 1.6v7.4a1.6 1.6 0 0 1-.47 1.13l-6.6 6.6a1.6 1.6 0 0 1-2.26 0l-7.4-7.4a1.6 1.6 0 0 1 0-2.26l6.6-6.6A1.6 1.6 0 0 1 11.6 3.4Z"/><circle cx="16.3" cy="7.7" r="1.35"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 4.4 3.6 6.7v12.9L9 17.3l6 2.3 5.4-2.3V4.4L15 6.7Z"/><path d="M9 4.4v12.9M15 6.7v12.9"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.4 2.8 5 13.4h6.2l-.6 7.8L19 10.6h-6.2Z"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3.4 20.4h17.2"/><rect x="5.6" y="11" width="3.4" height="6.4" rx="1.2"/><rect x="10.3" y="6.4" width="3.4" height="11" rx="1.2"/><rect x="15" y="13.6" width="3.4" height="3.8" rx="1.2"/></symbol>
+  <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M11 3.2 12.7 8.6 18.1 10.3 12.7 12 11 17.4 9.3 12 3.9 10.3 9.3 8.6Z"/><path d="M18.2 15.2l.85 2.45 2.45.85-2.45.85-.85 2.45-.85-2.45-2.45-.85 2.45-.85Z"/></symbol>
+  <symbol id="i-mask" viewBox="0 0 24 24"><path d="M4 7.6a2.4 2.4 0 0 1 2.4-2.4h11.2A2.4 2.4 0 0 1 20 7.6v4.8c0 4.4-3.6 8-8 8s-8-3.6-8-8Z"/><path d="M8.4 10.4h.02M15.6 10.4h.02" stroke-width="2.4"/><path d="M9.6 14.8c1.5 1 3.3 1 4.8 0"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7.4h8.6M16.2 7.4h3.8M4 12h3.4M11 12h9M4 16.6h8.6M16.2 16.6h3.8"/><circle cx="14.4" cy="7.4" r="1.9"/><circle cx="9.2" cy="12" r="1.9"/><circle cx="14.4" cy="16.6" r="1.9"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4.2 19.8l1.1-4.2L15.9 4.9a2.15 2.15 0 0 1 3.05 3.05L8.4 18.7Z"/><path d="M14 6.8 17.2 10"/></symbol>
+  <symbol id="i-lines" viewBox="0 0 24 24"><path d="M4.4 6.4h15.2M4.4 10.8h15.2M4.4 15.2h9.6M4.4 19.6h6"/></symbol>
+  <symbol id="i-d20" viewBox="0 0 24 24"><path d="M12 3 20.6 8.1v7.8L12 21 3.4 15.9V8.1Z"/><path d="M12 8.4 6.6 15.4h10.8Z"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M9.6 14.4 14.4 9.6"/><path d="M7.4 11.2 5.2 13.4a3.4 3.4 0 0 0 4.8 4.8l2.2-2.2"/><path d="M16.6 12.8l2.2-2.2a3.4 3.4 0 0 0-4.8-4.8l-2.2 2.2"/></symbol>
+  <symbol id="i-die" viewBox="0 0 24 24"><rect x="4.2" y="4.2" width="15.6" height="15.6" rx="3.6"/><circle cx="9" cy="9" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="15" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="m15.4 8.6-2 4.8-4.8 2 2-4.8Z"/><path d="M12 3.6v1.6M12 18.8v1.6M3.6 12h1.6M18.8 12h1.6"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="7.2" y="7.2" width="9.6" height="9.6" rx="2.4"/><path d="M10 3.6v3.6M14 3.6v3.6M10 16.8v3.6M14 16.8v3.6M3.6 10h3.6M3.6 14h3.6M16.8 10h3.6M16.8 14h3.6"/></symbol>
+  <symbol id="i-toggle" viewBox="0 0 24 24"><rect x="3.2" y="7.6" width="17.6" height="8.8" rx="4.4"/><circle cx="7.6" cy="12" r="2.5" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-bubbles" viewBox="0 0 24 24"><path d="M3.6 7.4a2.8 2.8 0 0 1 2.8-2.8h6.4a2.8 2.8 0 0 1 2.8 2.8v2.4a2.8 2.8 0 0 1-2.8 2.8H8L3.6 15.6Z"/><path d="M17.6 8.4a2.8 2.8 0 0 1 2.8 2.8v2.6a2.8 2.8 0 0 1-2.8 2.8h-.6l-2.8 2.2v-2.2"/></symbol>
+  <symbol id="i-picture" viewBox="0 0 24 24"><rect x="3.4" y="4.6" width="17.2" height="14.8" rx="3"/><circle cx="8.8" cy="10" r="1.7"/><path d="m4.6 17.4 4.6-4.4 3.4 3.1 2.8-2.4 4 3.7"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.11a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.11a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.08A1.7 1.7 0 0 0 10 3.11V3a2 2 0 1 1 4 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.08A1.7 1.7 0 0 0 20.89 10H21a2 2 0 1 1 0 4h-.11a1.7 1.7 0 0 0-1.49 1.03Z"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="M9.7 9.5a2.4 2.4 0 1 1 3.2 2.3c-.6.24-.9.72-.9 1.36v.34"/><circle cx="12" cy="16.5" r="1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-megaphone" viewBox="0 0 24 24"><path d="M3.8 10.4v3.2a1.6 1.6 0 0 0 1.6 1.6h1.9l6.1 3.9V4.9L7.3 8.8H5.4a1.6 1.6 0 0 0-1.6 1.6Z"/><path d="M16.4 9.4a3.6 3.6 0 0 1 0 5.2"/><path d="M7.3 15.2v4"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.2V12l3.2 1.9"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20.4 11.4c0 4-3.7 7.2-8.4 7.2-1 0-1.9-.14-2.8-.4L5 20.6l1.2-3.3C4.7 15.7 3.6 13.7 3.6 11.4c0-4 3.7-7.2 8.4-7.2s8.4 3.2 8.4 7.2Z"/></symbol>
+  <symbol id="i-collapse" viewBox="0 0 24 24"><rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2.6"/><path d="M9.4 4.6v14.8"/><path d="M14.2 9.6 11.6 12l2.6 2.4"/></symbol>
+  <symbol id="i-rows" viewBox="0 0 24 24"><path d="M4 6h16M4 10h16M4 14h16M4 18h16"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="6.4" rx="7.4" ry="3"/><path d="M4.6 6.4v11.2c0 1.66 3.31 3 7.4 3s7.4-1.34 7.4-3V6.4"/><path d="M4.6 12c0 1.66 3.31 3 7.4 3s7.4-1.34 7.4-3"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.6 7.6A2.6 2.6 0 0 1 6.2 5h3.4a2 2 0 0 1 1.6.8l1.1 1.5H18a2.6 2.6 0 0 1 2.6 2.6v6.5A2.6 2.6 0 0 1 18 19H6.2A2.6 2.6 0 0 1 3.6 16.4Z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.7" cy="10.7" r="6.3"/><path d="m15.5 15.5 4.3 4.3"/></symbol>
+  <symbol id="i-min" viewBox="0 0 24 24"><path d="M4.6 12h14.8"/></symbol>
+  <symbol id="i-max" viewBox="0 0 24 24"><rect x="5.4" y="5.4" width="13.2" height="13.2" rx="2.2"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.4 6.4l11.2 11.2M17.6 6.4 6.4 17.6"/></symbol>
+</defs></svg>
+
 <div id="app" class="app">
 
   <!-- 顶栏（无边框拖动区） -->
   <header class="topbar" id="winBar">
     <div class="brand" title="拖拽此区域可移动窗口">
-      <span class="logo" id="appLogo">残</span>
+      <span class="logo" id="appLogo"><img src="assets/emblem.jpg" alt="残火纪徽记"></span>
       <div class="brand-text">
         <b>KP 跑团工作台</b>
         <span class="sub" id="appSub">残火纪 · 烬中寻火</span>
@@ -21,14 +66,14 @@
     <div class="top-actions">
       <span class="profile-chip" id="topProfile" title="当前 AI 人设">—</span>
       <select id="themeSelect" title="主题皮肤"></select>
-      <button class="ghost" id="btnDensity" title="切换卡片密度：紧凑 / 舒适" onclick="WB.toggleDensity()">▤ 密度</button>
-      <button class="ghost" id="btnBackup" title="立即备份">备份</button>
-      <button class="ghost" id="btnFolder" title="打开数据文件夹">文件夹</button>
+      <button class="ghost" id="btnDensity" title="切换卡片密度：紧凑 / 舒适" onclick="WB.toggleDensity()"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-rows"></use></svg>密度</button>
+      <button class="ghost" id="btnBackup" title="立即备份"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-db"></use></svg>备份</button>
+      <button class="ghost" id="btnFolder" title="打开数据文件夹"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-folder"></use></svg>文件夹</button>
     </div>
     <div class="win-ctl" id="winCtl">
-      <button class="wc" id="wcMin" title="最小化">─</button>
-      <button class="wc" id="wcMax" title="最大化/还原">▢</button>
-      <button class="wc wc-close" id="wcClose" title="关闭">✕</button>
+      <button class="wc" id="wcMin" title="最小化"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-min"></use></svg></button>
+      <button class="wc" id="wcMax" title="最大化/还原"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-max"></use></svg></button>
+      <button class="wc wc-close" id="wcClose" title="关闭"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-close"></use></svg></button>
     </div>
   </header>
 
@@ -36,66 +81,66 @@
     <!-- 侧栏 -->
     <nav class="sidebar" id="sidebar">
       <div class="gsearch" title="Ctrl+K 呼出命令面板">
-        <span class="gf">⌕</span><input id="glSearch" placeholder="全局搜索 (Ctrl+K)…" oninput="WB.globalSearch(this.value)">
+        <span class="gf"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-search"></use></svg></span><input id="glSearch" placeholder="全局搜索 (Ctrl+K)…" oninput="WB.globalSearch(this.value)">
       </div>
       <!-- 总览：独立大板块 -->
       <div class="sect">总 览</div>
-      <button data-view="dash" class="nav active"><span class="ic">◈</span><span class="navt">总览看板</span></button>
+      <button data-view="dash" class="nav active"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-overview"></use></svg><span class="navt">总览看板</span></button>
       <div class="sep"></div>
 
       <!-- 工作台功能 -->
-      <details class="snav" data-grp="work"><summary><span class="ic">🧰</span><span class="navt">工作台功能</span></summary>
-        <button data-view="pcs" class="nav"><span class="ic">⛧</span><span class="navt">人物卡</span></button>
-        <button data-view="npcs" class="nav"><span class="ic">🧙</span><span class="navt">NPC 图鉴</span></button>
-        <button data-view="regions" class="nav"><span class="ic">⛰</span><span class="navt">地区场景</span></button>
-        <button data-view="logs" class="nav"><span class="ic">🕮</span><span class="navt">战役日志</span></button>
-        <button data-view="mobs" class="nav"><span class="ic">☠</span><span class="navt">怪物图鉴</span></button>
-        <button data-view="rules" class="nav"><span class="ic">▤</span><span class="navt">规则速查</span></button>
-        <button data-view="lore" class="nav"><span class="ic">☷</span><span class="navt">背景城设</span></button>
-        <button data-view="relations" class="nav"><span class="ic">☸</span><span class="navt">关系网</span></button>
-        <button data-view="tags" class="nav"><span class="ic">＃</span><span class="navt">标签</span></button>
-        <button data-view="maps" class="nav"><span class="ic">🗺</span><span class="navt">地图</span></button>
-        <button data-view="encounter" class="nav"><span class="ic">⚔</span><span class="navt">临场战斗</span></button>
-        <button data-view="stats" class="nav"><span class="ic">📊</span><span class="navt">统计分析</span></button>
+      <details class="snav" data-grp="work"><summary><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-toolbox"></use></svg><span class="navt">工作台功能</span></summary>
+        <button data-view="pcs" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-person"></use></svg><span class="navt">人物卡</span><span class="navc" data-nc="pcs"></span></button>
+        <button data-view="npcs" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-hood"></use></svg><span class="navt">NPC 图鉴</span><span class="navc" data-nc="npcs"></span></button>
+        <button data-view="regions" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-peaks"></use></svg><span class="navt">地区场景</span><span class="navc" data-nc="regions"></span></button>
+        <button data-view="logs" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-book"></use></svg><span class="navt">战役日志</span><span class="navc" data-nc="logs"></span></button>
+        <button data-view="mobs" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-skull"></use></svg><span class="navt">怪物图鉴</span><span class="navc" data-nc="mobs"></span></button>
+        <button data-view="rules" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-doc"></use></svg><span class="navt">规则速查</span><span class="navc" data-nc="rules"></span></button>
+        <button data-view="lore" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-castle"></use></svg><span class="navt">背景城设</span><span class="navc" data-nc="lore"></span></button>
+        <button data-view="relations" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-network"></use></svg><span class="navt">关系网</span></button>
+        <button data-view="tags" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-tag"></use></svg><span class="navt">标签</span></button>
+        <button data-view="maps" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-map"></use></svg><span class="navt">地图</span></button>
+        <button data-view="encounter" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-bolt"></use></svg><span class="navt">临场战斗</span></button>
+        <button data-view="stats" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-chart"></use></svg><span class="navt">统计分析</span></button>
       </details>
 
       <!-- 工作台 AI 功能 -->
-      <details class="snav" data-grp="workai"><summary><span class="ic">✧</span><span class="navt">工作台 AI 功能</span></summary>
-        <button data-view="ai" class="nav"><span class="ic">✧</span><span class="navt">AI 助手</span></button>
-        <button data-view="persona" class="nav"><span class="ic">♜</span><span class="navt">AI 设定</span></button>
-        <button data-view="aiconf" class="nav"><span class="ic">⇅</span><span class="navt">AI 配置</span></button>
-        <button data-view="polish" class="nav"><span class="ic">✍</span><span class="navt">记录润色</span></button>
-        <button data-view="rawtext" class="nav"><span class="ic">↯</span><span class="navt">原始文本</span></button>
+      <details class="snav" data-grp="workai"><summary><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-sparkle"></use></svg><span class="navt">工作台 AI 功能</span></summary>
+        <button data-view="ai" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-sparkle"></use></svg><span class="navt">AI 助手</span></button>
+        <button data-view="persona" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-mask"></use></svg><span class="navt">AI 设定</span></button>
+        <button data-view="aiconf" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-sliders"></use></svg><span class="navt">AI 配置</span></button>
+        <button data-view="polish" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-pen"></use></svg><span class="navt">记录润色</span></button>
+        <button data-view="rawtext" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-lines"></use></svg><span class="navt">原始文本</span></button>
       </details>
 
       <!-- 骰娘功能 -->
-      <details class="snav" data-grp="dice"><summary><span class="ic">🎲</span><span class="navt">骰娘功能</span></summary>
-        <button data-view="dicehost" class="nav"><span class="ic">🎲</span><span class="navt">连 QQ 骰娘</span></button>
-        <button data-view="dice" class="nav"><span class="ic">⚀</span><span class="navt">本地掷骰</span></button>
-        <button data-view="dicework" class="nav"><span class="ic">🧭</span><span class="navt">骰娘工作台</span></button>
+      <details class="snav" data-grp="dice"><summary><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-d20"></use></svg><span class="navt">骰娘功能</span></summary>
+        <button data-view="dicehost" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-link"></use></svg><span class="navt">连 QQ 骰娘</span></button>
+        <button data-view="dice" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-die"></use></svg><span class="navt">本地掷骰</span></button>
+        <button data-view="dicework" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-compass"></use></svg><span class="navt">骰娘工作台</span></button>
       </details>
 
       <!-- 骰娘 AI 设置 -->
-      <details class="snav" data-grp="diceai"><summary><span class="ic">🧠</span><span class="navt">骰娘 AI 设置</span></summary>
-        <button data-view="diceai" class="nav"><span class="ic">🎛</span><span class="navt">AI 功能开关</span></button>
-        <button data-view="diceaichat" class="nav"><span class="ic">💬</span><span class="navt">群聊 AI 行为</span></button>
-        <button data-view="dicememe" class="nav"><span class="ic">🖼</span><span class="navt">表情包库</span></button>
+      <details class="snav" data-grp="diceai"><summary><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-cpu"></use></svg><span class="navt">骰娘 AI 设置</span></summary>
+        <button data-view="diceai" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-toggle"></use></svg><span class="navt">AI 功能开关</span></button>
+        <button data-view="diceaichat" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-bubbles"></use></svg><span class="navt">群聊 AI 行为</span></button>
+        <button data-view="dicememe" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-picture"></use></svg><span class="navt">表情包库</span></button>
       </details>
 
       <!-- 设置 -->
-      <details class="snav" data-grp="sys"><summary><span class="ic">⚙</span><span class="navt">设置</span></summary>
-        <button data-view="settings" class="nav"><span class="ic">⚙</span><span class="navt">偏好设置</span></button>
-        <button data-view="help" class="nav"><span class="ic">❓</span><span class="navt">帮助中心</span></button>
-        <button data-view="changelog" class="nav"><span class="ic">⌘</span><span class="navt">更新公告</span></button>
-        <button data-view="runlog" class="nav"><span class="ic">📜</span><span class="navt">运行记录</span></button>
+      <details class="snav" data-grp="sys"><summary><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-gear"></use></svg><span class="navt">设置</span></summary>
+        <button data-view="settings" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-gear"></use></svg><span class="navt">偏好设置</span></button>
+        <button data-view="help" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-help"></use></svg><span class="navt">帮助中心</span></button>
+        <button data-view="changelog" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-megaphone"></use></svg><span class="navt">更新公告</span></button>
+        <button data-view="runlog" class="nav"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-clock"></use></svg><span class="navt">运行记录</span></button>
       </details>
       <div class="sep"></div>
-      <button id="btnChatToggle" class="nav" title="展开/收起侧栏 AI 对话"><span class="ic">💬</span><span class="navt">AI 对话</span></button>
-      <button id="btnSidebarToggle" class="nav" title="折叠/展开侧栏"><span class="ic">⇤⇥</span><span class="navt">折叠侧栏</span></button>
+      <button id="btnChatToggle" class="nav" title="展开/收起侧栏 AI 对话"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-chat"></use></svg><span class="navt">AI 对话</span></button>
+      <button id="btnSidebarToggle" class="nav" title="折叠/展开侧栏"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-collapse"></use></svg><span class="navt">折叠侧栏</span></button>
     </nav>
 
     <!-- 主内容 -->
-    <main class="content" id="content"><div class="empty">加载中…</div></main>
+    <main class="content" id="content"><div class="empty loading">加载中…</div></main>
 
     <!-- 侧栏常驻 AI 对话抽屉 -->
     <aside class="chatdrawer" id="chatdrawer" hidden>
@@ -132,6 +177,17 @@
     </aside>
   </div>
 
+  <!-- 底部状态条：骰娘连接 / 档案 / 备份 / 版本 -->
+  <footer class="statusbar" id="statusBar">
+    <span class="sb-item" id="sbDice"><span class="sb-dot off"></span>骰娘未连接</span>
+    <span class="sb-item sb-dim" id="sbDiceCh">—</span>
+    <span class="sb-sp"></span>
+    <span class="sb-item sb-dim" id="sbArchive">档案：—</span>
+    <span class="sb-item" id="sbBackup">尚未备份</span>
+    <span class="sb-item sb-dim" id="sbTheme">主题：现代卷宗</span>
+    <span class="sb-item sb-dim" id="sbVersion">v—</span>
+  </footer>
+
 </div>
 
 <!-- 通用弹窗 -->
@@ -147,7 +203,7 @@
 <!-- Ctrl+K 命令面板 -->
 <div class="palette-mask" id="paletteMask" hidden>
   <div class="palette" id="paletteBox">
-    <div class="pal-input"><span class="pp">⌕</span><input id="palIn" placeholder="输入要跳转的页面 / 资料…（↑↓ 选择 Enter 打开 Esc 关闭）"></div>
+    <div class="pal-input"><span class="pp"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-search"></use></svg></span><input id="palIn" placeholder="输入要跳转的页面 / 资料…（↑↓ 选择 Enter 打开 Esc 关闭）"></div>
     <div class="pal-list" id="palList"></div>
   </div>
 </div>
@@ -155,7 +211,7 @@
 <!-- Ctrl+Shift+F 全局快速搜索 -->
 <div class="palette-mask gsearch-mask" id="gSearchMask" hidden>
   <div class="palette gsearch-box" id="gSearchBox">
-    <div class="pal-input"><span class="pp">⌕</span><input id="gSearchIn" placeholder="全局搜索：资料 / 人物 / 关系 / 地图 / 记忆 / 原始文本…（↑↓ 选择 Enter 跳转 Esc 关闭）"></div>
+    <div class="pal-input"><span class="pp"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-search"></use></svg></span><input id="gSearchIn" placeholder="全局搜索：资料 / 人物 / 关系 / 地图 / 记忆 / 原始文本…（↑↓ 选择 Enter 跳转 Esc 关闭）"></div>
     <div class="pal-list" id="gSearchList"></div>
   </div>
 </div>
