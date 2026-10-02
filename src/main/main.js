@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, shell, dialog, safeStorage, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, safeStorage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const diceAiTransport = require('./dice-ai-transport');   // 骰娘专用 AI 传输层（与工作台 AI 完全独立）
@@ -54,11 +54,20 @@ const { createUpdater } = require('./updater');
 const { createPluginHost } = require('../dice-core/plugin/host');
 const { validatePlugin } = require('../dice-core/plugin/validate');
 const { createWizard } = require('../dice-core/plugin/wizard');
+const { createWindowManager } = require('./window');
 
 let win = null;
-let tray = null;
 let isQuitting = false;   // 区分「关闭到托盘」与「真正退出」：仅托盘菜单/系统退出时才置真
 let updater = null;
+/* 窗口/托盘管理：win 与 isQuitting 仍由本文件持有（registerIpc 等多处依赖），
+ * 故以访问器形式注入，避免可变状态跨模块复制后窗口重建导致引用失配。 */
+const windowManager = createWindowManager({
+  runlog,
+  getWin: () => win,
+  setWin: (w) => { win = w; },
+  getQuitting: () => isQuitting,
+  setQuitting: (v) => { isQuitting = v; }
+});
 const dataDir = resolveDataDir();
 runlog.init(dataDir);
 autoMigrateLegacyData(dataDir);
@@ -1423,88 +1432,14 @@ function registerIpc() {
   global.__diceWorkbenchDispose = () => diceWorkbench.dispose();
 }
 
-function createWindow() {
-  win = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    minWidth: 1000,
-    minHeight: 680,
-    title: 'KP 跑团工作台',
-    frame: false,                      // 无边框（自绘标题栏：拖动区 + 最小化/最大化/关闭）
-    backgroundColor: '#171109',
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, '..', 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-      webviewTag: true
-    }
-  });
-  win.setMenuBarVisibility(false);
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  win.on('maximize', () => { try { win.webContents.send('win:maximized', true); } catch (_) {} });
-  win.on('unmaximize', () => { try { win.webContents.send('win:maximized', false); } catch (_) {} });
-  // 关闭到托盘：直接关闭窗口（含自绘标题栏的关闭按钮）时拦下，隐藏而非退出，避免误关丢状态。
-  // 仅当托盘创建成功时才拦截，否则保留原生关闭行为，防止出现「关不掉又找不到入口」。
-  win.on('close', (e) => {
-    if (isQuitting || !tray) return;
-    e.preventDefault();
-    win.hide();
-    trayHintOnce();
-  });
-  win.webContents.on('will-navigate', (e) => e.preventDefault());
-  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
-  runlog.info('主窗口已创建', { id: win.id });
-}
-
-/* 从托盘恢复主窗口（窗口销毁时按需重建）。 */
-function showMainWindow() {
-  if (!win || win.isDestroyed()) { createWindow(); return; }
-  if (win.isMinimized()) win.restore();
-  win.show();
-  win.focus();
-}
-
-let trayHintShown = false;
-/* 首次隐藏到托盘时给出一次气泡提示，避免用户以为“点关闭没反应”。 */
-function trayHintOnce() {
-  if (trayHintShown || !tray) return;
-  trayHintShown = true;
-  try { if (typeof tray.displayBalloon === 'function') tray.displayBalloon({ title: 'KP 跑团工作台', content: '已最小化到系统托盘，仍在后台运行；可从托盘图标重新打开或退出。' }); } catch (_) {}
-}
-
-/* 系统托盘：应用关闭后继续驻留，供骰娘/网络通道在后台保持在线。 */
-function createTray() {
-  try {
-    const iconPath = path.join(__dirname, '..', 'assets', 'tray.png');
-    let icon = nativeImage.createFromPath(iconPath);
-    if (icon.isEmpty()) icon = nativeImage.createEmpty();
-    tray = new Tray(icon);
-    tray.setToolTip('KP 跑团工作台（正在后台运行）');
-    const menu = Menu.buildFromTemplate([
-      { label: '显示主窗口', click: () => showMainWindow() },
-      { type: 'separator' },
-      { label: '退出', click: () => { isQuitting = true; app.quit(); } }
-    ]);
-    tray.setContextMenu(menu);
-    tray.on('click', () => showMainWindow());
-    tray.on('double-click', () => showMainWindow());
-    runlog.info('系统托盘已创建');
-  } catch (err) {
-    tray = null;
-    runlog.warn('系统托盘创建失败，关闭窗口将按原生行为退出', { err: String(err && err.message || err) });
-  }
-}
-
 app.whenReady().then(() => {
   registerIpc();
   // 启动时对已有明文 API Key 做一次加密迁移
   if (hardenAiKeyIfNeeded()) store.save(doc);
   // 向 AI 层注入提示词中枢上下文：dataDir 用于分场景记忆读写；此后各 AI 调用自动注入总提示词+本场景记忆
   ai.setHubContext({ dataDir });
-  createWindow();
-  createTray();
+  windowManager.createWindow();
+  windowManager.createTray();
   // 启动静默检查更新：受「启动时自动检查」开关与检查间隔（默认 24h）限制，失败只落日志不打扰用户
   setTimeout(() => { try { if (updater) updater.autoCheck(); } catch (_) {} }, 60 * 1000);
   // 自动备份：按用户配置的间隔（默认 30 分钟）+ 退出前各一次。
@@ -1527,7 +1462,7 @@ app.whenReady().then(() => {
       for (const ad of global.diceNetAdapters) { try { if (ad && typeof ad.stop === 'function') ad.stop(); } catch (_) {} }
     }
   });
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) windowManager.createWindow(); });
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
