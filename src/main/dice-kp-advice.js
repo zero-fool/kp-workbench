@@ -62,9 +62,9 @@ function createKpAdvice(deps) {
     /* 生成一版建议。focus 可选，指定本次最想解决的方向。返回 { ok, text }。 */
     async suggest({ focus, timeoutMs } = {}) {
       const cfg = (deps.getConfig && deps.getConfig()) || {};
-      if (cfg.enabled === false) return { ok: false, text: 'AI 已被关闭（可在工作台 AI 设置开启），本次不生成建议。' };
+      if (cfg.enabled === false) return { ok: false, text: 'AI 已被关闭（可在「骰娘 AI 设置」开启），本次不生成建议。' };
       const feats = cfg.features || {};
-      if (feats.kpAdvice === false) return { ok: false, text: 'KP 建议已被关闭（可在工作台 AI 设置开启）。' };
+      if (feats.kpAdvice === false) return { ok: false, text: 'KP 建议已被关闭（可在「骰娘 AI 设置」开启）。' };
 
       const ctx = (deps.getContext && deps.getContext()) || {};
       const brief = buildContextBrief(ctx);

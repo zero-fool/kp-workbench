@@ -23,8 +23,8 @@ function createSimAdapter(deps) {
 
 function createChannelAdapters(deps) {
   // Task 2/5/6 会把 stubAdapter 替换为真实实现，本步先保证形状契约可测
-  const onebot11 = deps.cfg.onebot11 ? createOnebot11Adapter(deps) : createOnebot11Adapter(deps);
-  const qqofficial = deps.cfg.qqofficial ? createQqOfficialAdapter(deps) : createQqOfficialAdapter(deps);
+  const onebot11 = createOnebot11Adapter(deps);
+  const qqofficial = createQqOfficialAdapter(deps);
   const sim = createSimAdapter(deps);
   return [onebot11, qqofficial, sim];
 }

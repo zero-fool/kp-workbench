@@ -2,8 +2,7 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, safeStorage } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const dhttp = require('http');
-const dhttps = require('https');
+const diceAiTransport = require('./dice-ai-transport');   // 骰娘专用 AI 传输层（与工作台 AI 完全独立）
 
 /* 数据目录策略（关键：升级/重装不丢数据）：
  * 便携版(自解压)：保留 EXE 旁 data/（数据随包即走）。
@@ -73,17 +72,45 @@ if (!Array.isArray(doc.settings.templates)) doc.settings.templates = [];
     if (!have.has(b.id)) { doc.settings.templates.unshift(JSON.parse(JSON.stringify(b))); have.add(b.id); }
   }
 }
-/* AI 统一开关：总开关(enabled) + 按功能分开关(features)。
- * enabled=false 时所有 AI 请求一律拒发；分开关让用户在具体功能上用不到时关掉，杜绝 token 偷跑。 */
+/* 工作台 AI：仅保留连接配置与总开关，与骰娘 AI 完全分离（骰娘不再读写 settings.ai）。 */
 {
   if (!doc.settings.ai) doc.settings.ai = {};
   if (doc.settings.ai.enabled === undefined) doc.settings.ai.enabled = true;
-  if (!doc.settings.ai.features) doc.settings.ai.features = {};
+}
+/* 骰娘 AI（与工作台 AI 完全独立）：开关存 settings.dice.aiSwitches，连接存 settings.dice.aiPort。
+ * 首次升级时把旧 settings.ai 里的骰娘开关与工作台凭证一次性迁移过来，保证既有配置不丢；
+ * 迁移完成后骰娘只认自己的开关与端口，工作台关闭 AI / 取消任务都不会波及。 */
+{
+  if (!doc.settings.dice) doc.settings.dice = {};
+  const d = doc.settings.dice;
+  const a = doc.settings.ai || {};
+  const oldF = a.features || {};
   const def = { dice: true, optimize: true, interject: false, meme: true, kpAdvice: true };
-  for (const f of Object.keys(def)) if (doc.settings.ai.features[f] === undefined) doc.settings.ai.features[f] = def[f];
-  if (doc.settings.ai.interjectProb === undefined) doc.settings.ai.interjectProb = 15;     // 随机插话命中率(%)
-  if (doc.settings.ai.memeProb === undefined) doc.settings.ai.memeProb = 25;              // 插话时附带“偷来的表情”的概率(%)
-  if (doc.settings.ai.optimizePrompt === undefined) doc.settings.ai.optimizePrompt = '';    // 骰点优化附加提示词
+  if (!d.aiSwitches) {
+    d.aiSwitches = {
+      enabled: a.enabled !== false,
+      features: {
+        dice: oldF.dice !== false, optimize: oldF.optimize !== false, interject: oldF.interject === true,
+        meme: oldF.meme !== false, kpAdvice: oldF.kpAdvice !== false
+      },
+      interjectProb: Number.isFinite(a.interjectProb) ? a.interjectProb : 15,
+      memeProb: Number.isFinite(a.memeProb) ? a.memeProb : 25,
+      optimizePrompt: typeof a.optimizePrompt === 'string' ? a.optimizePrompt : ''
+    };
+  }
+  const sw = d.aiSwitches;
+  if (!sw.features) sw.features = {};
+  for (const f of Object.keys(def)) if (sw.features[f] === undefined) sw.features[f] = def[f];
+  if (sw.enabled === undefined) sw.enabled = true;
+  if (sw.interjectProb === undefined) sw.interjectProb = 15;   // 随机插话命中率(%)
+  if (sw.memeProb === undefined) sw.memeProb = 25;             // 插话时附带“偷来的表情”的概率(%)
+  if (typeof sw.optimizePrompt !== 'string') sw.optimizePrompt = ''; // 骰点优化附加提示词
+  if (!d.aiPort) d.aiPort = {};
+  /* 旧版骰娘曾借用工作台凭证；此处一次性把工作台连接复制为骰娘独立端口，避免升级后骰娘 AI 失效。 */
+  if (!d.aiPortMigrated) {
+    if (!d.aiPort.base && a.baseUrl) d.aiPort = { enabled: true, base: a.baseUrl, key: a.apiKey, model: a.model, timeoutMs: a.timeoutMs };
+    d.aiPortMigrated = true;
+  }
 }
 /* 提示词中枢：settings.prompts.master(总提示词，每次 AI 运行都会注入) + settings.prompts.scenes(各场景覆盖) */
 {
@@ -218,18 +245,27 @@ function decKey(v) {
   }
   return v;
 }
-/* 把 settings.ai.apiKey 加密落盘（已加密则跳过），返回是否成功加密 */
+/* 把工作台/骰娘的 API Key 加密落盘（已加密则跳过），返回是否发生变更 */
 function hardenAiKeyIfNeeded() {
+  let changed = false;
   const a = doc.settings && doc.settings.ai;
-  if (!a || !a.apiKey) return false;
-  if (String(a.apiKey).indexOf(ENC_PREFIX) === 0) return true;
-  a.apiKey = encKey(a.apiKey) || a.apiKey; // 系统不支持加密时保留原值（极端无 keyring 环境）
-  a.encrypted = a.apiKey.indexOf(ENC_PREFIX) === 0;
-  return true;
+  if (a && a.apiKey && String(a.apiKey).indexOf(ENC_PREFIX) !== 0) {
+    a.apiKey = encKey(a.apiKey) || a.apiKey; // 系统不支持加密时保留原值（极端无 keyring 环境）
+    a.encrypted = a.apiKey.indexOf(ENC_PREFIX) === 0;
+    changed = true;
+  }
+  const p = doc.settings && doc.settings.dice && doc.settings.dice.aiPort;
+  if (p && p.key && String(p.key).indexOf(ENC_PREFIX) !== 0) {
+    p.key = encKey(p.key) || p.key;
+    p.encrypted = p.key.indexOf(ENC_PREFIX) === 0;
+    changed = true;
+  }
+  return changed;
 }
 function decryptSettingsClone() {
   const st = JSON.parse(JSON.stringify(doc.settings || {}));
   if (st.ai && st.ai.apiKey) st.ai.apiKey = decKey(st.ai.apiKey);
+  if (st.dice && st.dice.aiPort && st.dice.aiPort.key) st.dice.aiPort.key = decKey(st.dice.aiPort.key);
   return st;
 }
 
@@ -242,6 +278,31 @@ function currentCfg() {
   const p = currentProfile();
   if (p && p.baseUrl && p.apiKey && p.model) return mk(p);
   throw new Error('尚未配置 AI 连接（请到「AI 配置」填写接口地址 / 密钥 / 模型）');
+}
+
+/* 骰娘 AI 开关：只读 settings.dice.aiSwitches，工作台 settings.ai 完全不参与。 */
+function diceAiSwitches() {
+  const s = (doc.settings && doc.settings.dice && doc.settings.dice.aiSwitches) || {};
+  const feat = s.features || {};
+  return {
+    enabled: s.enabled !== false,
+    features: {
+      dice: feat.dice !== false, optimize: feat.optimize !== false, interject: feat.interject === true,
+      meme: feat.meme !== false, kpAdvice: feat.kpAdvice !== false
+    },
+    interjectProb: Number.isFinite(s.interjectProb) ? s.interjectProb : 15,
+    memeProb: Number.isFinite(s.memeProb) ? s.memeProb : 25,
+    optimizePrompt: typeof s.optimizePrompt === 'string' ? s.optimizePrompt : ''
+  };
+}
+/* 骰娘 AI 连接：只读 settings.dice.aiPort；未启用或未填地址返回 null（绝不回退工作台 AI）。 */
+function diceAiCfg() {
+  const p = (doc.settings && doc.settings.dice && doc.settings.dice.aiPort) || {};
+  if (!p.enabled || !p.base) return null;
+  return {
+    baseUrl: p.base, apiKey: decKey(p.key), model: p.model || 'gpt-3.5-turbo',
+    timeoutMs: Number(p.timeoutMs) > 0 ? Number(p.timeoutMs) : 90000
+  };
 }
 
 function registerIpc() {
@@ -276,6 +337,8 @@ function registerIpc() {
         doc.settings = doc.settings || {};
         const inKey = ns.ai && ns.ai.apiKey;
         if (ns.ai) { const kk = decKey(inKey); ns.ai.apiKey = encKey(kk) || kk; ns.ai.encrypted = ns.ai.apiKey.indexOf(ENC_PREFIX) === 0; }
+        const inPortKey = ns.dice && ns.dice.aiPort && ns.dice.aiPort.key;
+        if (ns.dice && ns.dice.aiPort && inPortKey !== undefined) { const kk = decKey(inPortKey); ns.dice.aiPort.key = encKey(kk) || kk; ns.dice.aiPort.encrypted = ns.dice.aiPort.key.indexOf(ENC_PREFIX) === 0; }
         doc.settings = ns;
       }
       if (p.audit !== undefined) doc.audit = p.audit;
@@ -292,6 +355,12 @@ function registerIpc() {
         const k = decKey(inKey);
         d.settings.ai.apiKey = encKey(k) || k;
         d.settings.ai.encrypted = d.settings.ai.apiKey.indexOf(ENC_PREFIX) === 0;
+      }
+      const portKeyIn = d.settings && d.settings.dice && d.settings.dice.aiPort && d.settings.dice.aiPort.key;
+      if (portKeyIn !== undefined) {
+        const k = decKey(portKeyIn);
+        d.settings.dice.aiPort.key = encKey(k) || k;
+        d.settings.dice.aiPort.encrypted = d.settings.dice.aiPort.key.indexOf(ENC_PREFIX) === 0;
       }
     }
     try {
@@ -1082,29 +1151,8 @@ function registerIpc() {
     try { if (win && win.webContents) win.webContents.send('ai:cancelled', { group, hit: n }); } catch (_) {}
   });
 
-  /* ---- AI 统一开关：读取 / 写入（总开关 + 按功能分开关），供界面与策略配置 ---- */
-  ipcMain.handle('ai:switchesGet', () => {
-    const a = (doc.settings && doc.settings.ai) || {};
-    return { enabled: a.enabled !== false, features: Object.assign({ dice: true, optimize: true, interject: false, meme: true, kpAdvice: true }, a.features || {}), interjectProb: Number.isFinite(a.interjectProb) ? a.interjectProb : 15, memeProb: Number.isFinite(a.memeProb) ? a.memeProb : 25, optimizePrompt: String(a.optimizePrompt || '') };
-  });
-  ipcMain.handle('ai:switchesSet', (e, patch) => {
-    patch = patch || {};
-    if (!doc.settings.ai) doc.settings.ai = {};
-    if (typeof patch.enabled === 'boolean') doc.settings.ai.enabled = patch.enabled;
-    if (parseFloat(patch.interjectProb) >= 0) doc.settings.ai.interjectProb = Math.min(100, Number(patch.interjectProb));
-    if (parseFloat(patch.memeProb) >= 0) doc.settings.ai.memeProb = Math.min(100, Number(patch.memeProb));
-    if (typeof patch.optimizePrompt === 'string') doc.settings.ai.optimizePrompt = patch.optimizePrompt;
-    if (patch.features && typeof patch.features === 'object') {
-      if (!doc.settings.ai.features) doc.settings.ai.features = {};
-      const f = doc.settings.ai.features;
-      if (patch.features.enabled !== undefined) doc.settings.ai.enabled = patch.features.enabled;
-      for (const k of Object.keys(patch.features)) { if (typeof patch.features[k] === 'boolean') f[k] = patch.features[k]; }
-    }
-    store.save(doc);
-    doc = store.load();
-    const a = (doc.settings && doc.settings.ai) || {};
-    return { enabled: a.enabled !== false, features: Object.assign({ dice: true, optimize: true, interject: false, meme: true, kpAdvice: true }, a.features || {}), interjectProb: Number.isFinite(a.interjectProb) ? a.interjectProb : 15, memeProb: Number.isFinite(a.memeProb) ? a.memeProb : 25, optimizePrompt: String(a.optimizePrompt || '') };
-  });
+  /* 骰娘 AI 开关不再经 IPC 读写：渲染层直接读写本地存档的 settings.dice.aiSwitches 并 persist()，
+   * 主进程每次调用骰娘 AI 时经 diceAiSwitches() 实时读取，天然与工作台 AI 解耦。 */
 
   /* ---- 提示词中枢（promptHub）：总提示词 + 各场景可编辑提示词 + 分场景记忆文件 ---- */
   ipcMain.handle('promptHub:listScenes', () => (promptHub.list() || []).map(s => Object.assign({}, s, promptHub.effective(s.key, doc.settings))));
@@ -1176,16 +1224,21 @@ function registerIpc() {
   });
 
   /* ---- AI 生成向导（分区 5）：两道闸后端直连，草稿仅存主进程内存，不落盘不生效 ----
-   * start 走专用群组「wizard」，与其它 AI 类型相隔离；取消同时触发 组取消 + AbortController，
-   * 无论生成在修错轮与在飞请求哪个阶段都能中止。 */
+   * 向导属骰娘能力：走骰娘 AI 开关与独立端口，不读工作台 AI，也不占用工作台用量/取消注册表；
+   * 取消经独立 AbortController 中止，无论在修错轮还是在飞请求阶段都能停下。 */
+  const wizardCfg = () => {
+    if (!diceAiSwitches().enabled) throw new Error('骰娘 AI 总开关已关闭（请在「骰娘 AI 设置」中开启）');
+    const c = diceAiCfg();
+    if (!c) throw new Error('骰娘 AI 尚未配置（请在「骰娘」面板启用独立 AI 端口并填写接口地址 / 模型）');
+    return c;
+  };
   const wizardAiPort = {
     async chat(cfg, messages, signal) {
-      const c = aiCfg('wizard', 'AI 生成插件');
-      const out = await ai.chatRaw(c, messages, { signal });
+      const out = await diceAiTransport.chatRaw(cfg || wizardCfg(), messages, { signal });
       return { text: out.text };
     }
   };
-  const pluginWizard = createWizard({ host: pluginHost, aiPort: wizardAiPort, opts: { cfg: () => aiCfg('wizard', 'AI 生成插件') } });
+  const pluginWizard = createWizard({ host: pluginHost, aiPort: wizardAiPort, opts: { cfg: wizardCfg } });
   let _wizardCtl = null;              // 在飞的 AbortController
   let _wizardSeq = 0;
   ipcMain.handle('diceCore:wizardStart', async (e, ruleText) => {
@@ -1195,7 +1248,7 @@ function registerIpc() {
     _wizardCtl = controller;
     const seq = ++_wizardSeq;
     try {
-      const r = await pluginWizard.start(text, { cfg: aiCfg('wizard', 'AI 生成插件'), signal: controller.signal });
+      const r = await pluginWizard.start(text, { cfg: wizardCfg, signal: controller.signal });
       if (!r.ok) return r;
       return { ok: true, draftId: r.draftId, pkg: r.pkg, rounds: r.rounds, token: String(seq) };
     } catch (err) {
@@ -1208,7 +1261,6 @@ function registerIpc() {
     }
   });
   ipcMain.handle('diceCore:wizardAbort', () => {
-    ai.cancelGroup('wizard');
     if (_wizardCtl) { try { _wizardCtl.abort(); } catch (_) {} _wizardCtl = null; }
     return { ok: true };
   });
@@ -1228,29 +1280,9 @@ function registerIpc() {
     workspace: !!wsPort, version: app.getVersion()
   }));
   ipcMain.handle('diceCore:aiChat', async (e, cfg, messages) => {
-    const base = String((cfg && cfg.base) || '').trim().replace(/\/+$/, '');
+    const base = String((cfg && (cfg.base || cfg.baseUrl)) || '').trim();
     if (!base) return { ok: false, error: '未配置 AI 端口地址', reply: '' };
-    const reqLib = base.startsWith('https:') ? dhttps : dhttp;
-    const u = new URL(base + '/chat/completions');
-    const body = JSON.stringify({ model: (cfg && cfg.model) || 'gpt-3.5-turbo', messages: Array.isArray(messages) ? messages : [] });
-    const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) };
-    if (cfg && cfg.key) headers['Authorization'] = 'Bearer ' + cfg.key;
-    return new Promise((resolve) => {
-      const r = reqLib.request({
-        hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80),
-        path: u.pathname + u.search, method: 'POST', headers, timeout: 90000
-      }, (res) => {
-        let d = '';
-        res.on('data', (c) => { d += c; });
-        res.on('end', () => {
-          try { const j = JSON.parse(d); const rp = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || ''; resolve({ ok: true, reply: rp, code: res.statusCode, model: (cfg && cfg.model) || '' }); }
-          catch (_) { resolve({ ok: false, error: '响应解析失败', reply: '', code: res.statusCode }); }
-        });
-      });
-      r.on('timeout', () => { try { r.destroy(); } catch (_) {} resolve({ ok: false, error: '请求超时', reply: '' }); });
-      r.on('error', (err) => resolve({ ok: false, error: String((err && err.message) || '网络错误'), reply: '' }));
-      r.write(body); r.end();
-    });
+    return diceAiTransport.chat(cfg, messages);   // 骰娘专用传输层，不写工作台用量统计
   });
 
   /* ---- 工作台数据（Task 6 WorkspaceDataPort，主进程直连 store 的 crud）----
@@ -1277,7 +1309,7 @@ function registerIpc() {
 
   /* ---- 骰娘工作台运行时（分区 2/3/4/6）----
    * 装配 hub + 三通道适配器 + state/log 文案持久化；改名引用：registerIpc 起用 diceWorkbench。
-   * AI 经 dice-ai 桥接接入：统一受 settings.ai(enabled + features) 开关约束，放行才真正消耗 token。 */
+   * AI 经 dice-ai 桥接接入：只受骰娘自己的 settings.dice.aiSwitches / aiPort 约束，放行才真正消耗 token。 */
   const { createDiceRuntime } = require('./dice-runtime');
   const { createDiceAi } = require('./dice-ai');
   const { createTransformReplies } = require('./dice-enhance');
@@ -1305,12 +1337,12 @@ function registerIpc() {
   });
   ipcMain.handle('diceMeme:sample', (e, tags) => memeStore.sample(tags || undefined));
   const diceAI = createDiceAi({
-    ai,
+    ai: diceAiTransport,              // 骰娘专用传输层：不共用工作台 AI 的凭证 / 用量统计 / 取消注册表
     getContext(feature) {
-      const a = (doc.settings && doc.settings.ai) || {};
-      const cfg = currentCfg(); // 未配置会抛错 → 短路，不调用供应商
+      const sw = diceAiSwitches();
+      const cfg = diceAiCfg();        // 未配置独立端口 → null，短路，绝不回退工作台 AI
       return {
-        enabled: a.enabled !== false && (a.features ? a.features[feature] !== false : true),
+        enabled: sw.enabled && sw.features[feature] !== false,
         cfg,
         buildSystem(f) {
           // 该 feature 对应的提示词中枢场景：dice→dice / optimize→optimize / interject→interject；其余回退 dice 场景
@@ -1336,8 +1368,8 @@ function registerIpc() {
   const kpAdvice = createKpAdvice({
     aiBridge: diceAI,
     getConfig() {
-      const a = (doc.settings && doc.settings.ai) || {};
-      return { enabled: a.enabled !== false, features: a.features || {} };
+      const sw = diceAiSwitches();
+      return { enabled: sw.enabled, features: sw.features };
     },
     // 聚合对局上下文：指令日志 + 文案人设 + 工作台实体(PC/NPC/区域)
     getContext() {
@@ -1365,10 +1397,7 @@ function registerIpc() {
   const transformReplies = createTransformReplies({
     aiBridge: diceAI,
     memes: memeStore,
-    getConfig() {
-      const a = (doc.settings && doc.settings.ai) || {};
-      return { enabled: a.enabled !== false, features: a.features || {}, interjectProb: a.interjectProb, memeProb: a.memeProb, optimizePrompt: a.optimizePrompt };
-    }
+    getConfig() { return diceAiSwitches(); }
   });
   const diceWorkbench = createDiceRuntime({ store: diceStorePort, ai: diceAI, transformReplies, cfg: { onebot11: {}, qqofficial: {}, sim: {} } });
   global.diceNetAdapters = diceWorkbench.adapters; // 兼容既有 before-quit 回收逻辑

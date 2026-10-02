@@ -3167,6 +3167,21 @@
   }
 
   /* ---- 骰娘 AI（功能开关 / 群聊行为 / 表情包库）：归入侧栏「骰娘 AI 设置」 ---- */
+  /* 骰娘 AI 开关：直接读写本地存档 settings.dice.aiSwitches，与工作台 AI（settings.ai）完全分离。
+   * 不经 IPC，因此不依赖骰娘是否开机；主进程每次调用骰娘 AI 时按存档实时判定。 */
+  function diceAiSwitches() {
+    if (!S.settings.dice) S.settings.dice = {};
+    if (!S.settings.dice.aiSwitches) S.settings.dice.aiSwitches = {};
+    const sw = S.settings.dice.aiSwitches;
+    const def = { dice: true, optimize: true, interject: false, meme: true, kpAdvice: true };
+    if (typeof sw.enabled !== 'boolean') sw.enabled = true;
+    if (!sw.features || typeof sw.features !== 'object') sw.features = {};
+    for (const k of Object.keys(def)) if (typeof sw.features[k] !== 'boolean') sw.features[k] = def[k];
+    if (!Number.isFinite(Number(sw.interjectProb))) sw.interjectProb = 15;
+    if (!Number.isFinite(Number(sw.memeProb))) sw.memeProb = 25;
+    if (typeof sw.optimizePrompt !== 'string') sw.optimizePrompt = '';
+    return sw;
+  }
   const DICE_AI_FEATS = [
     { key: 'dice', label: '骰娘专属 AI 对话', hint: '.ai 指令发起的对话/定向判定，走独立开关；关闭则 .ai 直接给友好提示' },
     { key: 'optimize', label: '骰点文本优化', hint: '掷骰回复结合开团背景润色，更有剧情感（保留数值原义）' },
@@ -3191,12 +3206,9 @@
     contentInner(html);
     paintDiceAiSwitches();
   }
-  async function paintDiceAiSwitches() {
+  function paintDiceAiSwitches() {
     const box = q('diceAiSwitches'); if (!box) return;
-    let sw;
-    try { sw = await (window.api && window.api.aiSwitchesGet ? window.api.aiSwitchesGet() : null); }
-    catch (_) { sw = null; }
-    if (!sw) { box.innerHTML = '<div class="hint">开关服务不可用（preload 未暴露 aiSwitchesGet）。</div>'; return; }
+    const sw = diceAiSwitches();
     const feats = sw.features || {};
     const rows = DICE_AI_FEATS.map((f) => `
       <label class="toggle-row" style="display:flex;align-items:center;gap:10px">
@@ -3228,12 +3240,9 @@
     contentInner(html);
     paintDiceAiChat();
   }
-  async function paintDiceAiChat() {
+  function paintDiceAiChat() {
     const box = q('diceAiChatProbs'); if (!box) return;
-    let sw;
-    try { sw = await (window.api && window.api.aiSwitchesGet ? window.api.aiSwitchesGet() : null); }
-    catch (_) { sw = null; }
-    if (!sw) { box.innerHTML = '<div class="hint">开关服务不可用（preload 未暴露 aiSwitchesGet）。</div>'; return; }
+    const sw = diceAiSwitches();
     const row = (id, label, hint, val) => `
       <div class="row" style="grid-template-columns:1fr 140px"><label>${label}<br><span class="hint" style="color:var(--ink-faint);font-size:12px">${hint}</span></label>
         <input id="${id}" type="number" min="0" max="100" value="${val}" onchange="WB.saveDiceAiSwitches()"></div>`;
@@ -3243,23 +3252,19 @@
   }
 
   window.WB.saveDiceAiSwitches = async function saveDiceAiSwitches() {
-    const patch = {};
-    const feats = {};
+    const sw = diceAiSwitches();
     // 注意：q() 是 getElementById，分项开关是 data-sw 属性、没有 id，必须用 querySelector 取，
-    // 否则 feats 恒为空、patch.features 从不提交，表现为「只有总开关能保存，分项点了没用」。
-    for (const f of DICE_AI_FEATS) { const el = document.querySelector('[data-sw="' + f.key + '"]'); if (el) feats[f.key] = el.checked; }
-    if (Object.keys(feats).length) patch.features = feats;
-    const tot = q('dsw_total'); if (tot) patch.enabled = !!tot.checked;
-    const ip = q('dsw_interjectProb'); if (ip) patch.interjectProb = Number(ip.value);
-    const mp = q('dsw_memeProb'); if (mp) patch.memeProb = Number(mp.value);
+    // 否则分项点了没用。保存直接写本地存档并 persist()，与工作台 AI 无关。
+    for (const f of DICE_AI_FEATS) { const el = document.querySelector('[data-sw="' + f.key + '"]'); if (el) sw.features[f.key] = el.checked; }
+    const tot = q('dsw_total'); if (tot) sw.enabled = !!tot.checked;
+    const ip = q('dsw_interjectProb'); if (ip) sw.interjectProb = Math.max(0, Math.min(100, Number(ip.value) || 0));
+    const mp = q('dsw_memeProb'); if (mp) sw.memeProb = Math.max(0, Math.min(100, Number(mp.value) || 0));
     try {
-      if (window.api && window.api.aiSwitchesSet) {
-        const r = await window.api.aiSwitchesSet(patch);
-        toast('骰娘 AI 设置已保存', 'ok');
-        paintDiceAiSwitches();
-        paintDiceAiChat();
-        return r;
-      }
+      await persist();
+      toast('骰娘 AI 设置已保存', 'ok');
+      paintDiceAiSwitches();
+      paintDiceAiChat();
+      return sw;
     } catch (e) { toast('保存失败：' + (e && e.message || e), 'err'); }
   };
 
@@ -7102,10 +7107,11 @@
   function diceBoardHTML(title) {
     const sel = S.settings.dice || {};
     const rule = sel.rule || 'coc';
-    const aiCap = !!((S.settings.ai || {}).apiKey);
+    /* 骰娘 AI 只认自己的总开关与独立端口，不再引用工作台 AI 凭证。 */
     const aiPort = sel.aiPort || {};
-    const aiReady = (sel.ai !== false && aiCap) || (!!aiPort.enabled && !!aiPort.base);
-    const aiOn = sel.ai !== false && aiCap;
+    const aiSw = diceAiSwitches();
+    const aiReady = aiSw.enabled && !!aiPort.enabled && !!aiPort.base;
+    const aiOn = aiSw.enabled;
     const hist = (S.settings.diceLog || []).slice(0, 12);
     let html = title || '';
     html += `<div class="dicepanel">`;
@@ -7163,7 +7169,7 @@
         <input id="diceTask" placeholder="例：守夜时用潜行溜过卫兵 / 使用力量推开石门" value="${esc(sel.task || '')}"></div>
       <div class="airow"><label>可选：人物卡匹配关键字（留空则让 AI 选）</label>
         <input id="diceChar" placeholder="例：李凡 / 默认人物" value="${esc(sel.char || '')}"></div>
-      <div class="toolbar"><button ${aiReady ? '' : 'disabled title="需在工作台「AI 配置」填 API Key，或启用下方「独立 AI 端口」"'} onclick="WB.aiJudge()">🤖 AI 定向判定</button>
+      <div class="toolbar"><button ${aiReady ? '' : 'disabled title="需先启用骰娘「独立 AI 端口」并填写接口地址"'} onclick="WB.aiJudge()">🤖 AI 定向判定</button>
         <button class="ghost" onclick="WB.aiJudgeExplain()">📋 解释判定</button><span class="hint">接 AI 后按人物卡属性算调整值并针对性投骰</span></div>
       <div id="aiJudgeOut" class="diceout"></div>
 
@@ -7178,7 +7184,7 @@
         <label>模型名</label><input id="diceAiPortModel" value="${esc(aiPort.model || '')}" placeholder="模型名，" style="width:180px"></div>
       <div class="toolbar"><button class="ghost" onclick="WB.diceAiPortSave()">💾 保存端口</button>
         <button class="ghost" onclick="WB.diceAITest()">🔍 测试连接</button>
-        <span id="diceAiPortState" class="hint">${aiPort.enabled && aiPort.base ? '已启用独立端口' : '未启用，AI 判定走工作台全局 AI'}</span></div>
+        <span id="diceAiPortState" class="hint">${aiPort.enabled && aiPort.base ? '已启用独立端口' : '未启用独立端口，骰娘 AI 不可用'}</span></div>
     </details>`;
 
     // 历史
@@ -7318,7 +7324,7 @@
     html += `<div class="dh-card">
       <div class="dh-head"><b>🎲 本地投骰 / AI / 人物卡</b><span class="grow"></span><span class="hint">下方面板即为全部功能</span></div>
       <div class="dh-row"><span class="lbl">规则库</span><span class="val">${esc((S.settings.dice && S.settings.dice.rule) || 'coc')}</span></div>
-      <div class="dh-row"><span class="lbl">AI 判定</span><span class="val">${diceAiCapable() ? '可用' : '未配置（AI 配置或独立 AI 端口）'}</span></div>
+      <div class="dh-row"><span class="lbl">AI 判定</span><span class="val">${diceAiCapable() ? '可用' : '未配置（需启用骰娘独立 AI 端口）'}</span></div>
       <div class="dh-row"><span class="lbl">人物卡</span><span class="val">${S.settings.sheetName ? '已加载：' + esc(S.settings.sheetName) : '未加载'}</span></div>
       <div class="dh-row"><span class="lbl">累计投掷</span><span class="val">${(S.settings.diceLog || []).length} 次</span></div>
       <div class="dh-ctrl">
@@ -7344,8 +7350,7 @@
   }
   function diceAiCapable() {
     const p = (S.settings.dice && S.settings.dice.aiPort) || {};
-    const g = !!(S.settings.ai || {}).apiKey;
-    return (S.settings.dice && S.settings.dice.ai !== false && g) || (!!p.enabled && !!p.base);
+    return diceAiSwitches().enabled && !!p.enabled && !!p.base;   // 只认骰娘自己的开关与端口
   }
 
   /* ========== 统计报表（主页区块） ========== */
@@ -7461,9 +7466,10 @@
     diceViewRefresh();
   }
   function setDiceAi(on) {
-    if (!S.settings.dice) S.settings.dice = {};
-    S.settings.dice.ai = !!on;
+    /* 与「骰娘 AI 设置」的总开关同一处，避免出现两套互相打架的 AI 开关。 */
+    diceAiSwitches().enabled = !!on;
     persist();
+    toast(on ? '骰娘 AI 已开启' : '骰娘 AI 已关闭（不再发起任何 AI 请求）', 'ok');
   }
   function delDiceLog(id) {
     if (!S.settings.diceLog) return;
@@ -7548,8 +7554,7 @@
     out.reason = s.slice(0, 400);
     return out;
   }
-  /* 骰娘独立 AI 端口：启用且已配置时走本地/独立端点（OpenAI 兼容），否则回退工作台全局 AI。
-   * 返回纯文本回复。 */
+  /* 骰娘独立 AI 端口：只走骰娘自己的 OpenAI 兼容端点，绝不回退工作台全局 AI（两者互不影响）。 */
   function readDiceAiPort() {
     if (!S.settings.dice) S.settings.dice = {};
     if (!S.settings.dice.aiPort) S.settings.dice.aiPort = {};
@@ -7557,15 +7562,11 @@
   }
   async function diceAiChat(messages) {
     const cfg = readDiceAiPort();
-    if (cfg.enabled && cfg.base) {
-      try {
-        const rep = await window.api.diceCore.ai.chat({ base: cfg.base, key: cfg.key, model: cfg.model }, messages);
-        if (rep && rep.ok && rep.reply) return rep.reply;
-        if (rep && !rep.ok) toast('独立 AI 端口：' + (rep.error || '调用失败') + '，已回退全局 AI', '');
-      } catch (_) {}
-    }
-    const r = await window.api.aiChat(messages);
-    return r && (r.reply || r.text || r);
+    if (!diceAiSwitches().enabled) throw new Error('骰娘 AI 总开关已关闭（可在「骰娘 AI 设置」开启）');
+    if (!cfg.enabled || !cfg.base) throw new Error('骰娘 AI 尚未配置（请在下方「独立 AI 端口」填写接口地址并启用）');
+    const rep = await window.api.diceCore.ai.chat({ base: cfg.base, key: cfg.key, model: cfg.model }, messages);
+    if (rep && rep.ok) return rep.reply || '';
+    throw new Error((rep && rep.error) || '独立 AI 端口调用失败');
   }
   function diceAiPortSave() {
     const cfg = readDiceAiPort();
@@ -7574,7 +7575,7 @@
     cfg.base = val('diceAiPortBase');
     cfg.key = val('diceAiPortKey');
     cfg.model = val('diceAiPortModel');
-    const st = q('diceAiPortState'); if (st) st.textContent = (cfg.enabled && cfg.base) ? '已启用独立端口' : '未启用，AI 判定走工作台全局 AI';
+    const st = q('diceAiPortState'); if (st) st.textContent = (cfg.enabled && cfg.base) ? '已启用独立端口' : '未启用独立端口，骰娘 AI 不可用';
     persist();
     toast(cfg.enabled && cfg.base ? '已保存并启用独立 AI 端口' : '已保存 AI 端口（未启用）', 'ok');
   }

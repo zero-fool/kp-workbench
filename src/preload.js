@@ -131,9 +131,8 @@ contextBridge.exposeInMainWorld('api', {
   /* 用量面板：读取/重置本轮 AI 用量统计（token + 耗时） */
   aiUsage: () => ipcRenderer.invoke('ai:usage'),
   aiUsageReset: (bucketMs) => ipcRenderer.invoke('ai:usageReset', bucketMs),
-  /* AI 统一开关（总开关 + 按功能分开关）读取 / 写入：界面与策略据此控制是否消耗 token */
-  aiSwitchesGet: () => ipcRenderer.invoke('ai:switchesGet'),
-  aiSwitchesSet: (patch) => ipcRenderer.invoke('ai:switchesSet', patch),
+  /* 注：骰娘 AI 开关不设独立 IPC——渲染层直接读写本地存档的 settings.dice.aiSwitches，
+   * 与工作台 AI 的凭证/开关彻底分离，互不影响。 */
   /* 取消完成事件：渲染层据此提示「该任务已取消」，避免误以为仍在执行 */
   aiCancelled: {
     on: (cb) => { ipcRenderer.on('ai:cancelled', (_e, v) => cb(v)); }
