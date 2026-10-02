@@ -4,8 +4,20 @@
  * 覆盖的每个用例都对应一次真实缺陷，改动相关代码后请务必跑一遍。 */
 const fs = require('fs');
 const path = require('path');
-const APP = path.join(__dirname, '..', 'src', 'renderer', 'app.js');
-const src = fs.readFileSync(APP, 'utf8');
+const RENDERER_DIR = path.join(__dirname, '..', 'src', 'renderer');
+const APP = path.join(RENDERER_DIR, 'app.js');
+/* 视图模块自 app.js 抽出后，基于源码文本/函数抽取的断言仍需命中这些文件：
+ * 按「app.js 优先 + 其余 renderer 脚本按路径序」聚合，保证同名函数先命中 app.js 内的代理桩。 */
+function listRendererJs(dir) {
+  const out = [];
+  for (const f of fs.readdirSync(dir).sort()) {
+    const full = path.join(dir, f);
+    if (fs.statSync(full).isDirectory()) out.push(...listRendererJs(full));
+    else if (f.endsWith('.js') && full !== APP) out.push(full);
+  }
+  return out;
+}
+const src = [APP, ...listRendererJs(RENDERER_DIR)].map(p => fs.readFileSync(p, 'utf8')).join('\n');
 
 /* 括号配平（跳过字符串/模板/注释），用于按函数名抽取整段源码 */
 function extract(name) {

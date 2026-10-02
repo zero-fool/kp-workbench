@@ -6,7 +6,21 @@ const fs = require('fs');
 const path = require('path');
 const ROOT = path.join(__dirname, '..', 'src');
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8');
-const appJs = read('renderer/app.js');
+const RENDERER_DIR = path.join(ROOT, 'renderer');
+const APP_JS = path.join(RENDERER_DIR, 'app.js');
+/* 视图模块自 app.js 抽出后，接线审计需覆盖全部 renderer 脚本：
+ * 按「app.js 优先 + 其余脚本按路径序」聚合；app.js 在前也保证下方基于 indexOf 的结构解析仍落在 app.js 内。 */
+function listRendererJs(dir) {
+  const out = [];
+  for (const f of fs.readdirSync(dir).sort()) {
+    const full = path.join(dir, f);
+    if (fs.statSync(full).isDirectory()) out.push(...listRendererJs(full));
+    else if (f.endsWith('.js') && full !== APP_JS) out.push(full);
+  }
+  return out;
+}
+const rendererFiles = [APP_JS, ...listRendererJs(RENDERER_DIR)];
+const appJs = rendererFiles.map(p => fs.readFileSync(p, 'utf8')).join('\n');
 const html = read('renderer/index.html');
 const preload = read('preload.js');
 const mainJs = read('main/main.js');
@@ -71,9 +85,15 @@ noDef.length ? bad('WB 中列出但找不到定义（疑似拼写错误）: ' + 
 
 /* ---------- 4. 重复函数定义 ---------- */
 title('4. 顶层重复函数定义（后者静默覆盖前者）');
-const fnNames = [...appJs.matchAll(/^\s{2}function\s+([a-zA-Z_$][\w$]*)\s*\(/gm)].map(m => m[1]);
-const dupFn = uniq(fnNames.filter((n, i) => fnNames.indexOf(n) !== i));
-dupFn.length ? bad('重复定义: ' + dupFn.join(', ')) : ok('无重复顶层函数定义');
+/* 按文件分别判定：各 renderer 脚本是独立 IIFE，模块内同名局部函数（如各自的 esc）互不覆盖，
+ * 只有「同一个文件里重复定义」才是真问题。 */
+const dupFn = [];
+for (const f of rendererFiles) {
+  const names = [...fs.readFileSync(f, 'utf8').matchAll(/^\s{2}function\s+([a-zA-Z_$][\w$]*)\s*\(/gm)].map(m => m[1]);
+  const d = uniq(names.filter((n, i) => names.indexOf(n) !== i));
+  if (d.length) dupFn.push(path.basename(f) + ': ' + d.join(', '));
+}
+dupFn.length ? bad('重复定义: ' + dupFn.join(' | ')) : ok('各 renderer 脚本内均无重复顶层函数定义');
 
 /* ---------- 5. id 唯一性与引用 ---------- */
 title('5. 元素 id：唯一性与 q("id") 引用');
