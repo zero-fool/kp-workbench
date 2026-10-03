@@ -66,7 +66,7 @@ const DEFAULT_FIELDS = {
   ],
   regions: [
     { k: 'name', l: '名称', t: 'text' },
-    { k: 'type', l: '类型', t: 'select', opts: ['城市', '村镇', '荒野', '地下城', '据点', '异界', '海域'] },
+    { k: 'type', l: '类型', t: 'select', opts: ['城市', '村镇', '荒野', '野外', '建筑', '室内', '地下城', '遗迹', '据点', '异界', '海域'] },
     { k: 'area', l: '区域/规模', t: 'text' },
     { k: 'danger', l: '危险度', t: 'select', opts: ['安全', '低', '中', '高', '极危'] },
     { k: 'env', l: '环境', t: 'select', opts: ['普通', '雾蚀带', '灰区'] },
@@ -136,11 +136,12 @@ function schemaText(fields) {
   return JSON.stringify(out);
 }
 
-/* U3-4：极简字段 schema（仅类别 + 字段键），用于解析的后续段落——
- * 完整字段说明只在首段注入一次即可，后续段落无需重复，段数越多省得越多。 */
-function compactSchemaText(fields) {
+/* 后续段使用的「带语义」字段 schema：保留 `键:中文标签`，省略下拉选项与类型说明。
+ * 只给键名会让模型猜不到字段含义（人物与场地尤其容易填错/漏填），带上中文标签后单段仅增数百 token，
+ * 却能显著提升后半段的拆分质量；首段仍用完整 schema（含选项）。 */
+function linkSchemaText(fields) {
   const out = {};
-  for (const kind of _K) out[kind] = (fields[kind] || []).map(f => f.k).join(',');
+  for (const kind of _K) out[kind] = (fields[kind] || []).map(f => f.k + ':' + f.l).join('，');
   return JSON.stringify(out);
 }
 
@@ -371,8 +372,19 @@ const SUPPLEMENT_NOTE = '【允许补充（已获使用者确认）】你可以�
 
 const DEFAULT_PROMPTS = {
   registration: '你是一个 TRPG 跑团剧本「拆分登记」助手。请把下面这段导入资料拆解为 7 类结构化实体，登记到工作台。\n'
-    + '【实体类别】pcs=人物卡(玩家扮演的角色)、npcs=非玩家角色、regions=地区/地点、logs=事件/线索/剧情点、mobs=怪物/敌人、rules=规则/设定条目、lore=世界观/背景。\n'
-    + '【字段】只使用以下可用字段，缺失的留空或忽略，但名称类(name/title)必须给出：{schema}\n'
+    + '【实体类别】pcs=人物卡(玩家扮演的主角)、npcs=人物(剧本中的其他角色，含 NPC/关键人物/敌人首领)、regions=场地(具体地点/场景)、logs=事件/线索/剧情点、mobs=怪物/杂兵、rules=规则/机制条目、lore=世界观/背景总述。\n'
+    + '【字段】只使用下列字段名，不要自造字段；缺失可省略，但名称类(name/title)必须给出：{schema}\n'
+    + '【人物抽取】\n'
+    + '1) 凡是文中出现名字、或能以称呼明确指认的角色，都要各建一条：玩家扮演的放 pcs，其余角色放 npcs；只出现一两次的配角也不要漏。\n'
+    + '2) 同一角色只保留一条，尽量把他填全：身份/职业(role)、所属组织(faction)、所在地(location)、性格(personality)、外貌(appearance)、目的或秘密(secret)；关系(rel)不确定就留空。\n'
+    + '3) 群众、无名士兵、路人等无法指认的个体不要建卡。\n'
+    + '4) 统一称呼：同一角色只用一个「原文中最正式、信息最全」的名字作 name，别名/绰号/简称写进 note（如「别名：老张」），不要把多个称呼塞进 name 造成重复建卡。\n'
+    + '【场地抽取】\n'
+    + '1) 每个可辨识的地点、场景、房间、建筑、街区、城镇、区域，都各建一条 regions；宁可多列，也不要只登记一个大地名而漏掉其中的具体场景(如酒馆、教堂、地下室、码头)。\n'
+    + '2) 名称要具体、可区分：泛名（大厅/房间/入口/走廊/街道）须带上所属上下文写成「XX宅邸·大厅」，原文确实无名时用「类型+显著特征」命名；同一地点只用一个统一名称，别名写进 note。\n'
+    + '3) 用 desc 至少写 1~2 句：外观、氛围、用途与重要细节（关键物件/机关/出入口/在场者）；用 key 列出其中的关键地点/机关/出入口；type/area 按实际填，不确定可省略。\n'
+    + '4) 战斗向字段(danger/env/dist/cover)只有在原文确有说明时才填，剧情团通常留空即可。\n'
+    + '5) 整个世界/地区的地理总述、历史渊源等宏观内容归 lore，不要与具体场景混为一谈。\n'
     + '【去重】已存在同名条目：{existing}。同名或同含义的不要重复新增，把「合并建议」写入 updates。\n'
     + '【输出格式】只输出一个合法 JSON，不要输出任何解释文字：\n'
     + '{"entities":{"pcs":[],"npcs":[],"regions":[],"logs":[],"mobs":[],"rules":[],"lore":[]},"updates":[]}\n'
@@ -1172,6 +1184,47 @@ function splitByStructure(text, target, overlap) {
   return out.filter(s => s && s.trim()).slice(0, SEG_MAX);
 }
 
+/* 名称归一化：去掉空白/全半角标点/书名号引号等，并统一大小写。
+ * 同一条目在不同段落里常写作「《老码头》」「老 码头」「老码头：」等形式，直接比字符串会漏判成多条，
+ * 导致人物/场地被拆成重复卡。归一化后再比较可稳定合并。 */
+function normName(s) {
+  return String(s == null ? '' : s)
+    .replace(/[\s\u3000]+/g, '')
+    .replace(/[《》「」『』【】\[\]（）()"'“”‘’·・:：,，.。、!！?？~～\-—_]/g, '')
+    .toLowerCase();
+}
+
+/* 同名条目跨段合并：字段缺失则补齐，文本取更完整的一份，标签取并集。
+ * 旧逻辑遇到重复直接丢弃后出现的记录，会把「开头只提了一句名」的简略版本当作定稿，
+ * 反而丢掉后文对该角色/场地的详细描写——这是人物与场地「拆得很差」的主因。 */
+function mergeEntity(dst, src) {
+  if (!dst || !src) return dst;
+  for (const k of Object.keys(src)) {
+    if (k === 'source') continue;
+    const sv = src[k];
+    if (sv === undefined || sv === null || sv === '') continue;
+    const dv = dst[k];
+    if (dv === undefined || dv === null || dv === '') { dst[k] = sv; continue; }
+    if (Array.isArray(dv) || Array.isArray(sv)) {
+      const a = Array.isArray(dv) ? dv.slice() : [dv];
+      const have = new Set(a.map(x => String(x)));
+      for (const x of (Array.isArray(sv) ? sv : [sv])) {
+        if (x === undefined || x === null || x === '' || have.has(String(x))) continue;
+        a.push(x); have.add(String(x));
+      }
+      dst[k] = a;
+      continue;
+    }
+    if (typeof dv === 'string' && typeof sv === 'string') {
+      if (dv.indexOf(sv) >= 0) continue;                  // 已有更全的
+      if (sv.indexOf(dv) >= 0) { dst[k] = sv; continue; } // 新的更全
+      const j = dv + '；' + sv;                            // 互补内容：合并（限长防膨胀）
+      if (j.length <= 800) dst[k] = j;
+    }
+  }
+  return dst;
+}
+
 async function parseScript(text, profile, fields, cfg, existing, opts) {
   opts = opts || {};
   const prompts = effectivePrompts(opts.settings);
@@ -1220,11 +1273,11 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
       if (si >= segs.length) return;
       const seg = segs[si];
       const existingForSeg = si === 0 ? EXISTING : {}; // 后续片段不再重复注入已有名单，合并时统一去重
-      // U3-4：完整字段 schema 只在首段携带（字段约定各段一致，无需重复），
-      // 后续段落改用极简 schema，单段即可省下数百 token，段数越多省得越多。
+      // 首段给完整 schema（含下拉选项）；后续段改为「键:中文标签」，保证模型理解字段含义，
+      // 避免后半段因只看到字段名而把人物/场地信息填错或漏填。
       const schemaForSeg = si === 0
         ? schemaText(effectiveFields(fields) || DEFAULT_FIELDS)
-        : compactSchemaText(effectiveFields(fields) || DEFAULT_FIELDS);
+        : linkSchemaText(effectiveFields(fields) || DEFAULT_FIELDS);
       const makeUser = () => renderPrompt(prompts.registration, {
         schema: schemaForSeg,
         existing: JSON.stringify(existingMap(existingForSeg || {})),
@@ -1249,7 +1302,9 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
           parsed = { entities: {}, updates: Array.isArray(j && j.updates) ? j.updates : [] };
           for (const k of kinds) {
             const list = Array.isArray(ent[k]) ? ent[k] : [];
-            parsed.entities[k] = list.map(item => normalize(item, fe[k], k)).slice(0, 40);
+            // 单段单类上限：长段（24000 字）可能包含较多角色/场景，上限过低会直接丢条目；
+            // 跨段已按名称合并，放宽到 80 不至于让结果爆炸，却能少漏人漏场景。
+            parsed.entities[k] = list.map(item => normalize(item, fe[k], k)).slice(0, 80);
           }
           break;
         } catch (e) {
@@ -1266,10 +1321,18 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONC, segs.length) }, worker));
-  // 按段序合并（并行完成后统一按顺序归并，结果顺序稳定），跨段落按名称去重
+  // 按段序合并（并行完成后统一按顺序归并，结果顺序稳定），跨段落去重。
+  // 去重键统一用「归一化名称」：段落间有 OVERLAP，且同一实体各处写法可能带引号/空格/标点差异；
+  // 若把描述也算进键，同一场景在相邻段会被拆成两张卡（场地看着就是「重复/很乱」）。
+  // 命中同名时改为「逐字段合并」（见 mergeEntity），把各段信息汇总到同一张卡，而不是丢弃后出现的详细描写。
+  // 无名字段（normalize 会兜底成「未命名」）不参与合并，否则多个不同条目会塌缩成一张「未命名」卡。
+  const dedupKey = (k, item) => {
+    const n = normName(item.name || item.title);
+    return (!n || n === '未命名') ? '' : n;
+  };
   const merged = { entities: {}, updates: [] };
   kinds.forEach(k => merged.entities[k] = []);
-  const seen = {}; kinds.forEach(k => seen[k] = new Set());
+  const idxOf = {}; kinds.forEach(k => idxOf[k] = new Map()); // 归一化名称 → 在 merged 中的下标
   for (let si = 0; si < segs.length; si++) {
     const parsed = segParsed[si];
     if (!parsed) continue;
@@ -1278,16 +1341,33 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
       for (const item of parsed.entities[k] || []) {
         const rawName = String(item.name || item.title || '').trim();
         const nm = rawName.toLowerCase();
-        if (nm && seen[k].has(nm)) continue;
         // U1-18：人物类实体名称过滤（非人名/元信息词、与文档标题同名）→ 移入 updates 待人工确认
         if (FILTER_KINDS[k] && (looksLikeNonPersonName(rawName, nameFilter) || (docTitle && nm === docTitle.toLowerCase()))) {
           rejected.push({ kind: k, name: rawName });
           continue;
         }
-        if (nm) seen[k].add(nm);
+        const dk = dedupKey(k, item);
+        if (dk && idxOf[k].has(dk)) {
+          mergeEntity(merged.entities[k][idxOf[k].get(dk)], item); // 同名：合并字段，保留最全信息
+          continue;
+        }
+        if (dk) idxOf[k].set(dk, merged.entities[k].length);
         merged.entities[k].push(item);
       }
     }
+  }
+  // 各段独立识别，同一个角色可能在一段被判为 pcs、另一段被判为 npcs，结果里就会出现「同一个人两张卡」。
+  // 以 pcs 为准：把 npcs 中的同名条目并入 pcs 并从 npcs 移除，消除重复人物。
+  if (merged.entities.pcs && merged.entities.pcs.length && merged.entities.npcs && merged.entities.npcs.length) {
+    const pcsIdx = new Map();
+    merged.entities.pcs.forEach((it, i) => { const n = normName(it.name || it.title); if (n && n !== '未命名' && !pcsIdx.has(n)) pcsIdx.set(n, i); });
+    const keep = [];
+    for (const it of merged.entities.npcs) {
+      const n = normName(it.name || it.title);
+      if (n && n !== '未命名' && pcsIdx.has(n)) { mergeEntity(merged.entities.pcs[pcsIdx.get(n)], it); continue; }
+      keep.push(it);
+    }
+    merged.entities.npcs = keep;
   }
   if (rejected.length) {
     merged.updates.push({
@@ -1853,4 +1933,4 @@ async function breakdownScenario(cfg, text, settings) {
   return result;
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, usageLog, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure };
+module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, usageLog, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity };

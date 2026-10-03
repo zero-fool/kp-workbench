@@ -1885,10 +1885,29 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
     return /U3-3/.test(aiSrc) && /正文摘要/.test(aiSrc) && /\.slice\(0, 40000\)/.test(aiSrc) ? true : '大输入未瘦身';
   });
-  check('U3-4 模组解析省 token：分段 24000/重叠 300 + 后续段极简 schema', () => {
+  check('U3-4 模组解析省 token：分段 24000/重叠 300 + 后续段轻量 schema', () => {
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
     return /const SEG = 24000, OVERLAP = 300;/.test(aiSrc)
-      && /compactSchemaText\(effectiveFields\(fields\) \|\| DEFAULT_FIELDS\)/.test(aiSrc) ? true : '解析分段/schema 未优化';
+      && /linkSchemaText\(effectiveFields\(fields\) \|\| DEFAULT_FIELDS\)/.test(aiSrc) ? true : '解析分段/schema 未优化';
+  });
+  check('U3-7 人物/场地拆分质量：后续段带中文标签 + 抽取规则 + 同名按归一化名称合并字段', () => {
+    const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    const ai = require(path.join(__dirname, '..', 'src', 'main', 'ai.js'));
+    const hasStruct = /function linkSchemaText\(fields\)/.test(aiSrc) && /f\.k \+ ':' \+ f\.l/.test(aiSrc)
+      && /【人物抽取】/.test(aiSrc) && /【场地抽取】/.test(aiSrc)
+      && /function normName\(s\)/.test(aiSrc) && /function mergeEntity\(dst, src\)/.test(aiSrc)
+      && /mergeEntity\(merged\.entities\[k\]\[idxOf\[k\]\.get\(dk\)\], item\)/.test(aiSrc)
+      && /n === '未命名'\) \? '' : n/.test(aiSrc); // 无名字段不得塌缩成一张卡
+    if (!hasStruct) return '人物/场地拆分优化缺失';
+    // 名称归一化：标点/空格/书名号差异应视为同一实体（避免同一场景被拆成两张卡）
+    if (ai.normName('《老码头》') !== ai.normName('老 码头')) return '名称归一化未生效';
+    // 同名合并：补齐缺失字段 / 文本取更完整的一份 / 标签去重并集
+    const dst = { name: '张伟', role: '', desc: '破旧的码头', skill: ['侦查'] };
+    ai.mergeEntity(dst, { name: '张伟', role: '警长', desc: '破旧的码头，堆满生锈的集装箱，夜里常有走私船靠岸', skill: ['侦查', '说服'] });
+    if (dst.role !== '警长') return '合并未补齐缺失字段';
+    if (dst.desc !== '破旧的码头，堆满生锈的集装箱，夜里常有走私船靠岸') return '合并未保留更完整文本';
+    if (dst.skill.length !== 2) return '合并未对标签去重取并集';
+    return true;
   });
   check('U3-4 长文本一次上传即可完整解析：入口 4MB + 段数 400 + 失败段可见 + 单段重试 3 次', () => {
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
