@@ -1909,6 +1909,32 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     if (dst.skill.length !== 2) return '合并未对标签去重取并集';
     return true;
   });
+  check('U3-8 剧本分幕质量：按章节结构分段 + 续写上下文 + 去重 + 坏 JSON 重试 + 部分失败可感知', () => {
+    const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    const ai = require(path.join(__dirname, '..', 'src', 'main', 'ai.js'));
+    const structural = /const SC_CHUNK = 16000;/.test(aiSrc)
+      && /const chunks = splitByStructure\(t, SC_CHUNK, SC_OVERLAP\);/.test(aiSrc)
+      && !/chunkTextByLen\(/.test(aiSrc)                       // 旧定长硬切已移除
+      && /【续写要求】/.test(aiSrc)
+      && /function isDupScene\(a, b\)/.test(aiSrc)
+      && /result\.some\(prev => isDupScene\(prev, n\)\)/.test(aiSrc)
+      && /attempt <= 3 && !arr/.test(aiSrc)
+      && /return \{ scenes: result, failed \};/.test(aiSrc);
+    if (!structural) return '分幕优化缺失';
+    // 无标题文本应在空行（段落边界）处切分，而不是按固定字数把自然段拦腰截断
+    const para = '甲'.repeat(60);
+    const doc = [para, para, para, para, para].join('\n\n');
+    const segs = ai.splitByStructure(doc, 100, 0);
+    const intact = segs.length > 1 && segs.every(s => s.split('\n\n').filter(x => x.trim()).every(x => x.length === 60));
+    return intact ? true : '分段未按段落边界切分（自然段被截断）';
+  });
+  check('U3-9 进度条结束即消失 + 分幕进度可见：解析/拆分/分幕均发 done 终止信号', () => {
+    const okDone = /text: '解析完成'/.test(mainSrc) && /text: '拆分完成'/.test(mainSrc) && /text: '分幕完成'/.test(mainSrc);
+    const okScene = /phase: 'scene'/.test(aiSrc2) && /scene: '剧本分幕'/.test(src);
+    const okRemove = /p\.phase === 'done' \|\| p\.phase === 'error'/.test(src);
+    const okCancel = /aiCancel\(_importProgGroup\)/.test(src) && /scene: 'scenario'/.test(src);
+    return (okDone && okScene && okRemove && okCancel) ? true : '进度终止信号/分幕进度缺失';
+  });
   check('U3-4 长文本一次上传即可完整解析：入口 4MB + 段数 400 + 失败段可见 + 单段重试 3 次', () => {
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
     return /const AI_SPLIT_CAP = 4 \* 1024 \* 1024;/.test(mainSrc)

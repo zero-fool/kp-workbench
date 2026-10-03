@@ -256,10 +256,13 @@ const AI_GROUP_LABEL = Object.freeze({ chat: '对话', cards: '资料生成', sc
 
 /* U1-15：模组解析进度广播。复用已有的 import:progress 通道，附带耗时/预计剩余（ETA），
  * 前端据此显示「阶段 / x‑y / 百分比 / 已用时间 / 预计剩余」并支持中途取消。 */
+function aiProgSend(p) {
+  try { if (win && win.webContents) win.webContents.send('import:progress', p); } catch (_) {}
+}
+/* 解析/分幕进度回调；调用方须在结束（含失败）时再发一条 done / error，
+ * 否则渲染层的浮动进度条收不到终止信号，完成后会一直挂在界面上不消失。 */
 function aiParseProgress() {
-  return (p) => {
-    try { if (win && win.webContents) win.webContents.send('import:progress', p); } catch (_) {}
-  };
+  return (p) => aiProgSend(p);
 }
 
 /* ---- API Key 安全：用系统级 safeStorage 加密后落盘，绝不存明文 ---- */
@@ -530,9 +533,11 @@ function registerIpc() {
     opts = opts || {};
     const existing = doc.entities || {};
     try {
-      return await ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 解析拆分'), existing, { settings: doc.settings, strict: opts.strict !== false, excludePC: opts.excludePC === true, title: opts.title || '', onProgress: aiParseProgress() });
+      const r = await ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 解析拆分'), existing, { settings: doc.settings, strict: opts.strict !== false, excludePC: opts.excludePC === true, title: opts.title || '', onProgress: aiParseProgress() });
+      aiProgSend({ phase: 'done', done: 1, total: 1, percent: 100, text: '解析完成' });
+      return r;
     } catch (err) {
-      try { if (win) win.webContents.send('import:progress', { phase: 'error', text: '解析失败', percent: 0 }); } catch (_) {}
+      aiProgSend({ phase: 'error', text: '解析失败', percent: 0 });
       throw err;
     }
   });
@@ -576,9 +581,11 @@ function registerIpc() {
       args = args || {};
       const text = String(args.text || '');
       if (!text.trim()) return { ok: false, error: '文本为空，请先在「原始文本」导入或粘贴团本内容' };
-      const scenes = await ai.breakdownScenario(aiCfg('scenario', 'AI 剧本分幕'), text, doc.settings);
-      return { ok: true, scenes };
+      const r = await ai.breakdownScenario(aiCfg('scenario', 'AI 剧本分幕'), text, doc.settings, { onProgress: aiParseProgress() });
+      aiProgSend({ phase: 'done', done: 1, total: 1, percent: 100, text: '分幕完成' });
+      return { ok: true, scenes: r.scenes, failed: r.failed };
     } catch (err) {
+      aiProgSend({ phase: 'error', text: '分幕失败', percent: 0 });
       return { ok: false, error: String((err && err.message) || err) };
     }
   });
@@ -988,12 +995,18 @@ function registerIpc() {
     }
     const existing = doc.entities || {};
     const title = args.title || args.name || (args.path ? path.basename(args.path) : '');
-    const r = await ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 拆分导入资料'), existing, { settings: doc.settings, strict: args.strict !== false, excludePC: args.excludePC === true, title, onProgress: aiParseProgress() });
-    if (cut && r && Array.isArray(r.updates)) {
-      const wan = n => (n / 10000).toFixed(n >= 100000 ? 0 : 1);
-      r.updates.push({ type: '内容截断', note: '正文约 ' + wan(origLen) + ' 万字，已超过单次解析上限（' + wan(AI_SPLIT_CAP) + ' 万字），本次只解析了前 ' + wan(AI_SPLIT_CAP) + ' 万字；剩余部分请另存为单独文件后再拆分。' });
+    try {
+      const r = await ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 拆分导入资料'), existing, { settings: doc.settings, strict: args.strict !== false, excludePC: args.excludePC === true, title, onProgress: aiParseProgress() });
+      if (cut && r && Array.isArray(r.updates)) {
+        const wan = n => (n / 10000).toFixed(n >= 100000 ? 0 : 1);
+        r.updates.push({ type: '内容截断', note: '正文约 ' + wan(origLen) + ' 万字，已超过单次解析上限（' + wan(AI_SPLIT_CAP) + ' 万字），本次只解析了前 ' + wan(AI_SPLIT_CAP) + ' 万字；剩余部分请另存为单独文件后再拆分。' });
+      }
+      aiProgSend({ phase: 'done', done: 1, total: 1, percent: 100, text: '拆分完成' });
+      return r;
+    } catch (err) {
+      aiProgSend({ phase: 'error', text: '拆分失败', percent: 0 });
+      throw err;
     }
-    return r;
   });
   /* 大文件的分块 AI 分析整理：先并行抽取每段独立摘要(并发受控)，再顺序合并为完整提纲。
    * 相比旧版逐段串行合并：并行占满空闲连接、缩短墙钟时长；合并阶段小步串行保证连贯与命中率。

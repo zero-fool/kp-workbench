@@ -720,6 +720,7 @@
   /* 大文件 AI 分析整理 / 模组解析进度：主进程按 parse/digest/merge 阶段广播，
    * 这里渲染浮动进度条，显示阶段、x/y、百分比、已用时间与预计剩余（U1-15），并支持中途取消。 */
   let _importProgEl = null;
+  let _importProgGroup = 'cards'; // 当前进度对应的 AI 任务组，供「取消」按钮定位到正确队列
   function fmtDur(ms) {
     const s = Math.max(0, Math.round((Number(ms) || 0) / 1000));
     if (s < 60) return s + ' 秒';
@@ -727,7 +728,10 @@
   }
   function importProgressSet(p) {
     if (!p) return;
-    const phaseText = { parse: '解析模组', digest: '抽取段落提纲', merge: '合并提纲' }[p.phase];
+    const PHASE = { parse: '解析模组', digest: '抽取段落提纲', merge: '合并提纲', scene: '剧本分幕' };
+    const GROUP = { parse: 'cards', digest: 'cards', merge: 'cards', scene: 'scenario' };
+    if (GROUP[p.phase]) _importProgGroup = GROUP[p.phase];
+    const phaseText = PHASE[p.phase];
     const create = () => {
       const d = document.createElement('div');
       d.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);width:min(460px,88vw);background:var(--panel-bg,#fff);border:1px solid var(--line,#dfe3ea);border-radius:10px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.22);z-index:9999;font-size:13px;color:var(--ink,#222)';
@@ -740,7 +744,11 @@
     const bar = _importProgEl.querySelector('#importProgBar');
     const tm = _importProgEl.querySelector('#importProgTime');
     const cancel = _importProgEl.querySelector('#importProgCancel');
-    if (tx) tx.textContent = (phaseText ? phaseText + '：' : '') + (p.text || '');
+    if (tx) {
+      const body = String(p.text || '');
+      // 部分进度文案自身已带阶段名（如「解析模组：已完成…」），避免重复成「解析模组：解析模组：…」
+      tx.textContent = (phaseText && body.indexOf(phaseText) !== 0) ? (phaseText + '：' + body) : body;
+    }
     if (pct) pct.textContent = (p.percent != null ? p.percent + '%' : ((typeof p.done === 'number' && p.total) ? p.done + ' / ' + p.total : ''));
     if (bar) bar.style.width = (typeof p.percent === 'number' ? p.percent : 0) + '%';
     if (tm) {
@@ -755,7 +763,7 @@
       cancel.style.display = finished ? 'none' : '';
       cancel.onclick = finished ? null : () => {
         cancel.disabled = true; cancel.textContent = '取消中…';
-        try { if (window.api && window.api.aiCancel) window.api.aiCancel('cards'); } catch (_) {}
+        try { if (window.api && window.api.aiCancel) window.api.aiCancel(_importProgGroup); } catch (_) {}
         toast('已发送取消指令，已完成段落会保留为部分结果', '');
       };
     }
@@ -6933,7 +6941,8 @@
       S.rawScript = { scenes, overview: { characters: chars.slice(0, 40) } };
       S.rawShow = 'script';
       persist(); renderRawText();
-      toast('剧本分幕完成：共 ' + scenes.length + ' 幕（未改动原剧情）', 'ok');
+      if (r.failed) toast('剧本分幕完成：共 ' + scenes.length + ' 幕，但有 ' + r.failed + ' 段未能解析，结果可能不完整，可对缺失部分再分一次', 'ok');
+      else toast('剧本分幕完成：共 ' + scenes.length + ' 幕（未改动原剧情）', 'ok');
     } catch (e) {
       toast('剧本分幕失败：' + ((e && e.message) || e), 'err');
     } finally {
