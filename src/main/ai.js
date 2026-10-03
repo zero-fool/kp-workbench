@@ -136,6 +136,14 @@ function schemaText(fields) {
   return JSON.stringify(out);
 }
 
+/* U3-4：极简字段 schema（仅类别 + 字段键），用于解析的后续段落——
+ * 完整字段说明只在首段注入一次即可，后续段落无需重复，段数越多省得越多。 */
+function compactSchemaText(fields) {
+  const out = {};
+  for (const kind of _K) out[kind] = (fields[kind] || []).map(f => f.k).join(',');
+  return JSON.stringify(out);
+}
+
 function profileBlock(profile) {
   if (!profile) return '';
   const parts = [];
@@ -156,16 +164,18 @@ function systemForChat(profile, fields, world, opts) {
   // 人设开关：默认开启
   s += (opts.usePersona !== false && profileBlock(profile)) || '（未配置 AI 人设，请用自然、中立的写作口吻。）';
   // 背景作为参考：默认开启
+  // U3-2：以下三段均为「每轮随 system 重发」的固定内容，必须限长，否则每轮输入成本被它们拖高；
+  // 顺序固定（背景→偏好→记忆），记忆最易增长故放最后，便于服务商对稳定前缀做提示词缓存。
   if (opts.useLoreRef !== false && opts.loreText) {
-    s += '\n\n【当前团背景 / 规则（作为参考，勿全量复述）】\n' + opts.loreText;
+    s += '\n\n【当前团背景 / 规则（作为参考，勿全量复述）】\n' + clipToks(String(opts.loreText), LORE_MAX_TOKENS);
   }
   // 用户偏好记忆（可编辑：KP 在此写下使用习惯/格式要求/期望风格，AI 应遵守并贯彻）
   if (opts.useUserPrefs !== false && opts.userPrefsText) {
-    s += '\n\n【用户偏好（KP 设定，请优先遵守并贯穿始终）】\n' + opts.userPrefsText;
+    s += '\n\n【用户偏好（KP 设定，请优先遵守并贯穿始终）】\n' + clipToks(String(opts.userPrefsText), PREFS_MAX_TOKENS);
   }
   // 长期记忆
   if (opts.longMemory && opts.memoryText) {
-    s += '\n\n【长期记忆（历史要点，据此与本次对话保持连贯，可自然引用）】\n' + opts.memoryText;
+    s += '\n\n【长期记忆（历史要点，据此与本次对话保持连贯，可自然引用）】\n' + clipToks(String(opts.memoryText), MEMORY_MAX_TOKENS);
   }
   // 工具调用许可
   if (opts.allowTools) {
@@ -458,6 +468,26 @@ function usageLog() {
     entries: _usageLog.map(x => Object.assign({}, x))
   };
 }
+/* U3-5：预算熔断——按当前统计时段累计的 token 估算花费，达到用户设定上限即拒绝新的上游请求，
+ * 避免「无感超支」。仅当 budget 传入了 >0 的 limit 时生效；不参与重试（status 402 不在可重试集合）。 */
+function usageCost(budget) {
+  const pin = Number(budget && budget.inPrice) || 0, pout = Number(budget && budget.outPrice) || 0;
+  let it = 0, ot = 0;
+  for (const x of _usageLog) { it += x.promptTokens || 0; ot += x.completionTokens || 0; }
+  return (it * pin + ot * pout) / 1e6;
+}
+function budgetGuard(cfg) {
+  const b = cfg && cfg.budget;
+  if (!b || !(Number(b.limit) > 0) || cfg.noBudget) return;
+  const cost = usageCost(b);
+  if (cost >= Number(b.limit)) {
+    const e = new Error('AI_BUDGET_EXCEEDED 已达 AI 预算上限（估算 ' + cost.toFixed(4) + ' 元 / 上限 ' + b.limit
+      + ' 元），已停止发起新请求。可到「AI 用量」调高预算，或「清空本轮统计」后继续。');
+    e.status = 402;
+    throw e;
+  }
+}
+
 /* 取消注册表：group -> Set<AbortController> */
 const _cancelRegistry = new Map();
 function registerRun(group, controller) {
@@ -549,6 +579,7 @@ async function requestOnce(cfg, body, timeoutMs) {
   if (!cfg || !cfg.baseUrl || !cfg.apiKey || !cfg.model) {
     throw new Error('AI 未配置完整（需 baseUrl/apiKey/model）');
   }
+  budgetGuard(cfg); // U3-5：超出预算直接熔断，不再发起上游请求
   const url = String(cfg.baseUrl).replace(/\/+$/, '') + '/chat/completions';
   const ms = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : (cfg.timeoutMs || 120000);
   const controller = new AbortController();
@@ -697,12 +728,12 @@ async function runTool(name, args, ctx) {
       for (const it of (ctx.entities && ctx.entities[k]) || []) {
         const blob = JSON.stringify(Object.assign({ name: it.name || it.title || '' }, it)).toLowerCase();
         if (!blob.includes(kw)) continue;
-        hits.push({ kind: k, name: it.name || it.title || '未命名', 摘要: String(it.subtitle || it.summary || it.desc || it.content || it.note || '').slice(0, 150) });
-        if (hits.length >= 40) break;
+        hits.push({ kind: k, name: it.name || it.title || '未命名', 摘要: String(it.subtitle || it.summary || it.desc || it.content || it.note || '').slice(0, 80) });
+        if (hits.length >= 15) break;   // U3-1：命中数与摘要长度收紧，工具结果不再灌满上下文
       }
-      if (hits.length >= 40) break;
+      if (hits.length >= 15) break;
     }
-    return JSON.stringify({ 命中条数: hits.length, items: hits.slice(0, 40) });
+    return JSON.stringify({ 命中条数: hits.length, items: hits.slice(0, 15) });
   }
   if (name === 'read_uploaded_file') {
     const want = String(args.name || '').toLowerCase().trim();
@@ -743,24 +774,25 @@ async function runTool(name, args, ctx) {
     // 找出与命中节点相关的连线
     const items = edges.filter(e => hitIds.has(e.from) || hitIds.has(e.to) || !kw)
       .map(e => ({ from: nm[e.from] || e.from, to: nm[e.to] || e.to, label: e.label || '关系' }))
-      .slice(0, 60);
-    const hitNodes = nodes.filter(n => hitIds.has(n.id)).map(n => ({ label: n.label, kind: n.kind || '' })).slice(0, 40);
+      .slice(0, 15);
+    const hitNodes = nodes.filter(n => hitIds.has(n.id)).map(n => ({ label: n.label, kind: n.kind || '' })).slice(0, 15);
     return JSON.stringify({ 相关节点: hitNodes, 相关连线: items, 图总览: { 节点数: nodes.length, 连线数: edges.length } });
   }
   return JSON.stringify({ error: '未知工具：' + String(name) });
 }
 
+/* U3-1：工具定义每一轮都会随请求重发，描述越短每轮越省；此处只保留模型够用的信息。 */
 const TOOL_DEFS = [
   {
     type: 'function',
     function: {
       name: 'workbook_search',
-      description: '在工作台现存资料中按类别与关键词检索实体（人物/NPC/地区/日志/怪物/规则/背景），返回命中条目的名称与摘要，用于结合已有设定作答。',
+      description: '按类别+关键词检索工作台已有资料（人物/NPC/地区/日志/怪物/规则/背景），返回名称与摘要。',
       parameters: {
         type: 'object',
         properties: {
-          kind: { type: 'string', enum: _K, description: '限定检索的类别；省略则检索全部类别' },
-          keyword: { type: 'string', description: '检索关键词，会匹配条目名称、称号、摘要、正文等内容' }
+          kind: { type: 'string', enum: _K, description: '限定类别，省略则全部' },
+          keyword: { type: 'string', description: '检索关键词' }
         },
         required: ['keyword']
       }
@@ -770,12 +802,12 @@ const TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'read_uploaded_file',
-      description: '读取用户通过工作台「上传文件 / 导入文件」放入的一个文本文件（按文件名）。返回文件正文的一段；若文件较长，会用 offset 继续读取后续分段，直到文件读完，用于完整阅读、整理或登记超长文件内容。',
+      description: '读取用户上传文本文件的正文片段；长文件用 offset 续读。',
       parameters: {
         type: 'object',
         properties: {
-          name: { type: 'string', description: '用户上传文件的名称（需与上传/导入时的文件名一致）' },
-          offset: { type: 'integer', description: '从第几个字符开始读取；省略表示从 0（文件开头）开始。上次返回提示未读完时，用返回的 offset 续读。' }
+          name: { type: 'string', description: '文件名' },
+          offset: { type: 'integer', description: '起始字符位置，省略为 0' }
         },
         required: ['name']
       }
@@ -785,11 +817,11 @@ const TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'relations_query',
-      description: '查询工作台的关系网（节点与带标签连线），返回某个实体/势力的相邻节点及其关系说明。用于回答「谁和谁是什么关系」「某角色牵涉哪些势力」这类涉及关系的提问，并结合既有设定作答。',
+      description: '查询关系网中某实体的相邻节点与关系；省略关键词返回整图概览。',
       parameters: {
         type: 'object',
         properties: {
-          keyword: { type: 'string', description: '要查询的实体名称关键词；省略则返回整张关系网概览' }
+          keyword: { type: 'string', description: '实体名称关键词' }
         },
         required: []
       }
@@ -797,7 +829,7 @@ const TOOL_DEFS = [
   }
 ];
 
-const MAX_TOOL_ITERS = 6;
+const MAX_TOOL_ITERS = 3;   // U3-1：工具往返上限 6→3，避免多轮重发 system/工具定义把费用滚大
 
 /* ==================== 上下文压缩（防止文本量过大导致 AI 请求爆炸） ====================
  * 对话历史随聊天持续增长，若全量发给模型最终会超出上下文长度 / 显著放大延迟与费用，
@@ -806,9 +838,12 @@ const MAX_TOOL_ITERS = 6;
  *   2) 摘要压缩：被裁掉的旧消息压缩成一段摘要并入请求（工具模式用 AI 摘要，普通对话用确定性摘要，
  *                均带 try/catch 与缓存兜底，绝不增加不可控延迟或报错）；
  *   3) 硬预算兜底：无论怎么裁，最终请求总估算 token 绝不超过上限，单条超大消息也被裁剪。 */
-const CTX_BUDGET_TOKENS  = 52000;   // 单轮请求（含 system）的估算 token 硬上限
-const CTX_KEEP_TOKENS    = 34000;   // 保留给「最近消息窗口」的估算 token
+const CTX_BUDGET_TOKENS  = 24000;   // U3-2：单轮请求（含 system）的估算 token 硬上限（原 52000，过大导致每轮输入成本高）
+const CTX_KEEP_TOKENS    = 15000;   // U3-2：保留给「最近消息窗口」的估算 token（原 34000）
 const CTX_DIGEST_TOKENS  = 2600;    // 被裁剪前缀压成的摘要允许占用 token
+const LORE_MAX_TOKENS    = 1500;    // U3-2：system 中「团背景/规则」注入上限（每轮都会重发，必须限长）
+const PREFS_MAX_TOKENS   = 500;     // U3-2：system 中「用户偏好」注入上限
+const MEMORY_MAX_TOKENS  = 1200;    // U3-2：system 中「长期记忆」注入上限（该段会随对话增长，最易失控）
 const CTX_MIN_DROP       = 4;       // 至少裁掉这么多条才触发压缩摘要
 const _digestCache = new Map();     // 旧消息前缀是只增不改的，命中缓存可避免重复 AI 摘要
 
@@ -908,12 +943,14 @@ function finalReply(cfg, raw) {
 async function chatWithTools(history, cfg, toolContext, timeoutMs) {
   let last = '';
   for (let i = 0; i < MAX_TOOL_ITERS; i++) {
+    // U3-1：最后一轮不再携带工具定义，逼迫模型基于已有结果直接作答，
+    // 省掉一轮「工具定义」的重复输入，也避免无限续调把费用滚大。
+    const isLastRound = i === MAX_TOOL_ITERS - 1;
     const j = await requestCompletions(cfg, {
       model: cfg.model,
       temperature: typeof cfg.temperature === 'number' ? cfg.temperature : 0.5,
       max_tokens: cfg.maxTokens || 4000,
-      tools: TOOL_DEFS,
-      tool_choice: 'auto',
+      ...(isLastRound ? {} : { tools: TOOL_DEFS, tool_choice: 'auto' }),
       messages: history
     }, timeoutMs);
     const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
@@ -1142,7 +1179,7 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
   const EXISTING = existing || {};
   const full = String(text || '');
   // U1-16：结构感知切分 + 受控并行分段（并发 3~5，取代逐段串行）
-  const SEG = 18000, OVERLAP = 600;
+  const SEG = 24000, OVERLAP = 300;   // U3-4：段长提高、重叠减小（原 18000/600），减少重复注入的 token
   const CONC = Math.max(1, Math.min(5, Number(opts.concurrency) || 3));
   const onProg = typeof opts.onProgress === 'function' ? opts.onProgress : null; // U1-15：进度回调
   const nameFilter = (opts.settings && opts.settings.nameFilter) || null;        // U1-18：自定义过滤词
@@ -1182,14 +1219,19 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
       if (si >= segs.length) return;
       const seg = segs[si];
       const existingForSeg = si === 0 ? EXISTING : {}; // 后续片段不再重复注入已有名单，合并时统一去重
+      // U3-4：完整字段 schema 只在首段携带（字段约定各段一致，无需重复），
+      // 后续段落改用极简 schema，单段即可省下数百 token，段数越多省得越多。
+      const schemaForSeg = si === 0
+        ? schemaText(effectiveFields(fields) || DEFAULT_FIELDS)
+        : compactSchemaText(effectiveFields(fields) || DEFAULT_FIELDS);
       const makeUser = () => renderPrompt(prompts.registration, {
-        schema: schemaText(effectiveFields(fields) || DEFAULT_FIELDS),
+        schema: schemaForSeg,
         existing: JSON.stringify(existingMap(existingForSeg || {})),
         fragment: seg
       }, strict) + excludeNote;
       let lastErr = null;
       let parsed = null;
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      for (let attempt = 1; attempt <= 2; attempt++) {
         try {
           const remind = (attempt > 1) ? '\n【要求纠正】你上一次的回复没有返回可解析的 JSON 对象。请只输出一个 JSON 对象（字段含 entities），不要输出任何解释文字、Markdown 代码块或包围标记；若输出过长会被截断，请务必紧凑地给出完整字段。' : '';
           // 剧本拆解输出量大，用更高 token 上限，避免完整 JSON 被截断成残缺对象
@@ -1430,7 +1472,7 @@ async function genTemplateFromRules(cfg, rulesText) {
     + '{"name":"模板名(如：XXX 人物卡)","note":"一句话说明该模板特点","fields":{"pcs":[{"k":"英文键","l":"中文显示名","t":"text|textarea|number|select|tags",可选"opts":["中文选项",...]}, ...]}}\n要求：\n'
     + '- 每个键 k 用英文(小写、不含空格)，显示名 l 用中文；\n- 类型 t 只能是 text/textarea/number/select/tags 之一；select 必须给出 opts 中文选项；\n'
     + '- 应覆盖该规则的属性/能力值、生命或资源类数值、技能/擅长类别等，数量 8~24 个，贴合该规则的特色系统；\n'
-    + '- 列表开头两项应为「姓名」与「玩家」，随后是属性与数值。\n【规则书内容】\n' + String(rulesText || '').slice(0, 18000);
+    + '- 列表开头两项应为「姓名」与「玩家」，随后是属性与数值。\n【规则书内容】\n' + String(rulesText || '').slice(0, 10000); // U3-3：模板生成输入 18000→10000，控制单次成本
   let lastErr = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -1499,7 +1541,7 @@ async function generateBoard(cfg, text, opts) {
     + '- fog 表示被遮住、玩家还没探索到的区域轮廓；region 表示有名字的大区域；两者都是多边形；'
     + '- 若文字没有地图信息，则给出一套通用的开局布局（含 1~3 个 marker 与 1 块 fog）。';
   const user = '底图比例大约是 ' + baseW + ':' + baseH + '。请给下面这段描述设计地图要素（只输出 JSON）：\n【文字】\n'
-    + String(text == null ? '' : text).slice(0, 18000);
+    + String(text == null ? '' : text).slice(0, 10000); // U3-3：地图生成输入 18000→10000，控制单次成本
   let lastErr = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -1547,10 +1589,23 @@ async function generateBoard(cfg, text, opts) {
 /* 数据一致性审查：把当前档案快照交给 AI 检查重复/冲突/缺失/异常 */
 async function auditData(cfg, doc, world) {
   const fields = effectiveFields(doc);
+  // U3-3：只传「轻量清单」——名称 + 少量关键字段 + 正文摘要截断，
+  // 避免整档全字段快照（原最多 8 万字符 ≈ 4 万 token）把单次审查成本推高。
+  const KEEP_FIELDS = ['name', 'title', 'subtitle', 'summary', 'type', 'kind', 'level', 'status', 'hp', 'region', 'tags', 'note', 'desc'];
   const snapshot = {};
   for (const k of _K) {
     const arr = (doc.entities && doc.entities[k]) || [];
-    snapshot[k] = arr.map(x => Object.assign({}, x));
+    snapshot[k] = arr.map((x) => {
+      const o = {};
+      for (const key of KEEP_FIELDS) {
+        const v = x && x[key];
+        if (v == null || v === '') continue;
+        o[key] = typeof v === 'string' ? String(v).slice(0, 120) : v;
+      }
+      const body = x && (x.content || x.text);
+      if (body) o.正文摘要 = String(body).slice(0, 200);
+      return o;
+    });
   }
   const sys = '你是一位严谨的 TRPG 数据审查员。下面是一次跑团工作台的数据快照。'
     + '请逐类检查：疑似重复条目、同一实体不同卡片信息冲突、前后不一致、缺失关键字段(如名字)、数值或状态异常、明显的错别字或录入错误。'
@@ -1558,7 +1613,7 @@ async function auditData(cfg, doc, world) {
     + '若某类没有发现问题请跳过；若整体未发现问题，最后明确写一行“未发现明显问题”。'
     + '回答只使用中文，条理清晰，不要客套。';
   const user = '数据快照：\n' + JSON.stringify(snapshot, null, 1);
-  const c = await apiCall(cfg, sys, String(user || '').slice(0, 80000));
+  const c = await apiCall(cfg, sys, String(user || '').slice(0, 40000));
   return { content: stripWrap(c), model: cfg.model };
 }
 
@@ -1655,7 +1710,7 @@ async function suggestScript(text, profile, fields, cfg, settings, opts) {
  * 依据近期会话/日志提炼值得长期记住的要点，输出 {"points":["…",…]}。 */
 async function plotSummary(cfg, content, memoryText) {
   const sys = '你是 TRPG 跑团剧本分析助手。下面给出一段近期跑团对话/日志内容。请提炼其中值得长期记住的剧情要点、人物线索、伏笔与关键设定，输出严格 JSON 对象：{"points":["要点1","要点2",...]}。要求：每条一句话、具体、可独立理解、不要编号前缀，最多 12 条；若内容太少则返回 {"points":[]}。只输出 JSON，不要解释。';
-  const user = '【现有长期记忆（避免重复收录）】\n' + (String(memoryText || '').trim() || '（无）') + '\n\n【近期内容】\n' + String(content || '').slice(0, 32000);
+  const user = '【现有长期记忆（避免重复收录）】\n' + (String(memoryText || '').trim() || '（无）') + '\n\n【近期内容】\n' + String(content || '').slice(0, 16000); // U3-3：剧情要点输入 32000→16000
   const raw = await rawJsonReply(cfg, sys, user, 1600);
   const obj = extractJsonObject(raw);
   let points = [];
@@ -1679,7 +1734,7 @@ async function suggestStory(cfg, content, existing) {
   const user = '【已存在的 NPC/剧情点名称（避免重复建议）】\n'
     + 'NPC：' + (names.npcs.join('、') || '（无）') + '\n'
     + '日志/剧情点：' + (names.logs.join('、') || '（无）') + '\n\n'
-    + '【近期内容】\n' + String(content || '').slice(0, 32000);
+    + '【近期内容】\n' + String(content || '').slice(0, 16000); // U3-3：剧情建议输入 32000→16000
   const raw = await rawJsonReply(cfg, sys, user, 2600);
   const obj = extractJsonObject(raw);
   const result = { entities: { pcs: [], npcs: [], regions: [], logs: [], mobs: [], rules: [], lore: [] }, updates: [] };

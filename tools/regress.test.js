@@ -1865,6 +1865,52 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       && /\.ai-budget-bar\{/.test(U0css) && /\.ai-budget-fill\.over\{/.test(U0css) ? true : '预算未挂载或样式缺失';
   });
 
+  /* ---- U3-1~U3-6 AI 省 token 治理 ---- */
+  check('U3-1 工具模式收敛：往返上限 3 + 末轮移除工具定义 + 结果瘦身', () => {
+    const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    return /const MAX_TOOL_ITERS = 3;/.test(aiSrc)
+      && /const isLastRound = i === MAX_TOOL_ITERS - 1;/.test(aiSrc)
+      && /isLastRound \? \{\} : \{ tools: TOOL_DEFS, tool_choice: 'auto' \}/.test(aiSrc) ? true : '工具模式未收敛';
+  });
+  check('U3-2 预算下调：单轮上限 24000 + 背景/偏好/记忆注入限长', () => {
+    const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    return /const CTX_BUDGET_TOKENS\s+= 24000;/.test(aiSrc)
+      && /const CTX_KEEP_TOKENS\s+= 15000;/.test(aiSrc)
+      && /const LORE_MAX_TOKENS\s+= 1500;/.test(aiSrc)
+      && /const PREFS_MAX_TOKENS\s+= 500;/.test(aiSrc)
+      && /const MEMORY_MAX_TOKENS\s+= 1200;/.test(aiSrc)
+      && /clipToks\(String\(opts\.memoryText\), MEMORY_MAX_TOKENS\)/.test(aiSrc) ? true : '上下文预算/注入限长缺失';
+  });
+  check('U3-3 大输入瘦身：审查改用轻量清单 + 输入上限 40000', () => {
+    const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    return /U3-3/.test(aiSrc) && /正文摘要/.test(aiSrc) && /\.slice\(0, 40000\)/.test(aiSrc) ? true : '大输入未瘦身';
+  });
+  check('U3-4 模组解析省 token：分段 24000/重叠 300 + 后续段极简 schema', () => {
+    const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    return /const SEG = 24000, OVERLAP = 300;/.test(aiSrc)
+      && /compactSchemaText\(effectiveFields\(fields\) \|\| DEFAULT_FIELDS\)/.test(aiSrc) ? true : '解析分段/schema 未优化';
+  });
+  check('U3-5 预算熔断：超限抛 402 且不参与重试，连通性测试豁免', () => {
+    const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    return /function budgetGuard\(cfg\)/.test(aiSrc) && /function usageCost\(budget\)/.test(aiSrc)
+      && /budgetGuard\(cfg\);/.test(aiSrc) && /e\.status = 402;/.test(aiSrc)
+      && /cfg\.noBudget/.test(aiSrc)
+      && /budget: \{ limit: Number\(b\.limit\) \|\| 0/.test(mainSrc)
+      && /cfg\.noBudget = true;/.test(mainSrc) ? true : '预算熔断缺失或未接线';
+  });
+  check('U3-5 用量可见：状态栏徽标 + 输入 token 实时预估 + 样式', () => {
+    return /function aiUsageBadgeRefresh\(force\)/.test(src)
+      && /function estTokLocal\(s\)/.test(src) && /function updTokHint\(inputId, hintId\)/.test(src)
+      && /id="sbAi"/.test(html) && /id="drawerInTok"/.test(html)
+      && /aiUsageBadgeRefresh\(\);/.test(src) && /\.ai-tok-hint\{/.test(U0css) ? true : '用量可见未实现';
+  });
+  check('U3-6 对话历史治理：token 上限 + 摘要归档 + 只落盘裁剪后内容', () => {
+    return /const CH_TOKEN_CAP = 12000;/.test(src) && /function governedChat\(\)/.test(src)
+      && /function buildChatArchive\(dropped\)/.test(src)
+      && /S\.settings\.chat = governed;/.test(src) && /S\.settings\.chatArchive/.test(src)
+      && /aiChat\(governedChat\(\)\)/.test(src) ? true : '对话历史治理缺失';
+  });
+
   /* ---- U1-10 数据管家（数据路径 / 体积 / 备份时间线 / 全量导出入） ---- */
   check('U1-10 主进程：dirSize 体积统计 + data:steward 汇总（路径/体积/备份/快照）', () => {
     return /function dirSize\(dir\)/.test(mainSrc) && /ipcMain\.handle\('data:steward'/.test(mainSrc)

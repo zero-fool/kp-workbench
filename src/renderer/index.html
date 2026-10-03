@@ -176,6 +176,7 @@
         <button id="drawerUpload" title="添加文字文件为附件（AI 无识图，仅文本）；添加后可附额外要求再发送">📎</button>
         <div id="pendFiles" class="pend-slot" hidden></div>
         <textarea id="drawerIn" class="autoarea" maxlength="60000" rows="1" placeholder="向 AI 提问…（Enter 发送 / Shift+Enter 换行）"></textarea>
+        <span class="ai-tok-hint" id="drawerInTok" title="本次发送的大致输入 token 估算，仅供参考"></span>
         <button id="drawerExport" title="导出最近 AI 回复为 .txt">⬇</button>
         <button id="drawerSend" title="发送">发送</button>
       </div>
@@ -187,6 +188,7 @@
     <span class="sb-item" id="sbDice"><span class="sb-dot off"></span>骰娘未连接</span>
     <span class="sb-item sb-dim" id="sbDiceCh">—</span>
     <span class="sb-sp"></span>
+    <span class="sb-item" id="sbAi" onclick="WB.aiOpenUsagePanel()" title="本轮 AI 用量（点击查看明细与预算设置）">AI：—</span>
     <span class="sb-item sb-dim" id="sbArchive">档案：—</span>
     <span class="sb-item" id="sbBackup">尚未备份</span>
     <span class="sb-item sb-dim" id="sbTheme">主题：现代卷宗</span>

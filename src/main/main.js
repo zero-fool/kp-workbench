@@ -305,7 +305,15 @@ function decryptSettingsClone() {
 
 function currentCfg() {
   const flag = (name, def) => { const s = doc.settings && doc.settings.ai; return (s && s[name] !== undefined) ? s[name] : def; };
-  function mk(a) { return { baseUrl: a.baseUrl, apiKey: decKey(a.apiKey), model: a.model, temperature: a.temperature, timeoutMs: a.timeoutMs, maxTokens: a.maxTokens, moderate: flag('moderate', true), modRules: (Array.isArray(a.modRules) && a.modRules.length) ? a.modRules : ai.defaultModRules() }; }
+  function mk(a) {
+    const b = (doc.settings && doc.settings.aiBudget) || {};
+    return {
+      baseUrl: a.baseUrl, apiKey: decKey(a.apiKey), model: a.model, temperature: a.temperature, timeoutMs: a.timeoutMs, maxTokens: a.maxTokens,
+      moderate: flag('moderate', true), modRules: (Array.isArray(a.modRules) && a.modRules.length) ? a.modRules : ai.defaultModRules(),
+      // U3-5：带上预算配置，供主进程做「超预算熔断」（limit=0 表示不限）
+      budget: { limit: Number(b.limit) || 0, warn: Number(b.warn) || 80, inPrice: Number(b.inPrice) || 0, outPrice: Number(b.outPrice) || 0 }
+    };
+  }
   const a = doc.settings && doc.settings.ai;
   if (a && a.baseUrl && a.apiKey && a.model) return mk(a);
   // 兼容旧版：角色卡上仍带有连接信息
@@ -625,6 +633,7 @@ function registerIpc() {
   ipcMain.handle('ai:test', async () => {
     // 全局 AI 配置已就绪即可连通测试（不再强制要求已配置「AI 设定」角色卡）
     const cfg = aiCfg('sys', 'AI 连通性测试');
+    cfg.noBudget = true; // U3-5：连通性测试不受预算熔断限制，避免超支时无法排查连接问题
     const res = await ai.chat(currentProfile(), [{ role: 'user', content: '用一句话回复你好' }], ai.effectiveFields(doc), cfg, worldName());
     return res;
   });

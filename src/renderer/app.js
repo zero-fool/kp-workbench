@@ -443,6 +443,8 @@
     const s = String((e && e.message) || e || '');
     /* 上一项 AI 还没跑完就又被点了一次：不是故障，把原因原样讲清楚即可 */
     if (/AI_BUSY/.test(s)) return { msg: s.replace(/^AI_BUSY\s*/, ''), cfg: false };
+    /* U3-5：预算熔断——不是故障，讲清「已停止」与如何恢复即可 */
+    if (/AI_BUDGET_EXCEEDED/.test(s)) return { msg: s.replace(/^AI_BUDGET_EXCEEDED\s*/, ''), cfg: false };
     if (/未配置完整|缺.*(baseUrl|apiKey|model)|baseUrl.*apiKey/i.test(s)) return { msg: 'AI 尚未配置完整（需 baseUrl / API Key / model）。请先在「AI 配置」中填写并保存。', cfg: true };
     if (/401|403|unauthor|invalid.*key|api.?key|auth/i.test(s)) return { msg: 'API Key 无效或无权限（' + (s.slice(0, 120) || '401/403') + '）。请到「AI 配置」核对密钥。', cfg: true };
     if (/429|rate.?limit|频率|限流/i.test(s)) return { msg: '触发限流（429）或请求量超限。请稍后重试，或检查模型配额。', cfg: true };
@@ -684,6 +686,8 @@
     _aiWasBusy = !!s.on;
     /* U2-5：一轮 AI 收尾后核对一次预算（跨阈值/上限时提醒） */
     if (!s.on && wasBusy) aiBudgetCheck();
+    /* U3-5：同一时机刷新状态栏实时用量徽标 */
+    if (!s.on && wasBusy) aiUsageBadgeRefresh(true);
     const el = q('aiBusy');
     if (s.on) {
       _aiLabel = s.label || 'AI 处理中';
@@ -822,6 +826,34 @@
     return (it * pin + ot * pout) / 1e6;
   }
   function aiMoney(v) { const n = Number(v) || 0; return (n > 0 && n < 0.01) ? '¥' + n.toFixed(4) : '¥' + n.toFixed(2); }
+  /* U3-5：本地 token 粗估（CJK 每字≈1，其余每 3 字符≈1）；用于输入框实时预估与对话历史治理预算 */
+  function estTokLocal(s) { const t = String(s == null ? '' : s); const cjk = (t.match(/[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f]/g) || []).length; return cjk + Math.ceil((t.length - cjk) / 3); }
+  /* U3-5：输入框 token 预估提示——随输入实时更新，发送后清零，超阈值变色提醒 */
+  function updTokHint(inputId, hintId) {
+    const i = q(inputId), h = q(hintId); if (!i || !h) return;
+    const n = estTokLocal(i.value);
+    h.textContent = n > 0 ? ('≈' + fmtNum(n) + ' token') : '';
+    h.className = 'ai-tok-hint' + (n > 12000 ? ' over' : (n > 4000 ? ' warn' : ''));
+    h.title = '本次输入约 ' + fmtNum(n) + ' token（粗估，随对话历史增大而更高）；发送后清零';
+  }
+  /* U3-5：状态栏实时用量徽标（累计 token + 估算花费 + 预算占比），点击打开用量面板 */
+  let _aiUsageBadgeAt = 0;
+  function aiUsageBadgeRefresh(force) {
+    const el = q('sbAi'); if (!el || !(window.api && window.api.aiUsage)) return;
+    const now = Date.now();
+    if (!force && now - _aiUsageBadgeAt < 1500) return; // 合并高频刷新
+    _aiUsageBadgeAt = now;
+    window.api.aiUsage().then(data => {
+      const budget = aiBudgetCfg();
+      const cost = aiCostOf(data, budget);
+      const total = Number(data && data.totalTokens) || 0;
+      const limit = Number(budget.limit) > 0 ? Number(budget.limit) : 0;
+      let txt = 'AI：' + fmtNum(total) + ' token · ' + aiMoney(cost);
+      if (limit > 0) txt += ' / ' + aiMoney(limit) + '（' + Math.round(cost / limit * 100) + '%）';
+      el.textContent = txt;
+      el.classList.toggle('sb-err', limit > 0 && cost >= limit);
+    }).catch(() => {});
+  }
   /* 预算告警：AI 收尾后核对一次，跨过阈值/上限各提醒一次（重置统计后重新武装） */
   const _aiBudgetWarned = { level: 0 };
   function aiBudgetCheck() {
@@ -857,6 +889,7 @@
     _aiBudgetWarned.level = 0; // 改完预算重新武装告警
     persist();
     toast('费用与预算设置已保存', 'ok');
+    aiUsageBadgeRefresh(true); // U3-5：预算变更后立即刷新状态栏显示
     aiOpenUsagePanel();
   }
 
@@ -934,7 +967,7 @@
     mask.hidden = false;
   }
   async function aiUsageSetWindow(ms) { (S.settings.aiUsageWindow = ms); try { if (window.api && window.api.aiUsageReset) await window.api.aiUsageReset(ms === 0 ? 86400e6 : ms); } catch (_) {} persist(); toast('统计时段已切换'); aiOpenUsagePanel(); }
-  async function aiUsageResetPanel() { try { if (window.api && window.api.aiUsageReset) await window.api.aiUsageReset(0); } catch (_) {} _aiBudgetWarned.level = 0; toast('已清零本轮统计'); aiOpenUsagePanel(); }
+  async function aiUsageResetPanel() { try { if (window.api && window.api.aiUsageReset) await window.api.aiUsageReset(0); } catch (_) {} _aiBudgetWarned.level = 0; aiUsageBadgeRefresh(true); toast('已清零本轮统计'); aiOpenUsagePanel(); }
   function aiErrText(e) { return eiAIErr(e).msg; }
   function val(rid) { const e = q(rid); return e ? e.value : ''; }
   function fmtBytes(b) { const n = Number(b) || 0; if (n < 1024) return n + ' B'; if (n < 1048576) return (n / 1024).toFixed(1) + ' KB'; if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB'; return (n / 1073741824).toFixed(2) + ' GB'; }
@@ -1215,6 +1248,7 @@
         } else bkEl.textContent = '尚未备份';
       } catch (_) { bkEl.textContent = '尚未备份'; }
     }
+    aiUsageBadgeRefresh(); // U3-5：状态栏同步刷新实时 AI 用量
   }
 
   /* ---------- 导航 ---------- */
@@ -2425,10 +2459,42 @@
 
   /* ========== AI 助手（聊天 + 生成/润色） ========== */
   const CH = [];
-  const CH_CAP = 200;
+  const CH_CAP = 200;           // 条数上限（内存/展示）
+  const CH_TOKEN_CAP = 12000;   // U3-6：持久化与发送时携带的历史 token 上限（防止上下文无界膨胀）
+  const CH_KEEP_MIN = 10;       // U3-6：治理时至少保留的最近消息条数
+  const CH_ARCHIVE_CHARS = 4000; // U3-6：归档摘要最多保留的字符数
+  /* U3-6：按 token 上限从最旧裁剪，返回「最新优先保留」的历史副本（用于持久化与发送） */
+  function governedChat() {
+    const out = []; let total = 0;
+    for (let i = CH.length - 1; i >= 0; i--) {
+      const t = estTokLocal(CH[i] && CH[i].content) + 40;
+      if (total + t > CH_TOKEN_CAP && out.length >= CH_KEEP_MIN) break;
+      total += t; out.unshift(CH[i]);
+    }
+    if (out.length > CH_CAP) out.splice(0, out.length - CH_CAP);
+    return out;
+  }
+  /* U3-6：把被裁掉的旧消息压成确定性摘要（零额外 AI 成本），作为归档保留 */
+  function buildChatArchive(dropped) {
+    const lines = [];
+    for (const m of dropped) {
+      const c = String((m && m.content) || '').replace(/\s+/g, ' ').trim();
+      if (!c) continue;
+      lines.push((m.role === 'user' ? '用户' : 'AI') + '：' + c.slice(0, 120));
+    }
+    let s = lines.join('\n');
+    if (s.length > CH_ARCHIVE_CHARS) s = s.slice(-CH_ARCHIVE_CHARS);
+    return s;
+  }
   function persistChat() {
     if (!S.settings) return;
-    try { S.settings.chat = CH.slice(-CH_CAP); persist(); } catch (_) {}
+    try {
+      const governed = governedChat();
+      const dropped = CH.slice(0, Math.max(0, CH.length - governed.length));
+      S.settings.chat = governed; // U3-6：只落盘裁剪后的内容
+      if (dropped.length) S.settings.chatArchive = buildChatArchive(dropped);
+      persist();
+    } catch (_) {}
   }
   function renderAI() {
     const allowTools = (S.settings && S.settings.ai && S.settings.ai.allowTools);
@@ -2454,9 +2520,11 @@
       <button class="danger" onclick="WB.aiClear()">清空对话</button></div>`;
     html += `<div class="chatwrap"><div class="chatlog" id="chatlog"></div>
       <div class="chatinput"><div id="pendFilesAI" class="pend-slot"></div><textarea id="aiIn" class="autoarea" maxlength="60000" rows="1" placeholder="向 ${S.activeProfile ? esc(S.activeProfile.name) : '你的 AI'} 提问…${allowTools ? '（📎 添加附件后可附带你的额外要求一并发送；支持文字文件，暂不支持图片识别）' : '（文件上传功能需在「AI 配置」开启「允许文件上传工具」）'}"></textarea>
+      <span class="ai-tok-hint" id="aiInTok" title="本次发送的大致输入 token 估算，仅供参考"></span>
       <button onclick="WB.aiSend()">发送</button></div></div>`;
     contentInner(html);
     q('aiIn').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); WB.aiSend(); } });
+    q('aiIn').addEventListener('input', () => updTokHint('aiIn', 'aiInTok')); // U3-5：实时预估输入 token
     refreshChat();
     renderPendStrip();
   }
@@ -2536,12 +2604,13 @@
     autosize(q('drawerIn')); autosize(q('aiIn'));
     S.pendFiles = [];
     renderPendStrip();
+    updTokHint('drawerIn', 'drawerInTok'); updTokHint('aiIn', 'aiInTok'); // U3-5：发送后清零预估
     const msg = { role: 'user', content };
     if (atts) { msg.files = atts; msg.fileReq = fileReq; }
     CH.push(msg);
     S.aiBusy = true; refreshChat();
     try {
-      const r = await window.api.aiChat(CH);
+      const r = await window.api.aiChat(governedChat()); // U3-6：只发送裁剪后的历史
       CH.push({ role: 'assistant', content: r.content });
     } catch (e) {
       const er = eiAIErr(e);
@@ -2715,13 +2784,17 @@
   }
   /* C3：忽略“对话过长”提示，直到累计条数再次增长 */
   function dismissChatHint() { S.settings.chatSumAt = CH.length; persist(); refreshChat(); }
-  /* 对话过长提示条：累计 ≥30 条且自上次处理后又增长时显示 */
+  /* 对话过长提示条：累计 ≥30 条且自上次处理后又增长时显示；U3-6：已自动归档时给出可见说明 */
   function chatHintHtml() {
     if (!S.settings) return '';
     const n = CH.length;
     const th = S.settings.chatSumAt || 0;
-    if (n < 30 || th >= n) return '';
-    return `<div class="chat-hint">对话已累计 ${n} 条，较早内容将被自动压缩。建议把要点沉淀进长期记忆：<button class="ghost small" onclick="WB.plotSummary(true)">☉ 总结并沉淀</button><button class="ghost small" onclick="WB.dismissChatHint()">忽略</button></div>`;
+    const arch = String(S.settings.chatArchive || '');
+    let html = arch ? `<div class="chat-hint" title="较早对话已压缩为摘要保存，不再逐条占用上下文">较早对话已自动归档（约 ${arch.length} 字摘要），上下文仅携带最近 ${n} 条，避免 token 无限膨胀。</div>` : '';
+    if (n >= 30 && th < n) {
+      html += `<div class="chat-hint">对话已累计 ${n} 条，较早内容将被自动压缩。建议把要点沉淀进长期记忆：<button class="ghost small" onclick="WB.plotSummary(true)">☉ 总结并沉淀</button><button class="ghost small" onclick="WB.dismissChatHint()">忽略</button></div>`;
+    }
+    return html;
   }
 
   /* ========== 侧栏常驻 AI 对话抽屉 ========== */
@@ -9082,7 +9155,7 @@
   /* 合并而非整对象替换：保证此前已通过「window.WB.xxx =」挂载的运行时方法（骰娘 AI 开关、
    * 表情包库管理）不被覆盖、加载期不抛错。 */
   window.WB = Object.assign(window.WB, {
-    go, search, add, edit, del, closeModal, saveEdit, setTheme, aiSend, aiGen, aiClear: () => { CH.length = 0; S.pendFiles = []; renderPendStrip(); if (S.settings) { S.settings.chat = []; S.settings.chatSumAt = 0; } refreshChat(); persist(); },
+    go, search, add, edit, del, closeModal, saveEdit, setTheme, aiSend, aiGen, aiClear: () => { CH.length = 0; S.pendFiles = []; renderPendStrip(); if (S.settings) { S.settings.chat = []; S.settings.chatArchive = ''; S.settings.chatSumAt = 0; } refreshChat(); persist(); },
     setViewSort, setViewSrc, setViewTpl, editSetTpl,
     aiUpload, aiExportLast, addLongMemory, delLongMemory, saveMemoModal, addModRule, delModRule,
     addUserPref, editUserPref, saveUserPrefModal, delUserPref,
@@ -10041,6 +10114,7 @@
     q('drawerUpload').addEventListener('click', aiUpload);
     q('drawerExport').addEventListener('click', aiExportLast);
     q('drawerIn').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); aiSend(); } });
+    q('drawerIn').addEventListener('input', () => updTokHint('drawerIn', 'drawerInTok')); // U3-5：实时预估输入 token
     /* 侧栏「自动建卡」控件：结合上方对话生成 / 把最近回复建为资料卡 */
     const dgt = q('drawerGenType');
     if (dgt) dgt.addEventListener('change', () => { S.aiGenType = dgt.value; });
