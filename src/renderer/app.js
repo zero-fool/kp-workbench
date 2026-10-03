@@ -16,8 +16,13 @@
   const KINDS = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
   const TPL_KINDS = ['pcs', 'npcs', 'mobs']; // 仅「卡片类」实体支持切换模板（模板改变显示字段集）
   const THEMES = [['ember', '残火纪·暗黑'], ['parchment', '现代卷宗'], ['lite', '极简浅色'], ['neon', '赛博霓虹'], ['dusk', '暮光护眼']];
-  const APP_VERSION = '3.2.4';
+  const APP_VERSION = '3.2.5';
   const CHANGELOG = [
+    { version: '3.2.5', date: '2026-10-03', type: '正式版·修复', items: [
+      '修复「AI 补全关系」推断不到明显关系：此前提示词只给了实体名称与阵营标签，AI 拿不到任何关系证据；现改为注入每张卡片的关键内容（角色/阵营/性格/秘密/剧情摘要/正文等，自动截断控量）与「原始文本」摘录，AI 可依据卡片描述与团本原文推断师徒、敌对、效忠、血亲等明确关系。',
+      '修复关系补全姓名白名单误伤：名称含括号的实体（如「老周（酒馆老板）」）此前会被白名单解析截断，导致 AI 明明输出正确关系也被过滤为「未找到可用操作」；现白名单直接取实体名字段，不再受展示格式影响。',
+      '验证：新增关系补全专项测试（卡片内容/源文本注入、含括号名称通过白名单），单元测试与回归测试全绿，npm run verify 通过。'
+    ] },
     { version: '3.2.4', date: '2026-10-03', type: '正式版·关系网增强', items: [
       '关系网新增框选多节点：在画布空白处按住左键拖拽出现选择框，松开后框内节点全部选中并高亮，拖动任一选中节点即可整体移动（相对位置保持不变）；支持 Shift+点击节点增减选择、空白单击或 Esc 取消选择。',
       '关系网新增方向箭头：连线统一缩短至目标节点边缘并加箭头，明确指示「从 ➔ 到」的关系方向，箭头颜色随连线类型着色，两节点过近时自动省略箭头避免遮挡。',
@@ -9847,7 +9852,7 @@
     if (!totalEnts) { toast('请先登记人物/NPC/势力等资料，AI 才能推断关系', 'err'); return; }
     toast('AI 正在分析角色与势力关系…', 'ok');
     try {
-      const payload = { entities: S.data.entities, relations: relData() };
+      const payload = { entities: S.data.entities, relations: relData(), raw: String(S.rawText || '').slice(0, 8000) };
       const res = await window.api.relationsSuggest(payload);
       if (!res || !res.ok) { toast('AI 调用失败：' + ((res && res.error) || '未知错误'), 'err'); return; }
       const ops = Array.isArray(res.relations) ? res.relations : [];

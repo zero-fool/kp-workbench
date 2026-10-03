@@ -631,7 +631,7 @@ function registerIpc() {
   ipcMain.handle('ai:relationsSuggest', async (e, payload) => {
     try {
       payload = payload || {};
-      const rel = await ai.suggestRelations(payload.entities || (doc.entities || {}), payload.relations || (doc.relations || { nodes: [], edges: [] }), aiCfg('chat', 'AI 补全关系'));
+      const rel = await ai.suggestRelations(payload.entities || (doc.entities || {}), payload.relations || (doc.relations || { nodes: [], edges: [] }), aiCfg('chat', 'AI 补全关系'), payload.raw);
       return { ok: true, relations: rel };
     } catch (err) {
       return { ok: false, error: String((err && err.message) || err) };

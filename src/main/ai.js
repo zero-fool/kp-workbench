@@ -1724,14 +1724,33 @@ function parseJsonObj(txt) {
   if (!x) throw new Error('响应中未找到合法 JSON');
   return x.value;
 }
-async function suggestRelations(entities, relations, cfg) {
+async function suggestRelations(entities, relations, cfg, rawText) {
+  /* 关系推断最依赖的卡片内容字段（每字段截断到单字段上限，避免大段正文刷爆 token） */
+  const CONTENT_FIELDS = {
+    pcs: ['subtitle', 'status', 'attribute', 'note'],
+    npcs: ['role', 'faction', 'location', 'rel', 'personality', 'secret', 'note'],
+    regions: ['type', 'area', 'desc', 'key', 'note'],
+    logs: ['summary', 'hook', 'actors'],
+    mobs: ['category', 'trait', 'weak', 'note'],
+    rules: ['summary', 'source', 'note'],
+    lore: ['category', 'summary', 'content', 'note']
+  };
+  const FIELD_LIMIT = 80;    // 单个文本字段截断长度
+  const ENTITY_LIMIT = 150;  // 单张卡片展示上限（名称+标签+内容）
   const lines = [];
+  const nameSet = new Set(); // 白名单直接取实体名，不依赖展示行格式（名称含括号也不误伤）
   const kl = { pcs: '人物卡', npcs: 'NPC', regions: '地区', logs: '日志', mobs: '怪物', rules: '规则', lore: '背景' };
   for (const k of _K) {
     for (const it of ((entities && entities[k]) || []).slice(0, 90)) {
-      const nm = it.name || it.title; if (!nm) continue;
+      const nm = String(it.name || it.title || '').trim(); if (!nm) continue;
+      nameSet.add(nm);
       const tag = [kl[k] || k, it.faction, it.subtitle || it.role].filter(Boolean).join(' · ');
-      lines.push((tag ? nm + '(' + tag + ')' : nm));
+      const det = [];
+      for (const fk of CONTENT_FIELDS[k] || []) {
+        const v = String(it[fk] == null ? '' : it[fk]).replace(/\s+/g, ' ').trim();
+        if (v) det.push(v.slice(0, FIELD_LIMIT));
+      }
+      lines.push(nm + '(' + (tag || kl[k] || k) + ')' + (det.length ? '\n　　' + det.join('；') : ''));
     }
   }
   const nodes = ((relations && relations.nodes) || []).filter(n => n && n.id);
@@ -1741,19 +1760,21 @@ async function suggestRelations(entities, relations, cfg) {
   const existingPairs = new Set();
   for (const e of edges) { const a = id2n[e.from] || e.from, b = id2n[e.to] || e.to; if (a && b && a !== b) existingPairs.add(pairKey(a, b)); }
   const existingReadable = edges.map(e => (id2n[e.from] || e.from) + '——(' + (e.label || '关系') + ')——' + (id2n[e.to] || e.to));
-  const sys = '你是世界观关系网协同助手。基于给定清单与已有连线，判断应新增、修正或删除哪几条连线。只输出合法 JSON 数组，不要任何解释、注释或 markdown 代码块。';
+  const sys = '你是世界观关系网协同助手。基于给定卡片内容线索与团本原文，判断应新增、修正或删除哪几条连线。只输出合法 JSON 数组，不要任何解释、注释或 markdown 代码块。';
+  const raw = String(rawText || '').replace(/\s+/g, '\n').trim();
   const user = '输出 JSON 数组，每项是一个操作对象，支持三种类型：\n'
     + '新增：{"op":"add","from":"X","to":"Y","label":"关系说明(4~15字，如 师徒/敌对/私下结盟/隶属于火鳞商会/血亲/线索指向)"}\n'
     + '修正：{"op":"edit","from":"X","to":"Y","label":"纠正后的关系说明"}，from/to 必须是一对已有连线\n'
     + '删除：{"op":"del","from":"X","to":"Y"}，from/to 必须是一对已有连线，仅当确认该关系不合理或名存实亡时才删\n'
-    + '要求：from、to 必须严格来自下方清单中的名称；add 的 from/to 不得与现有连线重复；edit/del 只能针对已有连线（正反方向皆可）；避免给只是“同属一大势力”的所有人都互相连线；优先保留最显著、对剧情推进最有价值的关系；每个操作都要确有必要，总量控制在 3~15 条。'
+    + '要求：from、to 必须严格来自下方清单中的名称；add 的 from/to 不得与现有连线重复；edit/del 只能针对已有连线（正反方向皆可）；避免给只是“同属一大势力”的所有人都互相连线；优先保留最显著、对剧情推进最有价值的关系；每个操作都要确有必要，总量控制在 3~15 条。\n'
+    + '注意：请结合每张卡片「」内的内容线索与原始文本摘录中明确的描述来推断关系（如师徒、敌对、效忠、兄妹、线索指向等），不要因为没有看到显式关系词就一律输出空数组。'
     + '\n\n现有连线（供 add 去重、edit/del 定位）：' + (existingReadable.length ? existingReadable.join('　') : '（暂无）')
-    + '\n\n清单\n' + (lines.join('\n').slice(0, 12000) || '（清单为空）');
-  const raw = await apiCall(cfg, sys, user);
+    + '\n\n清单（名称后是卡片关键内容）\n' + lines.join('\n').slice(0, 14000)
+    + (raw ? '\n\n原始文本摘录\n' + raw.slice(0, 8000) : '');
+  const res = await apiCall(cfg, sys, user);
   let arr = [];
-  try { arr = parseJsonObj(raw); } catch (_) { arr = []; }
+  try { arr = parseJsonObj(res); } catch (_) { arr = []; }
   if (!Array.isArray(arr)) arr = [];
-  const nameSet = new Set(lines.map(l => l.split('(')[0].trim()));
   const out = [];
   const pick = (v) => { const f = String(v || '').trim(); return f || null; };
   for (const it of arr) {
