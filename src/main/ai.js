@@ -1738,12 +1738,15 @@ async function suggestRelations(entities, relations, cfg, rawText) {
   const FIELD_LIMIT = 80;    // 单个文本字段截断长度
   const ENTITY_LIMIT = 150;  // 单张卡片展示上限（名称+标签+内容）
   const lines = [];
-  const nameSet = new Set(); // 白名单直接取实体名，不依赖展示行格式（名称含括号也不误伤）
+  const nameSet = new Set();  // 白名单直接取实体名，不依赖展示行格式（名称含括号也不误伤）
+  const nameNorm = new Map(); // 归一化名 → 原始名：容忍 AI 输出名称的细微出入（全/半角、空白、括号备注），仍能对回卡片真名
   const kl = { pcs: '人物卡', npcs: 'NPC', regions: '地区', logs: '日志', mobs: '怪物', rules: '规则', lore: '背景' };
   for (const k of _K) {
     for (const it of ((entities && entities[k]) || []).slice(0, 90)) {
       const nm = String(it.name || it.title || '').trim(); if (!nm) continue;
       nameSet.add(nm);
+      const nk = normName(nm);
+      if (nk && !nameNorm.has(nk)) nameNorm.set(nk, nm);
       const tag = [kl[k] || k, it.faction, it.subtitle || it.role].filter(Boolean).join(' · ');
       const det = [];
       for (const fk of CONTENT_FIELDS[k] || []) {
@@ -1760,6 +1763,14 @@ async function suggestRelations(entities, relations, cfg, rawText) {
   const existingPairs = new Set();
   for (const e of edges) { const a = id2n[e.from] || e.from, b = id2n[e.to] || e.to; if (a && b && a !== b) existingPairs.add(pairKey(a, b)); }
   const existingReadable = edges.map(e => (id2n[e.from] || e.from) + '——(' + (e.label || '关系') + ')——' + (id2n[e.to] || e.to));
+  /* 名称回正：AI 输出与卡片名完全一致时原样返回；否则按归一化名对回卡片真名。
+   * 仍查白名单（归一化命中即视为白名单命中），杜绝 AI 凭空捏造节点。 */
+  const canonicalName = (v) => {
+    const raw = String(v || '').trim();
+    if (nameSet.has(raw)) return raw;
+    const nk = normName(raw);
+    return (nk && nameNorm.get(nk)) || null;
+  };
   const sys = '你是世界观关系网协同助手。基于给定卡片内容线索与团本原文，判断应新增、修正或删除哪几条连线。只输出合法 JSON 数组，不要任何解释、注释或 markdown 代码块。';
   const raw = String(rawText || '').replace(/\s+/g, '\n').trim();
   const user = '输出 JSON 数组，每项是一个操作对象，支持三种类型：\n'
@@ -1780,9 +1791,8 @@ async function suggestRelations(entities, relations, cfg, rawText) {
   for (const it of arr) {
     const opRaw = String(it.op || it.action || (it.label ? 'add' : 'del'));
     const op = opRaw === 'edit' ? 'edit' : opRaw === 'del' ? 'del' : 'add';
-    const f = pick(it.from || it.a), t = pick(it.to || it.b);
-    if (!f || !t || f === t) continue;
-    if (!nameSet.has(f) || !nameSet.has(t)) continue; // 姓名白名单，防幻觉捏造节点
+    const f = canonicalName(pick(it.from || it.a)), t = canonicalName(pick(it.to || it.b));
+    if (!f || !t || f === t) continue; // 姓名白名单（含归一化回正），防幻觉捏造节点
     const pk = pairKey(f, t);
     if (op === 'del') {
       if (!existingPairs.has(pk)) continue; // 只允许动已有连线

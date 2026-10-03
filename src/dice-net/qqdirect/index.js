@@ -31,6 +31,21 @@ const DEVICE_FILE = 'device.json';    // icqq 在此文件缓存设备指纹，�
 const CONFLICT_HINT = '同一 QQ 号与电脑端官方 QQ 同时在线会互相挤下线；骰娘建议使用独立小号，或改用「高级」里的 OneBot 中转。';
 const NO_SIGN_HINT = '未配置签名服务：icqq 登录极易触发滑动/短信验证甚至冻结，建议填写签名服务地址（QSign 等）并自检，或改用「高级」里的 OneBot 中转。';
 
+/* icqq 的平台参数是数字枚举（Android=1 / aPad=2 / Watch=3 / iMac=4 / iPad=5 / Tim=6），
+ * 界面给的是可读字符串（android/aPad/iPad…）。若把字符串直接透传给 icqq，
+ * apklist[平台] 会查不到而返回 [undefined]，随后 val.ver 即崩溃
+ * （Cannot read properties of undefined (reading 'ver')）。
+ * 这里归一化为枚举值；识别不了（含留空）则回退不传 platform，由 icqq 使用内置默认。 */
+const PLATFORM_ENUM = { android: 1, apad: 2, watch: 3, imac: 4, ipad: 5, tim: 6 };
+function normalizePlatform(v) {
+  if (v == null) return undefined;
+  const s = String(v).trim().toLowerCase();
+  if (s === '') return undefined;
+  if (PLATFORM_ENUM[s] != null) return PLATFORM_ENUM[s];
+  const n = Number(s);
+  return Number.isInteger(n) && n >= 1 && n <= 6 ? n : undefined;
+}
+
 /** 读取 icqq 已落盘的设备指纹（复用即固定设备）；不存在时返回将生成的位置 */
 function readDeviceFingerprint(dir) {
   const deviceFile = path.join(dir, DEVICE_FILE);
@@ -283,7 +298,7 @@ function createQqDirectAdapter(deps) {
   /* 影响客户端构造的关键配置：变更后需重建客户端，否则新填的签名服务/协议版本不生效。
    * signEnabled 关闭时按「无签名服务」处理，故 key 里用 signOn() 的生效值而非原始地址。 */
   function confKey() {
-    return [sessionDir(), cfg.platform || '', cfg.ver || '', signOn() ? signAddr() : '', cfg.enginePath || '', cfg.reconnInterval || ''].join('|');
+    return [sessionDir(), normalizePlatform(cfg.platform) || '', cfg.ver || '', signOn() ? signAddr() : '', cfg.enginePath || '', cfg.reconnInterval || ''].join('|');
   }
   function ensureClient() {
     const key = confKey();
@@ -306,7 +321,8 @@ function createQqDirectAdapter(deps) {
     }
     const dir = sessionDir();
     const conf = { log_level: cfg.logLevel || 'off', data_dir: dir, ignore_self: true };
-    if (cfg.platform != null) conf.platform = cfg.platform;
+    const pf = normalizePlatform(cfg.platform);       // 字符串 → icqq 数字枚举；非法值回退默认，避免引擎崩溃
+    if (pf != null) conf.platform = pf;
     if (cfg.ver) conf.ver = cfg.ver;
     if (signOn()) conf.sign_api_addr = signAddr();
     if (cfg.reconnInterval != null) conf.reconn_interval = cfg.reconnInterval;
