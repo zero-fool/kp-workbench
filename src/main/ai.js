@@ -1146,6 +1146,7 @@ function looksLikeNonPersonName(name, extra) {
  * 固定字符数硬切容易把一段剧情/一个角色卡拦腰截断。这里优先在章节/标题/编号行边界处切开，
  * 找不到合适边界时再回退到固定长度 + 重叠，兼顾「不漏信息」与「不打断结构」。 */
 const SEG_HEAD_RE = /^(?:第\s*[0-9一二三四五六七八九十百零]+\s*[章节幕部篇回]|Chapter\s+\d+|CHAPTER\s+\d+|[0-9]{1,3}\s*[、.．)）]|[一二三四五六七八九十]+\s*[、.．)）]|#{1,6}\s|序章|序幕|楔子|终章|尾声|后记|附录)/;
+const SEG_MAX = 400; // U3-4：分段数上限（入口正文 4MB 按最短切分约 350 段，留余量；避免切分本身丢内容）
 function splitByStructure(text, target, overlap) {
   const t = String(text || '');
   if (t.length <= target) return [t];
@@ -1168,7 +1169,7 @@ function splitByStructure(text, target, overlap) {
     if (j >= t.length) break;
     i = Math.max(i + 1, j - overlap);
   }
-  return out.filter(s => s && s.trim()).slice(0, 60);
+  return out.filter(s => s && s.trim()).slice(0, SEG_MAX);
 }
 
 async function parseScript(text, profile, fields, cfg, existing, opts) {
@@ -1231,7 +1232,9 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
       }, strict) + excludeNote;
       let lastErr = null;
       let parsed = null;
-      for (let attempt = 1; attempt <= 2; attempt++) {
+      // U3-4 补充：单段最多重试 3 次（仅在失败时触发，正常解析不产生额外请求），
+      // 尽量让长文本「传一次就拆完整」，避免个别段落偶发坏 JSON 而需重传整份。
+      for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           const remind = (attempt > 1) ? '\n【要求纠正】你上一次的回复没有返回可解析的 JSON 对象。请只输出一个 JSON 对象（字段含 entities），不要输出任何解释文字、Markdown 代码块或包围标记；若输出过长会被截断，请务必紧凑地给出完整字段。' : '';
           // 剧本拆解输出量大，用更高 token 上限，避免完整 JSON 被截断成残缺对象
@@ -1296,6 +1299,14 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
   if (segs.length && !kinds.some(k => merged.entities[k].length)) {
     if (cancelled) throw new Error('AI_TASK_CANCELLED 解析已取消');
     throw new Error('AI 拆分登记在重试后仍失败：' + (errors.join('；') || '所有段落均未识别出实体'));
+  }
+  /* U3-4 补充：个别分段失败时不静默丢内容——明确列出失败段落，便于用户只对该部分再拆一次，
+   * 而不必因为「感觉没解析全」把整份长文本重新上传。 */
+  if (!cancelled && errors.length) {
+    merged.updates.push({
+      type: '分段解析告警',
+      note: '有 ' + errors.length + ' / ' + segs.length + ' 段未能解析（' + errors.slice(0, 6).join('；') + (errors.length > 6 ? ' 等' : '') + '），结果可能不完整；可只对上述段落的内容重新拆分一次，无需重传整份文本。'
+    });
   }
   if (cancelled) { merged.partial = true; merged.cancelled = true; } // 已取消但有已完成段：返回部分结果
   emitProg();

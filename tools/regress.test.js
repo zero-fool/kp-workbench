@@ -1890,6 +1890,13 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     return /const SEG = 24000, OVERLAP = 300;/.test(aiSrc)
       && /compactSchemaText\(effectiveFields\(fields\) \|\| DEFAULT_FIELDS\)/.test(aiSrc) ? true : '解析分段/schema 未优化';
   });
+  check('U3-4 长文本一次上传即可完整解析：入口 4MB + 段数 400 + 失败段可见 + 单段重试 3 次', () => {
+    const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    return /const AI_SPLIT_CAP = 4 \* 1024 \* 1024;/.test(mainSrc)
+      && /cut = full\.length > AI_SPLIT_CAP;/.test(mainSrc) && /type: '内容截断'/.test(mainSrc)
+      && /const SEG_MAX = 400;/.test(aiSrc) && /slice\(0, SEG_MAX\)/.test(aiSrc)
+      && /type: '分段解析告警'/.test(aiSrc) && /attempt <= 3; attempt\+\+/.test(aiSrc) ? true : '长文本完整性保障缺失';
+  });
   check('U3-5 预算熔断：超限抛 402 且不参与重试，连通性测试豁免', () => {
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
     return /function budgetGuard\(cfg\)/.test(aiSrc) && /function usageCost\(budget\)/.test(aiSrc)

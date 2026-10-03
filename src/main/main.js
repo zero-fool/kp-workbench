@@ -754,7 +754,11 @@ function registerIpc() {
   const PREVIEW_CAP = 120000;                  // 返回给界面预览的字符数（原 40k，再扩容）
   const XL_ROW_CAP = 20000;                    // Excel 工作表最大读取行(防止超大表拖慢)
   const IMPORT_MAX_TXT = '8GB';                // 错误提示文案
-  const AI_SPLIT_CAP = 500 * 1024;             // file:splitImport 交给 AI 的正文上限(字符)
+  /* U3-4 补充：file:splitImport 交给 AI 的正文上限（字符）。
+   * 解析是「一次上传 → 内部按 24000 字符结构感知分段并发处理 → 合并」，因此入口只需防止极端爆量，
+   * 不应成为「长模组一次传不全、被迫分批多次上传」的瓶颈：这里放宽到 4MB（≈400 万字符/最多约 350 段），
+   * 覆盖实际能遇到的模组体量；万一仍触顶，会在结果里明确提示被截断，不再静默丢内容。 */
+  const AI_SPLIT_CAP = 4 * 1024 * 1024;
 
   function extOf(fp) { const m = /\.([a-z0-9]+)$/i.exec(String(fp || '')); return m ? m[1].toLowerCase() : ''; }
   /* 安全白名单：仅允许读取「当前数据目录 uploads/ 内」的文件（导入/上传生成的工作副本）。
@@ -975,10 +979,21 @@ function registerIpc() {
   ipcMain.handle('file:splitImport', async (e, args) => {
     args = args || {};
     let text = String((args && args.preview) || '');
-    if (args.path && ensureUploadPath(args.path) && fs.existsSync(args.path)) text = String(fs.readFileSync(args.path, 'utf8') || '').slice(0, AI_SPLIT_CAP);
+    let cut = false, origLen = 0;
+    if (args.path && ensureUploadPath(args.path) && fs.existsSync(args.path)) {
+      const full = String(fs.readFileSync(args.path, 'utf8') || '');
+      origLen = full.length;
+      cut = full.length > AI_SPLIT_CAP; // 记录是否触顶，供结果里明确提示（不再静默截断）
+      text = cut ? full.slice(0, AI_SPLIT_CAP) : full;
+    }
     const existing = doc.entities || {};
     const title = args.title || args.name || (args.path ? path.basename(args.path) : '');
-    return ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 拆分导入资料'), existing, { settings: doc.settings, strict: args.strict !== false, excludePC: args.excludePC === true, title, onProgress: aiParseProgress() });
+    const r = await ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 拆分导入资料'), existing, { settings: doc.settings, strict: args.strict !== false, excludePC: args.excludePC === true, title, onProgress: aiParseProgress() });
+    if (cut && r && Array.isArray(r.updates)) {
+      const wan = n => (n / 10000).toFixed(n >= 100000 ? 0 : 1);
+      r.updates.push({ type: '内容截断', note: '正文约 ' + wan(origLen) + ' 万字，已超过单次解析上限（' + wan(AI_SPLIT_CAP) + ' 万字），本次只解析了前 ' + wan(AI_SPLIT_CAP) + ' 万字；剩余部分请另存为单独文件后再拆分。' });
+    }
+    return r;
   });
   /* 大文件的分块 AI 分析整理：先并行抽取每段独立摘要(并发受控)，再顺序合并为完整提纲。
    * 相比旧版逐段串行合并：并行占满空闲连接、缩短墙钟时长；合并阶段小步串行保证连贯与命中率。
