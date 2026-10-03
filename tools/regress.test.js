@@ -1249,10 +1249,16 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
   check('T31 viewGenContext 存在：按需组装生成上下文', () => {
     return /function viewGenContext/.test(src) ? true : '缺少按需组装上下文的函数';
   });
-  check('T31 生成接口改用按需上下文（aiGenForView 传 viewGenContext）', () => {
-    const fn = /function aiGenForView[\s\S]*?\n  \}/.exec(src);
-    if (!fn) return 'aiGenForView 未找到';
-    return /viewGenContext\(entKey\)/.test(fn[0]) && !/chatContextText\(12\)/.test(fn[0]) ? true : '生成接口未改用按需上下文';
+  check('T31 生成接口改用按需上下文（统一入口 aiGenCardsFor 传 viewGenContext）', () => {
+    // U1-14 重构后：生成类调用统一收敛到 aiGenCardsFor，由它按需组装 viewGenContext（默认只注入同类条目名称）
+    const fn = /function aiGenCardsFor[\s\S]*?\n  \}/.exec(src);
+    if (!fn) return 'aiGenCardsFor 未找到';
+    return /viewGenContext\(entKey,/.test(fn[0]) && !/chatContextText\(12\)/.test(fn[0]) ? true : '生成接口未改用按需上下文';
+  });
+  check('T31 对话注入默认关闭（viewGenContext 仅 useChat 时附加，且限额 6 条）', () => {
+    const fn = /function viewGenContext[\s\S]*?\n  \}/.exec(src);
+    if (!fn) return 'viewGenContext 未找到';
+    return /if \(useChat\)/.test(fn[0]) && /chatContextText\(6\)/.test(fn[0]) ? true : '对话注入未做默认关闭/限额';
   });
 
   /* ==================== Phase 6 优化 ==================== */
@@ -1979,6 +1985,48 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
   check('QQD 样式：二维码 / 验证 / 状态灯样式已定义', () => {
     return (/\.qqd-card\{/.test(U0css) && /\.qrcode-pane\{/.test(U0css) && /\.qqd-err\{/.test(U0css))
       ? true : 'QQ 直连样式缺失';
+  });
+
+  console.log('\n[QQD2] QQ 直连风控治理：诊断 / 签名服务(SL) / 设备指纹 / 退避频控');
+  check('U1-19 签名服务：probeSignService/readDeviceFingerprint 导出 + signCheck + sign_api_addr', () => {
+    const qqdSrc = fs.readFileSync(path.join(qqdDir, 'index.js'), 'utf8');
+    let mod;
+    try { mod = require(path.join(qqdDir, 'index.js')); } catch (_) { mod = {}; }
+    return (typeof mod.probeSignService === 'function' && typeof mod.readDeviceFingerprint === 'function'
+      && /async signCheck\(\)/.test(qqdSrc) && /sign_api_addr/.test(qqdSrc)) ? true : '签名服务接入/自检缺失';
+  });
+  check('U1-17 登录诊断：status().diagnostics + 被踢原因码 + 设备指纹文件', () => {
+    const qqdSrc = fs.readFileSync(path.join(qqdDir, 'index.js'), 'utf8');
+    return (/diagnostics: buildDiagnostics\(\)/.test(qqdSrc) && /lastKick/.test(qqdSrc)
+      && /system\.offline\.kickoff/.test(qqdSrc) && /DEVICE_FILE/.test(qqdSrc)) ? true : '登录诊断未接入';
+  });
+  check('U1-19 退避频控：loginGuard 连点拦截 + noteLoginFailure 指数退避', () => {
+    const qqdSrc = fs.readFileSync(path.join(qqdDir, 'index.js'), 'utf8');
+    return (/function loginGuard/.test(qqdSrc) && /BACKOFF_BASE/.test(qqdSrc) && /function noteLoginFailure/.test(qqdSrc))
+      ? true : '缺少退避/频控';
+  });
+  check('U1-17 冲突治理：互踢提示 + 按账号固定设备指纹目录（dataDir/<uin>）', () => {
+    const qqdSrc = fs.readFileSync(path.join(qqdDir, 'index.js'), 'utf8');
+    return (/CONFLICT_HINT/.test(qqdSrc) && /function sessionDir/.test(qqdSrc) && /path\.join\(dataDir, String\(id\)\)/.test(qqdSrc))
+      ? true : '冲突治理/设备指纹目录缺失';
+  });
+  check('U1-19 装配：runtime 暴露 qqSignCheck 且登录前合并通道配置', () => {
+    const rt = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'dice-runtime.js'), 'utf8');
+    return (/qqSignCheck/.test(rt) && /Object\.assign\(cfg\.qqdirect, o\.cfg\)/.test(rt))
+      ? true : 'runtime 未接线签名自检/配置合并';
+  });
+  check('U1-19 主进程与桥接：diceQq:signCheck IPC + preload signCheck', () => {
+    return (/ipcMain\.handle\('diceQq:signCheck'/.test(M3main) && /diceQq:signCheck/.test(M3pre))
+      ? true : '签名自检 IPC/桥接缺失';
+  });
+  check('U1-17 界面：风控治理配置 + 诊断块 + 自检按钮 + 冲突提示', () => {
+    return (/data-field="signApiAddr"/.test(src) && /data-qact="qq-signcheck"/.test(src)
+      && /function diagBlock/.test(src) && /qqd-warn/.test(src) && /signCheck/.test(src))
+      ? true : '风控治理界面未接线';
+  });
+  check('U1-17 样式：警告 / 诊断块样式已定义', () => {
+    return (/\.qqd-warn\{/.test(U0css) && /\.qqd-diag\{/.test(U0css) && /\.qqd-diag-sc\.ok\{/.test(U0css))
+      ? true : '风控治理样式缺失';
   });
 
   console.log('\n[回归测试汇总] GREEN ' + pass + ' · RED ' + fail);

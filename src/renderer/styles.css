@@ -1167,6 +1167,9 @@ button.ghost.small-secondary{opacity:.85}
 .dice-light.off{color:var(--ink-faint)}
 .dice-light.recon{color:var(--warn);border-color:var(--warn)}
 .dice-light.fail{color:var(--danger);border-color:var(--danger)}
+/* 侧栏建卡工具条：模式选择 + 「结合对话」开关 */
+.cd-genchat{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer}
+.cd-genchat input{margin:0;cursor:pointer}
 /* QQ 直连登入卡片（扫码 / 账密）：卡身 + 动态状态区（二维码/滑动/短信） */
 .qqd-card{border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
 .qqd-hint{font-size:12px;color:var(--ink-soft);line-height:1.6;margin:2px 0 8px}
@@ -1182,6 +1185,18 @@ button.ghost.small-secondary{opacity:.85}
 .qqd-adv{margin:2px 0}
 .qqd-adv>summary{cursor:pointer;font-size:12px;color:var(--ink-soft);padding:4px 2px}
 .qqd-adv[open]>summary{margin-bottom:8px}
+/* U1-17/U1-19：QQ 直连风控治理提示与登录诊断 */
+.qqd-warn{margin:4px 0 8px;padding:7px 9px;font-size:12px;line-height:1.6;color:var(--ink-soft);border:1px solid color-mix(in srgb,var(--warn,#d98b00) 45%,var(--line));border-left:3px solid var(--warn,#d98b00);border-radius:8px;background:color-mix(in srgb,var(--warn,#d98b00) 10%,transparent)}
+.qqd-risk{margin:8px 0 2px}
+.qqd-risk>summary{cursor:pointer;font-size:12px;color:var(--ink-soft);padding:4px 2px}
+.qqd-risk[open]>summary{margin-bottom:8px}
+.qqd-diag{margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:color-mix(in srgb,var(--line) 10%,transparent)}
+.qqd-diag>summary{cursor:pointer;font-size:12px;color:var(--ink-soft)}
+.qqd-diag-row{margin-top:5px;font-size:12px;color:var(--ink-soft);line-height:1.6;word-break:break-word}
+.qqd-diag-route{margin-top:6px;font-size:12px;line-height:1.6;color:var(--ink-soft);border-top:1px dashed var(--line);padding-top:6px}
+.qqd-diag-sc{margin-top:5px;font-size:12px;font-weight:600}
+.qqd-diag-sc.ok{color:var(--ok)}
+.qqd-diag-sc.bad{color:var(--danger)}
 .dice-cmd-log{height:260px;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;font-size:12px}
 .dice-log-row{display:grid;grid-template-columns:64px 120px 84px 1fr 1fr;gap:6px;padding:4px 8px;border-bottom:1px dashed var(--line)}
 .dice-log-row .t{color:var(--ink-faint)}.dice-log-row .sid{color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -254,6 +254,14 @@ function aiCfg(group, label) {
 }
 const AI_GROUP_LABEL = Object.freeze({ chat: '对话', cards: '资料生成', scenario: '剧本分幕', map: '地图生成', tpl: '模板生成', sys: '连接/审查' });
 
+/* U1-15：模组解析进度广播。复用已有的 import:progress 通道，附带耗时/预计剩余（ETA），
+ * 前端据此显示「阶段 / x‑y / 百分比 / 已用时间 / 预计剩余」并支持中途取消。 */
+function aiParseProgress() {
+  return (p) => {
+    try { if (win && win.webContents) win.webContents.send('import:progress', p); } catch (_) {}
+  };
+}
+
 /* ---- API Key 安全：用系统级 safeStorage 加密后落盘，绝不存明文 ---- */
 const ENC_PREFIX = '__enc__:';
 function encKey(plain) {
@@ -513,7 +521,12 @@ function registerIpc() {
   ipcMain.handle('ai:parse', async (e, text, opts) => {
     opts = opts || {};
     const existing = doc.entities || {};
-    return ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 解析拆分'), existing, { settings: doc.settings, strict: opts.strict !== false, excludePC: opts.excludePC === true });
+    try {
+      return await ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 解析拆分'), existing, { settings: doc.settings, strict: opts.strict !== false, excludePC: opts.excludePC === true, title: opts.title || '', onProgress: aiParseProgress() });
+    } catch (err) {
+      try { if (win) win.webContents.send('import:progress', { phase: 'error', text: '解析失败', percent: 0 }); } catch (_) {}
+      throw err;
+    }
   });
   /* C1/C3：一键剧情要点总结 → 长期记忆条目 */
   ipcMain.handle('ai:plotSummary', async (e, content, memoryText) => {
@@ -584,7 +597,7 @@ function registerIpc() {
   ipcMain.handle('ai:genCards', async (e, args) => {
     try {
       args = args || {};
-      const entities = await ai.generateEntities(args.kind, args.tip, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 提取资料卡'), doc.settings, args.ctx, args.tpl || '');
+      const entities = await ai.generateEntities(args.kind, args.tip, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 提取资料卡'), doc.settings, args.ctx, args.tpl || '', args.mode || 'extract');
       return { ok: true, entities };
     } catch (err) {
       return { ok: false, error: String((err && err.message) || err) };
@@ -955,7 +968,8 @@ function registerIpc() {
     let text = String((args && args.preview) || '');
     if (args.path && ensureUploadPath(args.path) && fs.existsSync(args.path)) text = String(fs.readFileSync(args.path, 'utf8') || '').slice(0, AI_SPLIT_CAP);
     const existing = doc.entities || {};
-    return ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 拆分导入资料'), existing, { settings: doc.settings, strict: args.strict !== false, excludePC: args.excludePC === true });
+    const title = args.title || args.name || (args.path ? path.basename(args.path) : '');
+    return ai.parseScript(text, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 拆分导入资料'), existing, { settings: doc.settings, strict: args.strict !== false, excludePC: args.excludePC === true, title, onProgress: aiParseProgress() });
   });
   /* 大文件的分块 AI 分析整理：先并行抽取每段独立摘要(并发受控)，再顺序合并为完整提纲。
    * 相比旧版逐段串行合并：并行占满空闲连接、缩短墙钟时长；合并阶段小步串行保证连贯与命中率。
@@ -1524,6 +1538,8 @@ function registerIpc() {
   ipcMain.handle('diceQq:sms', async (e, code) => diceWorkbench.qqSubmitSms(code));
   ipcMain.handle('diceQq:logout', () => diceWorkbench.qqLogout());
   ipcMain.handle('diceQq:status', () => diceWorkbench.qqStatus());
+  // U1-19：签名服务连通性自检（无签名服务时 icqq 登录极易触发风控）
+  ipcMain.handle('diceQq:signCheck', () => diceWorkbench.qqSignCheck());
   // 指令日志（分区 3）
   ipcMain.handle('diceLog:query', (e, opts) => diceWorkbench.logQuery(opts || {}));
   ipcMain.handle('diceLog:export', () => diceWorkbench.logExport());

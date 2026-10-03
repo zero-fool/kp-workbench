@@ -129,11 +129,15 @@ function createDiceRuntime(deps) {
 
   // QQ 直连（qqdirect）：软件内扫码 / 账密登入，不经 OneBot 中转。
   // 适配器自身在登录过程里通过 onQqEvent 持续上报二维码与状态，这里只做转发与状态回执。
+  // U1-17/U1-19：登录前把界面传入的通道配置（签名服务/协议版本/平台等）合并进 cfg.qqdirect，
+  // 适配器持有同一对象引用，故 start 时能读到最新配置，而不是启动时刻的空快照。
   function qqAdapter() { return adapters.find((a) => a.id === 'qqdirect'); }
   async function qqLogin(opts) {
     const a = qqAdapter();
     if (!a) throw new Error('QQ 直连通道未装配');
-    await a.start(opts || {});
+    const o = opts || {};
+    if (o.cfg && cfg.qqdirect && cfg.qqdirect !== o.cfg) Object.assign(cfg.qqdirect, o.cfg);
+    await a.start(o);
     return a.status();
   }
   async function qqConfirmQr() { const a = qqAdapter(); return a ? a.confirmQr() : false; }
@@ -141,6 +145,7 @@ function createDiceRuntime(deps) {
   async function qqSubmitSms(code) { const a = qqAdapter(); if (!a) throw new Error('QQ 直连通道未装配'); await a.submitSms(code); return a.status(); }
   async function qqLogout() { const a = qqAdapter(); return a ? a.logout() : { state: 'stopped' }; }
   function qqStatus() { const a = qqAdapter(); return a ? a.status() : { state: 'stopped' }; }
+  async function qqSignCheck() { const a = qqAdapter(); return a ? a.signCheck() : { ok: false, reason: 'QQ 直连通道未装配' }; }
 
   // 分区 3 日志查询/导出
   function logQuery({ sessionId = '', limit = 200, keyword = '' } = {}) {
@@ -186,7 +191,7 @@ function createDiceRuntime(deps) {
   return {
     hub, adapters, stateBox,
     netStart, netStop, status, netList, simSend,
-    qqLogin, qqConfirmQr, qqSubmitSlider, qqSubmitSms, qqLogout, qqStatus,
+    qqLogin, qqConfirmQr, qqSubmitSlider, qqSubmitSms, qqLogout, qqStatus, qqSignCheck,
     logQuery, logExport, replyLoad, replySave, replyImport, dispose,
   };
 }

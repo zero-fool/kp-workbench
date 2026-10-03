@@ -154,7 +154,9 @@
       </div>
       <div class="chatdrawer-bar">
         <select id="drawerGenType" title="选择建卡类型"><option value="npc">NPC</option><option value="pc">人物卡</option><option value="region">地区</option><option value="log">日志</option><option value="mob">怪物</option></select>
-        <button id="drawerGenBuild" title="结合上方对话生成该类型资料卡">⚡按对话建卡</button>
+        <select id="drawerGenMode" title="生成意图：生成 1 条新卡 / 从对话提取多条"><option value="single">生成 1 条</option><option value="extract">提取多条</option></select>
+        <label class="cd-genchat hint" title="勾选后把近期对话作为上下文；不勾选则只参考同类已有条目名称，避免上下文污染"><input type="checkbox" id="drawerGenUseChat"> 结合对话</label>
+        <button id="drawerGenBuild" title="按所选类型生成结构化资料卡（预览勾选后写入）">⚡生成资料卡</button>
         <button id="drawerImportLast" title="把最近一条 AI 回复拆解为资料卡">⇥建资料卡</button>
         <button id="drawerPlot" title="从近期对话与日志提炼剧情要点，一键写入长期记忆">☉ 要点</button>
         <button id="drawerSuggest" title="从近期会话/日志提炼 NPC 与剧情点建议，预览确认后写入工作台">☷ 剧情</button>

@@ -5,7 +5,8 @@ const { EventEmitter } = require('node:events');
 const { normalizeQqEvent, makeSessionId, planQqDirectMessages, textFromElements } =
   require('../../src/dice-net/qqdirect/normalize');
 const { loadEngine, createEngineClient } = require('../../src/dice-net/qqdirect/engine');
-const { createQqDirectAdapter, toDataUrl } = require('../../src/dice-net/qqdirect');
+const { createQqDirectAdapter, toDataUrl, probeSignService, readDeviceFingerprint } =
+  require('../../src/dice-net/qqdirect');
 
 /* ---------- 归一：icqq 事件 → MessageIn ---------- */
 
@@ -258,4 +259,108 @@ test('适配器：引擎缺失时给出可读原因并进入 error', async () =>
   await assert.rejects(() => adapter.start(), /未找到 QQ 协议引擎/);
   assert.strictEqual(adapter.status().state, 'error');
   assert.ok(events.some((e) => e.type === 'engine-missing'));
+});
+
+/* ---------- U1-17/U1-19：签名服务自检 / 登录诊断 / 设备指纹 / 退避频控 ---------- */
+
+/* 最小 ClientRequest 替身：onCreate(handlers, req) 里触发回调。 */
+function fakeReq(onCreate) {
+  const handlers = {};
+  const r = {};
+  r.on = (k, f) => { handlers[k] = f; return r; };
+  r.setTimeout = () => r;
+  r.destroy = () => {};
+  onCreate(handlers, r);
+  return r;
+}
+const okRequest = (target, cb) => fakeReq(() => setImmediate(() => cb({ statusCode: 200, resume() {} })));
+const errRequest = (target, cb) => fakeReq((h) => setImmediate(() => h.error(new Error('ECONNREFUSED'))));
+
+test('签名服务自检：空地址/非法地址/注入 request 的成功与失败分支', async () => {
+  const empty = await probeSignService('');
+  assert.strictEqual(empty.ok, false);
+  assert.match(empty.reason, /未填写/);
+
+  const bad = await probeSignService('::::');
+  assert.strictEqual(bad.ok, false);
+  assert.match(bad.reason, /格式/);
+
+  const ok = await probeSignService('127.0.0.1:8080', { request: okRequest });
+  assert.strictEqual(ok.ok, true);
+  assert.strictEqual(ok.status, 200);
+  assert.strictEqual(ok.addr, '127.0.0.1:8080');
+
+  const bad2 = await probeSignService('http://x', { request: errRequest });
+  assert.strictEqual(bad2.ok, false);
+  assert.match(bad2.reason, /ECONNREFUSED/);
+});
+
+test('设备指纹读取：文件不存在时给出将生成路径且标记未固定', () => {
+  const fp = readDeviceFingerprint('/no/such/qq/dir');
+  assert.strictEqual(fp.fixed, false);
+  assert.ok(fp.deviceFile.endsWith('device.json'));
+  assert.strictEqual(fp.fingerprint, '');
+});
+
+test('登录诊断：默认平台/签名未配置/冲突提示/设备指纹路径齐备', () => {
+  const { adapter } = makeAdapter();
+  const st = adapter.status();
+  assert.strictEqual(st.diagnostics.platform, 'android');
+  assert.strictEqual(st.diagnostics.platformDefault, true);
+  assert.strictEqual(st.diagnostics.signConfigured, false);
+  assert.ok(/独立小号/.test(st.conflict));
+  assert.ok(st.diagnostics.deviceFile.endsWith('device.json'));
+  assert.ok(/签名服务/.test(st.diagnostics.routeHint));
+});
+
+test('登录诊断：配置的 platform/ver/signApiAddr 如实反映', () => {
+  const { adapter } = makeAdapter({ platform: 'iPad', ver: '8.9.63', signApiAddr: 'http://127.0.0.1:8080' });
+  const d = adapter.status().diagnostics;
+  assert.strictEqual(d.platform, 'iPad');
+  assert.strictEqual(d.platformDefault, false);
+  assert.strictEqual(d.ver, '8.9.63');
+  assert.strictEqual(d.signConfigured, true);
+  assert.strictEqual(d.signApiAddr, 'http://127.0.0.1:8080');
+});
+
+test('适配器 signCheck：未配置签名服务时立即返回不可用（不发起网络请求）', async () => {
+  const { adapter } = makeAdapter();
+  const r = await adapter.signCheck();
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /未填写/);
+});
+
+test('被踢下线：记录原因码与消息，进入 stopped 并广播 kickoff', async () => {
+  const { adapter, fe, events } = makeAdapter();
+  await adapter.start();
+  fe.clients[0].emit('system.online');
+  fe.clients[0].emit('system.offline.kickoff', { code: 3, message: '其它设备登录' });
+  const st = adapter.status();
+  assert.strictEqual(st.state, 'stopped');
+  assert.match(st.lastError, /原因码 3/);
+  assert.strictEqual(st.diagnostics.lastKick.code, 3);
+  assert.ok(events.some((e) => e.type === 'kickoff' && e.kickCode === 3));
+});
+
+test('固定设备指纹：登录态目录按 uin 隔离（dataDir/<uin>）', async () => {
+  const { adapter, fe } = makeAdapter();
+  await adapter.loginPassword({ uin: 12345, password: 'p' });
+  assert.ok(String(fe.clients[0].config.data_dir).endsWith('12345'));
+  await adapter.stop();
+});
+
+test('频控：连点第二次发起登录被拦截并给出可读原因', async () => {
+  const { adapter } = makeAdapter();
+  await adapter.loginPassword({ uin: 12345, password: 'p' });
+  await assert.rejects(() => adapter.loginPassword({ uin: 12345, password: 'p' }), /频繁/);
+  await adapter.stop();
+});
+
+test('退避：登录失败后冷却期内再次登录被拦截', async () => {
+  const { adapter, fe } = makeAdapter();
+  await adapter.start();
+  fe.clients[0].emit('system.login.error', { code: 45, message: '密码错误' });
+  assert.ok(adapter.status().cooldownLeft > 0);
+  await assert.rejects(() => adapter.loginQr(12345), /过于频繁/);
+  await adapter.stop();
 });

@@ -192,7 +192,8 @@ function systemForParse(fields, existing) {
     + '\n现有同名条目（已存在的不要重复新增，尽量合并到 update 建议）：\n' + JSON.stringify(exist) + '\n'
     + '只输出一个 JSON 对象，结构为：\n'
     + '{"entities":{"pcs":[{字段...}],"npcs":[...],"regions":[...],"logs":[...],"mobs":[...],"rules":[...],"lore":[...]},"updates":[]}\n'
-    + '要求：从剧本里识别角色(PC/NPC)、地点/场景(regions)、事件/线索(logs)、怪物、规则(rules)、设定与背景(lore)等；每条独立对象、字段用实际含义填空；没有的类别给空数组[]；不要输出任何解释文字。';
+    + '要求：从剧本里识别角色(PC/NPC)、地点/场景(regions)、事件/线索(logs)、怪物、规则(rules)、设定与背景(lore)等；每条独立对象、字段用实际含义填空；没有的类别给空数组[]；不要输出任何解释文字。\n'
+    + '【人物名约束】人物类(pcs/npcs)的 name 必须是文本中真实出现的人物姓名；严禁把作者/译者/校对/插图/编辑/主持人/KP/GM/玩家/骰娘/目录/序章/附录/规则/模组等元信息或类型词当作人物。';
 }
 
 /* ==================== 卡片模板库 ====================
@@ -366,6 +367,7 @@ const DEFAULT_PROMPTS = {
     + '【输出格式】只输出一个合法 JSON，不要输出任何解释文字：\n'
     + '{"entities":{"pcs":[],"npcs":[],"regions":[],"logs":[],"mobs":[],"rules":[],"lore":[]},"updates":[]}\n'
     + '【填充要求】每条独立对象用字段实际含义填空；无法归入 7 类的零散信息放进 updates 供人工处理；没有该类内容就给空数组 []。\n'
+    + '【人物名约束】pcs/npcs 的 name/title 必须是文本中真实出现的人物姓名；严禁把「作者/编者/译者/校对/插图/编辑/排版/主持人/守秘人/KP/GM/玩家/骰娘/目录/序章/前言/后记/附录/规则/模组/剧本」等元信息或类型词当作人物，书名/标题/条目名也不得当作人物名；无法确定是人名的，放进 updates 供人工确认。\n'
     + '{mode_note}\n'
     + '【导入文本】\n{fragment}',
   digest: '你是一个 TRPG 资料整理助手。请把下面这段导入资料整理成结构化中文提纲。\n'
@@ -637,9 +639,11 @@ async function apiCall(cfg, system, user) {
 async function rawJsonReply(cfg, system, user, maxTokens) {
   const high = (typeof maxTokens === 'number' && maxTokens > 0) ? maxTokens : (cfg.maxTokens || 6000);
   const limit1 = Math.max(high, 2000);       // 首选上限：尽量给足，避免大 JSON 被截断
+  // U1-14：结构化生成（JSON）默认更低随机性，降低「跑题/编造」概率；用户显式配置的 temperature 仍优先。
+  const jsonTemp = typeof cfg.temperature === 'number' ? cfg.temperature : 0.3;
   const mk = (limit) => ({
     model: cfg.model,
-    temperature: typeof cfg.temperature === 'number' ? cfg.temperature : 0.5,
+    temperature: jsonTemp,
     max_tokens: limit,
     messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
   });
@@ -1062,87 +1066,197 @@ function extractJson(txt) {
   return null;
 }
 
+/* ==================== U1-18 实体名称过滤 ====================
+ * AI 拆剧本时会把「作者 / 译者 / 校对 / 主持人 / KP / NPC / 目录 / 序章」等元信息或
+ * 纯类型词误当成人物落卡。这里在落卡前对 pcs / npcs 的 name 做黑名单 + 正则过滤，
+ * 命中者移入 updates 供人工确认。内置词表之外，用户可用 settings.nameFilter = { words:[], allow:[] }
+ * 追加自定义停用词 / 放行白名单。 */
+const NAME_STOPWORDS = new Set([
+  '作者', '编者', '编著', '译者', '翻译', '校对', '插画', '插图', '绘者', '绘图', '编辑', '责编', '排版', '美工',
+  '设计', '出品', '版权', '策划', '监制', '顾问', '审校', '润色', '校对者', '目录', '序章', '序言', '序幕', '楔子',
+  '前言', '后记', '附录', '索引', '摘要', '简介', '导读', '致谢', '参考文献', '注释', '说明', '概述', '梗概', '背景介绍',
+  '主持人', '守秘人', '玩家', '骰娘', '机器人', '管理', '群主', '管理员', '规则书', '规则', '房规', '模组', '剧本',
+  '团本', '手册', '指南', '世界观', '设定集', '资料集', '人物', '角色', '怪物', '敌人', '地区', '地点', '事件', '线索',
+  '道具', '物品', '未命名', '无名', 'pc', 'npc', 'pl', 'kp', 'gm', 'dm', 'trpg', 'coc', 'dnd', 'san', 'hp', 'mp'
+]);
+const NAME_META_RE = /(作者|编著|编者|译者|翻译|校对|插画|插图|绘者|绘图|责编|编辑|排版|出品|版权|策划|监制|审校|润色|主持人|守秘人|骰娘|机器人|目录|序[章言幕]|楔子|前言|后记|附录|索引|参考文献|致谢)/;
+/* 标题/正文类标点（人名一般不含这些符号）；「·」「-」「.」等常见于人名的连接符不在此列 */
+const NAME_PUNCT_RE = /[\n\r\u3000，。、；：！？（）\[\]【】{}<>《》「」『』|\/\\]/;
+
+/* 判定一个名称是否「不像人名」。extra = settings.nameFilter（可选） */
+function looksLikeNonPersonName(name, extra) {
+  const s = String(name == null ? '' : name).trim();
+  if (!s) return true;
+  if (s.length > 15) return true;                                   // 一句话 / 描述，不是人名
+  if (NAME_PUNCT_RE.test(s)) return true;                           // 含标题类标点
+  const low = s.toLowerCase();
+  const allow = (extra && extra.allow) || [];
+  if (allow.some(a => String(a || '').trim().toLowerCase() === low)) return false; // 用户放行优先
+  if (NAME_STOPWORDS.has(low)) return true;
+  if (NAME_META_RE.test(s)) return true;
+  // 空格/间隔号分隔的复合名：任一独立词命中停用词即判为非人名（如「NPC 守卫队长」）
+  const toks = low.split(/[\s·]+/).filter(Boolean);
+  if (toks.length > 1 && toks.some(t => NAME_STOPWORDS.has(t))) return true;
+  const words = (extra && extra.words) || [];
+  if (words.some(w => {
+    const wl = String(w || '').trim().toLowerCase();
+    return wl && (low === wl || low.indexOf(wl) >= 0);
+  })) return true;
+  return false;
+}
+
+/* ==================== U1-16 结构感知切分 ====================
+ * 固定字符数硬切容易把一段剧情/一个角色卡拦腰截断。这里优先在章节/标题/编号行边界处切开，
+ * 找不到合适边界时再回退到固定长度 + 重叠，兼顾「不漏信息」与「不打断结构」。 */
+const SEG_HEAD_RE = /^(?:第\s*[0-9一二三四五六七八九十百零]+\s*[章节幕部篇回]|Chapter\s+\d+|CHAPTER\s+\d+|[0-9]{1,3}\s*[、.．)）]|[一二三四五六七八九十]+\s*[、.．)）]|#{1,6}\s|序章|序幕|楔子|终章|尾声|后记|附录)/;
+function splitByStructure(text, target, overlap) {
+  const t = String(text || '');
+  if (t.length <= target) return [t];
+  const out = [];
+  let i = 0;
+  const floorStep = Math.floor(target * 0.5);
+  while (i < t.length) {
+    let j = Math.min(i + target, t.length);
+    if (j < t.length) {
+      const floor = i + floorStep;
+      let cut = -1;
+      for (let k = j; k > floor; k--) {           // 从右往左找最近的标题行起点
+        if (t[k] !== '\n') continue;
+        const line = t.slice(k + 1, k + 48).replace(/^\s+/, '');
+        if (SEG_HEAD_RE.test(line)) { cut = k; break; }
+      }
+      if (cut > i) j = cut;
+    }
+    out.push(t.slice(i, j));
+    if (j >= t.length) break;
+    i = Math.max(i + 1, j - overlap);
+  }
+  return out.filter(s => s && s.trim()).slice(0, 60);
+}
+
 async function parseScript(text, profile, fields, cfg, existing, opts) {
   opts = opts || {};
   const prompts = effectivePrompts(opts.settings);
   const strict = opts.strict !== false; // 默认严格：未经使用者确认不允许增编
   const sys = hubSystem('registration', opts.settings, '你是一个 TRPG 跑团剧本拆分登记助手，只输出 JSON，不要输出任何解释文字。');
   const EXISTING = existing || {};
-  // 分片：超过阈值时按行切分为多个可单独解析的片段，逐段调用后合并，避免长文本尾部信息丢失
-  const SEG = 20000, OVERLAP = 400;
   const full = String(text || '');
-  function segments() {
-    if (full.length <= SEG) return [full];
-    const out = [];
-    let i = 0;
-    while (i < full.length) {
-      let j = Math.min(i + SEG, full.length);
-      out.push(full.slice(i, j));
-      if (j >= full.length) break;
-      i = j - OVERLAP;
-    }
-    return out.filter(s => s && s.trim()).slice(0, 30);
-  }
+  // U1-16：结构感知切分 + 受控并行分段（并发 3~5，取代逐段串行）
+  const SEG = 18000, OVERLAP = 600;
+  const CONC = Math.max(1, Math.min(5, Number(opts.concurrency) || 3));
+  const onProg = typeof opts.onProgress === 'function' ? opts.onProgress : null; // U1-15：进度回调
+  const nameFilter = (opts.settings && opts.settings.nameFilter) || null;        // U1-18：自定义过滤词
+  const docTitle = String(opts.title || '').trim();
   /* 人物卡(PC)是玩家扮演的角色，分析团本/剧本时应排除：不生成 pcs 类别、不从现有 PC 名单去重 */
   const kinds = opts.excludePC === true ? _K.filter(k => k !== 'pcs') : _K.slice();
   const excludeNote = opts.excludePC === true
     ? '\n【特别注意】本次是解析团本/剧本：人物卡(PC)为玩家扮演的角色，不属于剧情实体。请勿生成/拆分出 pcs 类别，也不要引用或新增任何玩家人物卡，只识别 NPC 及其他类别。'
     : '';
-  const segs = segments();
-  const merged = { entities: {} };
+  const FILTER_KINDS = opts.excludePC === true ? { npcs: 1 } : { pcs: 1, npcs: 1 };
+  const segs = splitByStructure(full, SEG, OVERLAP);
+  const segParsed = new Array(segs.length);
+  const errors = [];
+  const rejected = [];
+  const t0 = Date.now();
+  let done = 0;
+  let cancelled = false;
+  function emitProg() {
+    if (!onProg) return;
+    const elapsed = Date.now() - t0;
+    const total = segs.length || 1;
+    const eta = done > 0 ? Math.round(elapsed / done * (total - done)) : null; // U1-15：预计剩余
+    try {
+      onProg({
+        phase: 'parse', done, total,
+        percent: Math.min(100, Math.round(done * 100 / total)),
+        text: '解析模组：已完成 ' + done + ' / ' + total + ' 段…',
+        elapsedMs: elapsed, etaMs: eta
+      });
+    } catch (_) {}
+  }
+  emitProg();
+  let cursor = 0;
+  async function worker() {
+    while (!cancelled) {
+      const si = cursor++;
+      if (si >= segs.length) return;
+      const seg = segs[si];
+      const existingForSeg = si === 0 ? EXISTING : {}; // 后续片段不再重复注入已有名单，合并时统一去重
+      const makeUser = () => renderPrompt(prompts.registration, {
+        schema: schemaText(effectiveFields(fields) || DEFAULT_FIELDS),
+        existing: JSON.stringify(existingMap(existingForSeg || {})),
+        fragment: seg
+      }, strict) + excludeNote;
+      let lastErr = null;
+      let parsed = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const remind = (attempt > 1) ? '\n【要求纠正】你上一次的回复没有返回可解析的 JSON 对象。请只输出一个 JSON 对象（字段含 entities），不要输出任何解释文字、Markdown 代码块或包围标记；若输出过长会被截断，请务必紧凑地给出完整字段。' : '';
+          // 剧本拆解输出量大，用更高 token 上限，避免完整 JSON 被截断成残缺对象
+          const c = stripWrap(await rawJsonReply(cfg, sys, makeUser() + remind, 10000));
+          const j = extractJsonObject(c);
+          if (!j) throw new Error('未返回 JSON 对象');
+          const ent = (j && j.entities) || j || {};
+          for (const k of kinds) if (!Array.isArray(ent[k])) ent[k] = [];
+          const empty = kinds.every(k => !Array.isArray(ent[k]) || !ent[k].length);
+          if (empty) throw new Error('解析结果为空（未识别出任何实体）');
+          const fe = effectiveFields(fields);
+          parsed = { entities: {}, updates: Array.isArray(j && j.updates) ? j.updates : [] };
+          for (const k of kinds) {
+            const list = Array.isArray(ent[k]) ? ent[k] : [];
+            parsed.entities[k] = list.map(item => normalize(item, fe[k], k)).slice(0, 40);
+          }
+          break;
+        } catch (e) {
+          lastErr = e;
+          // U1-15：用户取消 → 停止调度剩余段落并保留已完成段
+          if (String((e && e.message) || e).indexOf('AI_TASK_CANCELLED') === 0) { cancelled = true; return; }
+          if (attempt < 3) await new Promise(r => setTimeout(r, 600 * attempt));
+        }
+      }
+      if (!parsed) errors.push('[段落 ' + (si + 1) + '] ' + ((lastErr && lastErr.message) || '未知错误'));
+      else segParsed[si] = parsed;
+      done++;
+      emitProg();
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONC, segs.length) }, worker));
+  // 按段序合并（并行完成后统一按顺序归并，结果顺序稳定），跨段落按名称去重
+  const merged = { entities: {}, updates: [] };
   kinds.forEach(k => merged.entities[k] = []);
   const seen = {}; kinds.forEach(k => seen[k] = new Set());
-  const errors = [];
   for (let si = 0; si < segs.length; si++) {
-    const seg = segs[si];
-    const existingForSeg = si === 0 ? EXISTING : {}; // 后续片段不再重复注入已有名单，合并时统一去重
-    const makeUser = () => renderPrompt(prompts.registration, {
-      schema: schemaText(effectiveFields(fields) || DEFAULT_FIELDS),
-      existing: JSON.stringify(existingMap(existingForSeg || {})),
-      fragment: seg
-    }, strict) + excludeNote;
-    let lastErr = null;
-    let parsed = null;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        const remind = (attempt > 1) ? '\n【要求纠正】你上一次的回复没有返回可解析的 JSON 对象。请只输出一个 JSON 对象（字段含 entities），不要输出任何解释文字、Markdown 代码块或包围标记；若输出过长会被截断，请务必紧凑地给出完整字段。' : '';
-        // 剧本拆解输出量大，用更高 token 上限，避免完整 JSON 被截断成残缺对象
-        const c = stripWrap(await rawJsonReply(cfg, sys, makeUser() + remind, 10000));
-        const j = extractJsonObject(c);
-        if (!j) throw new Error('未返回 JSON 对象');
-        const ent = (j && j.entities) || j || {};
-        for (const k of kinds) if (!Array.isArray(ent[k])) ent[k] = [];
-        const empty = kinds.every(k => !Array.isArray(ent[k]) || !ent[k].length);
-        if (empty) throw new Error('解析结果为空（未识别出任何实体）');
-        const fe = effectiveFields(fields);
-        parsed = { entities: {}, updates: Array.isArray(j && j.updates) ? j.updates : [] };
-        for (const k of kinds) {
-          const list = Array.isArray(ent[k]) ? ent[k] : [];
-          parsed.entities[k] = list.map(item => normalize(item, fe[k], k)).slice(0, 40);
-        }
-        break;
-      } catch (e) {
-        lastErr = e;
-        if (attempt < 3) await new Promise(r => setTimeout(r, 600 * attempt));
-      }
-    }
-    if (!parsed) {
-      errors.push('[段落 ' + (si + 1) + '] ' + ((lastErr && lastErr.message) || '未知错误'));
-      continue;
-    }
-    // 合并，跨段落按名称去重
+    const parsed = segParsed[si];
+    if (!parsed) continue;
+    if (Array.isArray(parsed.updates)) for (const u of parsed.updates) merged.updates.push(u);
     for (const k of kinds) {
       for (const item of parsed.entities[k] || []) {
-        const nm = String(item.name || item.title || '').trim().toLowerCase();
+        const rawName = String(item.name || item.title || '').trim();
+        const nm = rawName.toLowerCase();
         if (nm && seen[k].has(nm)) continue;
+        // U1-18：人物类实体名称过滤（非人名/元信息词、与文档标题同名）→ 移入 updates 待人工确认
+        if (FILTER_KINDS[k] && (looksLikeNonPersonName(rawName, nameFilter) || (docTitle && nm === docTitle.toLowerCase()))) {
+          rejected.push({ kind: k, name: rawName });
+          continue;
+        }
         if (nm) seen[k].add(nm);
         merged.entities[k].push(item);
       }
     }
   }
+  if (rejected.length) {
+    merged.updates.push({
+      type: '名称过滤',
+      note: '以下名称疑似非人名/元信息（如 作者 / KP / NPC / 目录等），已移出人物类待人工确认：'
+        + rejected.map(r => r.name + '（' + (KIND_LABEL[r.kind] || r.kind) + '）').join('、')
+    });
+  }
   if (segs.length && !kinds.some(k => merged.entities[k].length)) {
+    if (cancelled) throw new Error('AI_TASK_CANCELLED 解析已取消');
     throw new Error('AI 拆分登记在重试后仍失败：' + (errors.join('；') || '所有段落均未识别出实体'));
   }
+  if (cancelled) { merged.partial = true; merged.cancelled = true; } // 已取消但有已完成段：返回部分结果
+  emitProg();
   return merged;
 }
 
@@ -1240,8 +1354,10 @@ async function generateEntity(kind, tip, profile, fields, cfg, settings, ctx) {
 /* 按模板批量生成某类结构化实体卡（多实体提取）。
  * 让 AI 依据给定模板 schema 从上下文/对话中提取「全部」合适条目，每条一张卡，返回数组；
  * 若上下文无明确实体则回退创作 1 条。结果会挂上所用模板 id(tpl)，供界面按模板渲染。
- * tplId：可选；传则使用该模板在 kind 类别的字段 schema，否则用全局字段。 */
-async function generateEntities(kind, tip, profile, fields, cfg, settings, ctx, tplId) {
+ * tplId：可选；传则使用该模板在 kind 类别的字段 schema，否则用全局字段。
+ * mode：可选；'single'=生成恰好 1 条新卡；'extract'（默认）=从上下文提取多条。 */
+async function generateEntities(kind, tip, profile, fields, cfg, settings, ctx, tplId, mode) {
+  const single = mode === 'single';
   const templates = effectiveTemplates(settings);
   const fe = effectiveFields(fields) || DEFAULT_FIELDS;
   const defaultSchema = (fe[kind] || []).length ? fe[kind] : (DEFAULT_FIELDS[kind] || []);
@@ -1256,14 +1372,24 @@ async function generateEntities(kind, tip, profile, fields, cfg, settings, ctx, 
     if (f.t === 'tags') return '"' + f.k + '"：' + f.l + '（字符串数组）';
     return '"' + f.k + '"：' + f.l;
   }).join('\n');
-  const sys = '你是 TRPG《' + world + '》的内容创作助手，正在使用跑团工作台。用户请你生成一张或多张' + label + tplLine + '。你只能输出一个 JSON 对象（不要 Markdown 代码块、不要任何解释文字），结构为 {"entities":[{字段...}, ...]}；字段键名必须严格使用给定的字段名，缺失内容可省略该键，但名称字段必须给出。';
-  let user = '请依据当前工作台/对话上下文，识别其中所有适合作为「' + label + '」的独立条目，每一条生成一张资料卡，统一放进 entities 数组。\n要求：\n'
-    + '- 上下文/对话里明确提到的多个实体，请全部提取、一不落，不要合并、不要漏掉；\n'
-    + '- 若上下文中没有明确的新实体，或上下文为空，则按模板创作恰好 1 条合理、有辨识度的' + label + '；\n'
-    + '- 每条卡填写的字段须符合下方 schema。\n可用的字段（键名·含义）：\n' + fieldInstr
-    + '\n请用中文填写/创作，内容具体、贴合 TRPG 设定，多张卡片之间要有区分度。';
+  const sys = single
+    ? '你是 TRPG《' + world + '》的内容创作助手，正在使用跑团工作台。用户请你创作恰好 1 条' + label + tplLine + '。你只能输出一个 JSON 对象（不要 Markdown 代码块、不要任何解释文字），结构为 {"entities":[{字段...}]}；entities 数组里只能有 1 个对象，字段键名必须严格使用给定的字段名，缺失内容可省略该键，但名称字段必须给出。'
+    : '你是 TRPG《' + world + '》的内容创作助手，正在使用跑团工作台。用户请你生成一张或多张' + label + tplLine + '。你只能输出一个 JSON 对象（不要 Markdown 代码块、不要任何解释文字），结构为 {"entities":[{字段...}, ...]}；字段键名必须严格使用给定的字段名，缺失内容可省略该键，但名称字段必须给出。';
+  let user = single
+    ? '请为当前工作台创作恰好 1 条全新的「' + label + '」' + (tip ? '，主题/要求：' + tip : '') + '，放进 entities 数组（只含 1 个对象）。\n要求：\n'
+      + '- 这是「生成 1 条」模式：只产出 1 条全新条目，不要罗列、不要提取多条；\n'
+      + '- 内容要具体、贴合 TRPG 设定、有辨识度与可用性；名称不得与下方已有条目重复；\n'
+      + '- 填写字段须符合下方 schema，不要往字段里塞入与字段含义无关的内容。\n可用的字段（键名·含义）：\n' + fieldInstr
+      + '\n请用中文填写/创作。'
+    : '请依据当前工作台/对话上下文，识别其中所有适合作为「' + label + '」的独立条目，每一条生成一张资料卡，统一放进 entities 数组。\n要求：\n'
+      + '- 上下文/对话里明确提到的多个实体，请全部提取、一不落，不要合并、不要漏掉；\n'
+      + '- 若上下文中没有明确的新实体，或上下文为空，则按模板创作恰好 1 条合理、有辨识度的' + label + '；\n'
+      + '- 每条卡填写的字段须符合下方 schema。\n可用的字段（键名·含义）：\n' + fieldInstr
+      + '\n请用中文填写/创作，内容具体、贴合 TRPG 设定，多张卡片之间要有区分度。';
   const convText = String(ctx || '').trim().slice(0, 8000);
-  if (convText) user += '\n\n以下是我们之前对话/待处理的内容，请优先从中提取条目来填卡片，与上下文保持一致：\n' + convText;
+  if (convText) user += (single
+    ? '\n\n以下是可参考的上下文（仅供风格与设定对齐；请只据此创作 1 条新条目，不要从上下文直接复制出多条）：\n'
+    : '\n\n以下是我们之前对话/待处理的内容，请优先从中提取条目来填卡片，与上下文保持一致：\n') + convText;
   let lastErr = null;
   let lastIssues = [];
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -1287,7 +1413,7 @@ async function generateEntities(kind, tip, profile, fields, cfg, settings, ctx, 
         return obj;
       }).filter(x => x.name && x.name !== '未命名');
       if (!arr.length) throw new Error('提取到的实体缺少名称');
-      return arr.slice(0, 20);
+      return single ? arr.slice(0, 1) : arr.slice(0, 20);
     } catch (e) {
       lastErr = e;
       if (attempt < 3) await new Promise(r => setTimeout(r, 600 * attempt));
@@ -1661,4 +1787,4 @@ async function breakdownScenario(cfg, text, settings) {
   return result;
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, usageLog, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem };
+module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, usageLog, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure };

@@ -322,6 +322,7 @@ contextBridge.exposeInMainWorld('api', {
       sms: (code) => ipcRenderer.invoke('diceQq:sms', code),
       logout: () => ipcRenderer.invoke('diceQq:logout'),
       status: () => ipcRenderer.invoke('diceQq:status'),
+      signCheck: () => ipcRenderer.invoke('diceQq:signCheck'), // U1-19：签名服务连通性自检
       onQqEvent: (cb) => { ipcRenderer.on('dice-qq:event', (_e, v) => cb(v)); }
     },
     state: {

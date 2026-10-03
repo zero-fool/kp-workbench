@@ -23,7 +23,11 @@
       '基于 icqq 协议库内嵌到主进程：包含登录状态机、二维码展示、滑动验证、短信验证、掉线自动重连等完整流程；登录态存放于用户数据目录，支持免扫码续登。',
       '连接中心改版：QQ 直连卡片置顶并作为默认入口，动态展示二维码 / 滑动验证 / 短信验证 / 在线状态与错误原因；OneBot 11 与 QQ 官方机器人收拢进「高级（可选）」折叠区，简化普通用户的连接流程。',
       '安全细节：密码框不参与本地持久化、登录成功后自动清空；密码仅用于当次登录请求，不落盘。',
-      '验证：新增 QQ 直连专项单元测试（事件归一化 / 消息规划 / 引擎装载 / 适配器状态机），回归测试 332 项全绿，npm run verify 通过。'
+      'QQ 登入风控治理：接入签名服务（SL / QSign 等）并支持连通性自检；新增「登录诊断」展示协议版本 / 平台 / 设备指纹 / 被踢原因码与最近事件；登录态按账号固定复用设备指纹；登录失败指数退避、连点频控拦截；并明确提示「与电脑端官方 QQ 互踢，建议用独立小号或改走 OneBot 中转」。',
+      'AI 生成质量整改（「结合对话」场景）：上下文默认只注入同类条目名称清单（不再灌整段对话与大量摘要），新增「生成 1 条 / 提取多条」模式选择，结构化生成 temperature 降至 0.3，明显减少跑题与胡乱编造。',
+      '模组解析进度与提速：解析过程显示进度条、已用时间与预计剩余时间并支持取消（已完成段落保留为部分结果）；分段改为「按章节 / 标题边界」的结构感知切分，并引入并发解析，大文件解析显著加快。',
+      '解析实体名称过滤：识别并剔除「作者 / KP / NPC / 目录」等明显非人名条目，含标点 / 复合词 / 超长描述的多重校验，可疑项转入待人工确认，不再污染人物卡。',
+      '验证：新增 QQ 直连专项单元测试（事件归一化 / 消息规划 / 引擎装载 / 适配器状态机 / 风控治理），单元测试 412 项、回归测试 341 项全绿，npm run verify 通过。'
     ] },
     { version: '3.2.1', date: '2026-10-01', type: '测试版·界面重构', items: [
       '界面整体改为「现代卷宗」视觉：暖纸底、衬线大标题、火漆红强调色、14px 统一圆角与发丝分隔线，顶栏、侧栏、卡片、档案柜成套替换，信息层级更清楚。',
@@ -705,23 +709,48 @@
     try { if (window.api && window.api.aiAbortAll) window.api.aiAbortAll(); } catch (_) {}
     toast(had ? '已清空排队并中止在飞任务' : '已清空排队任务', 'ok');
   }
-  /* 大文件 AI 分析整理进度：主进程按 digest/merge 阶段广播，这里渲染一个浮动进度条 */
+  /* 大文件 AI 分析整理 / 模组解析进度：主进程按 parse/digest/merge 阶段广播，
+   * 这里渲染浮动进度条，显示阶段、x/y、百分比、已用时间与预计剩余（U1-15），并支持中途取消。 */
   let _importProgEl = null;
+  function fmtDur(ms) {
+    const s = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+    if (s < 60) return s + ' 秒';
+    return Math.floor(s / 60) + ' 分 ' + (s % 60) + ' 秒';
+  }
   function importProgressSet(p) {
     if (!p) return;
+    const phaseText = { parse: '解析模组', digest: '抽取段落提纲', merge: '合并提纲' }[p.phase];
     const create = () => {
       const d = document.createElement('div');
-      d.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);width:min(440px,86vw);background:var(--panel-bg,#fff);border:1px solid var(--line,#dfe3ea);border-radius:10px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.22);z-index:9999;font-size:13px;color:var(--ink,#222)';
-      d.innerHTML = '<div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:6px"><span id="importProgText"></span><span id="importProgPct"></span></div><div style="height:6px;background:var(--line,#dfe3ea);border-radius:3px;overflow:hidden"><div id="importProgBar" style="height:100%;width:0;background:#4f7cff;transition:width .25s"></div></div>';
+      d.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);width:min(460px,88vw);background:var(--panel-bg,#fff);border:1px solid var(--line,#dfe3ea);border-radius:10px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.22);z-index:9999;font-size:13px;color:var(--ink,#222)';
+      d.innerHTML = '<div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:6px"><span id="importProgText"></span><span id="importProgPct"></span></div><div style="height:6px;background:var(--line,#dfe3ea);border-radius:3px;overflow:hidden"><div id="importProgBar" style="height:100%;width:0;background:#4f7cff;transition:width .25s"></div></div><div style="margin-top:6px;display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:12px;opacity:.85"><span id="importProgTime"></span><button id="importProgCancel" title="中止本次解析（已完成的段落会保留为部分结果）" style="cursor:pointer">取消</button></div>';
       return d;
     };
     if (!_importProgEl || !document.body.contains(_importProgEl)) { _importProgEl = create(); document.body.appendChild(_importProgEl); }
     const tx = _importProgEl.querySelector('#importProgText');
     const pct = _importProgEl.querySelector('#importProgPct');
     const bar = _importProgEl.querySelector('#importProgBar');
-    if (tx) tx.textContent = p.text || (p.phase === 'merge' ? '合并提纲…' : '抽取段落提纲…');
+    const tm = _importProgEl.querySelector('#importProgTime');
+    const cancel = _importProgEl.querySelector('#importProgCancel');
+    if (tx) tx.textContent = (phaseText ? phaseText + '：' : '') + (p.text || '');
     if (pct) pct.textContent = (p.percent != null ? p.percent + '%' : ((typeof p.done === 'number' && p.total) ? p.done + ' / ' + p.total : ''));
     if (bar) bar.style.width = (typeof p.percent === 'number' ? p.percent : 0) + '%';
+    if (tm) {
+      const parts = [];
+      if (typeof p.elapsedMs === 'number') parts.push('已用 ' + fmtDur(p.elapsedMs));
+      if (typeof p.etaMs === 'number' && p.etaMs >= 0) parts.push('预计剩余 ' + fmtDur(p.etaMs));
+      else if (p.phase === 'parse' && p.done === 0) parts.push('正在解析首段…');
+      tm.textContent = parts.join(' · ');
+    }
+    if (cancel) {
+      const finished = (p.phase === 'done' || p.phase === 'error');
+      cancel.style.display = finished ? 'none' : '';
+      cancel.onclick = finished ? null : () => {
+        cancel.disabled = true; cancel.textContent = '取消中…';
+        try { if (window.api && window.api.aiCancel) window.api.aiCancel('cards'); } catch (_) {}
+        toast('已发送取消指令，已完成段落会保留为部分结果', '');
+      };
+    }
     if (p.phase === 'done' || p.phase === 'error') {
       setTimeout(() => { if (_importProgEl && document.body.contains(_importProgEl)) { _importProgEl.remove(); _importProgEl = null; } }, p.phase === 'error' ? 2500 : 900);
     }
@@ -2567,19 +2596,6 @@
     if (!CH || !CH.length) return '';
     return CH.slice(-(n || 12)).map((m) => (m.role === 'user' ? '【使用者】' : '【AI】') + '：' + String(m.content || '')).join('\n');
   }
-  function aiGenForType() {
-    const t = S.aiGenType || 'npc';
-    const ctx = chatContextText(12);
-    const head = ctx ? '请结合我们上面这段对话/待处理内容来创作，从中提取相关信息，不要凭空随机编造：\n\n' + ctx.slice(-6000) + '\n\n—— 基于以上内容，' : '请为当前工作台';
-    const p = {
-      npc: head + '生成一份新的 NPC：名称、身份/职业、阵营/组织、所在地区、性格、外貌、秘密与动机。请用自然语言列要点。',
-      pc: head + '生成一份新的人物卡（PC）：姓名、玩家、称号、等级、属性速写、技能、伤势与状态。请用自然语言列要点。',
-      region: head + '生成一个新的地区：名称、类型、区域规模、危险度、环境、距离圈、掩护、描述、补给与关键地点。请用自然语言列要点。',
-      log: head + '生成一条新的跑团日志：标题、开团日期、剧情摘要、当前钩子、出场角色与状态。请用自然语言列要点。',
-      mob: head + '生成一个新的怪物：名称、类别、层级、等级、生命值、护甲、伤害、特性与弱点。请用自然语言列要点。'
-    };
-    aiSend(p[t]);
-  }
   /* 读取本地文字文件并「加入待发送附件」（不再立即发送）：
    * 上传后先不把全文塞给 AI，而是显示在输入框上方的附件区，由用户补写额外要求后一并发送。 */
   async function aiUpload() {
@@ -3351,52 +3367,62 @@
     }
   }
   /* 当前资料视图类型感知生成（按所选模板结构化填字段，可一次提取多条，勾选确认后写入） */
-  /* 按当前视图「按需注入上下文」：只把与该类卡片相关的既有条目（名称+摘要）注入，
-   * 帮助 AI 保持一致性、避免重复建卡，而不是把全库资料一股脑塞进提示词（省 token 也更聚焦）。 */
+  /* 按当前视图「按需注入上下文」：只注入同类已有条目的「名称清单」用于去重与一致性，
+   * 不再注入正文摘要——摘要会把既有条目内容串进新卡，是「生成乱七八糟」的主因。 */
   function viewEntityContext(kind) {
     const arr = (S.data.entities && S.data.entities[kind]) || [];
     if (!arr.length) return '';
-    const lines = arr.slice(0, 80).map(it => {
-      const nm = String(it.name != null ? it.name : (it.title || '未命名')).trim();
-      const sum = [it.summary, it.desc, it.content, it.subtitle, it.note, it.occupation].filter(Boolean).map(x => String(x)).join(' · ').slice(0, 120);
-      return '· ' + nm + (sum ? ' — ' + sum : '');
-    });
-    return '以下为工作台「' + (DATA_TYPE[kind] || kind) + '」中已存在的条目（请保持一致、不要与之重名或冲突，必要时可引用或扩展）：\n' + lines.join('\n');
+    const names = arr.slice(0, 120)
+      .map(it => String(it.name != null ? it.name : (it.title || '')).trim())
+      .filter(Boolean);
+    if (!names.length) return '';
+    return '工作台「' + (DATA_TYPE[kind] || kind) + '」已有条目名称（请勿重名、勿重复生成、保持一致）：' + names.join('、');
   }
-  /* 组装给「AI 生成/建卡」类接口的上下文：仅注入当前视图相关条目 + 相关模板 + 近期对话尾部 */
-  function viewGenContext(kind) {
+  /* 组装给「AI 生成/建卡」类接口的上下文：默认只注入同类已有条目名称；
+   * 仅当 useChat=true 时才附加近期对话尾部（对话注入默认关闭，避免污染生成结果）。 */
+  function viewGenContext(kind, useChat) {
     const parts = [];
     const ve = viewEntityContext(kind);
     if (ve) parts.push(ve);
-    const cc = chatContextText(6);
-    if (cc.trim()) parts.push('近期对话/待处理内容：\n' + cc.slice(-4000));
+    if (useChat) {
+      const cc = chatContextText(6);
+      if (cc.trim()) parts.push('近期对话/待处理内容：\n' + cc.slice(-4000));
+    }
     return parts.join('\n\n');
   }
-  async function aiGenForView(kind) {
+  /* 「AI 生成/建卡」统一入口：结构化生成 → 预览勾选 → 写入。
+   * mode='single' 生成恰好 1 条新卡；mode='extract' 从上下文（需有对话）提取多条。 */
+  async function aiGenCardsFor(kind, opts) {
+    opts = opts || {};
     const tips = {
-      npc: '一位有血有肉的 NPC',
-      pc: '一位调查员/冒险者人物卡（PC）',
-      region: '一片有辨识度的地区',
-      log: '一条跑团日志/事件',
-      mob: '一个怪物/敌人',
-      rules: '一条房规/规则',
-      lore: '一段背景设定'
+      npc: '一位有血有肉的 NPC', pc: '一位调查员/冒险者人物卡（PC）', region: '一片有辨识度的地区',
+      log: '一条跑团日志/事件', mob: '一个怪物/敌人', rules: '一条房规/规则', lore: '一段背景设定'
     };
     const entKey = { npc: 'npcs', pc: 'pcs', region: 'regions', log: 'logs', mob: 'mobs', rules: 'rules', lore: 'lore' }[kind] || kind;
     const tpl = (S.viewTpl && S.viewTpl[kind]) || '';
-    toast('AI 正在生成「' + DATA_TYPE[entKey] + '」…');
+    const mode = opts.mode === 'extract' ? 'extract' : 'single';
+    if (mode === 'extract' && !opts.useChat) { toast('「提取多条」需先勾选「结合对话」作为提取来源，或改用「生成 1 条」', 'err'); return; }
+    toast('AI 正在生成「' + (DATA_TYPE[entKey] || entKey) + '」…');
     try {
-      const r = await window.api.aiGenCards({ kind: entKey, tip: tips[kind] || tips.npc, ctx: viewGenContext(entKey), tpl });
+      const r = await window.api.aiGenCards({ kind: entKey, tip: tips[kind] || tips.npc, ctx: viewGenContext(entKey, !!opts.useChat), tpl, mode });
       if (!r || !r.ok) { toast((r && r.error) || '生成失败，请检查 AI 配置', 'err'); return; }
       const list = r.entities || [];
-      if (!list.length) { toast('AI 未提取到可写卡的条目', 'err'); return; }
+      if (!list.length) { toast('AI 未生成可写卡的条目', 'err'); return; }
       S.scriptPreview = { entities: {} }; S.scriptPreview.entities[entKey] = list;
       S.splitSource = 'AI 生成';
       openScriptPreview(S.scriptPreview, entKey,
-        'AI 已生成 ' + list.length + ' 个「' + DATA_TYPE[entKey] + '」候选' + (tpl ? '（模板：' + tplName(tpl) + '）' : '')
-        + '，请勾选需要的（默认全选）确认后写入；确认后仍可在对应页面编辑详情。');
-      S.splitSource = 'AI 生成';
+        'AI 已生成 ' + list.length + ' 个「' + (DATA_TYPE[entKey] || entKey) + '」候选（'
+        + (mode === 'single' ? '生成 1 条' : '从对话提取多条') + (tpl ? '，模板：' + tplName(tpl) : '')
+        + '），请勾选需要的（默认全选）确认后写入；确认后仍可在对应页面编辑详情。');
     } catch (e) { toast('生成失败：' + aiErrText(e), 'err'); }
+  }
+  function aiGenForView(kind) { return aiGenCardsFor(kind, { mode: 'single', useChat: false }); }
+  /* 侧栏「⚡生成资料卡」：按所选类型结构化生成（默认生成 1 条；可切换「提取多条」并勾选「结合对话」） */
+  function aiGenForType() {
+    const t = S.aiGenType || 'npc';
+    const modeEl = document.getElementById('drawerGenMode');
+    const chatEl = document.getElementById('drawerGenUseChat');
+    return aiGenCardsFor(t, { mode: (modeEl && modeEl.value) || 'single', useChat: !!(chatEl && chatEl.checked) });
   }
 
   /* B3 AI 编写剧本全文：基于全档案上下文生成整篇剧本，并作为一条「背景/规则」(lore) 写入 */
@@ -3458,6 +3484,7 @@
     if (!f.ok) { toast('读取失败：' + (f.error || '未知错误'), 'err'); return; }
     const content = String(f.content || '');
     S.scriptText = content;
+    S.scriptFileName = f.name || '';   // U1-18：解析时用于比对文档标题，剔除与文件名同名的伪人物
     const ta = q('drawerScriptText'); if (ta) { ta.value = content; ta.scrollTop = 0; autosize(ta); }
     const stt = q('drawerScriptState');
     if (stt) stt.textContent = '已导入 ' + f.name + '（' + content.length + ' 字符），点「⇄解析剧本」开始';
@@ -3472,12 +3499,13 @@
     const stt = q('drawerScriptState'); if (stt) stt.textContent = '解析中，请稍候…';
     S.scriptState = '解析中，请稍候…';
     try {
-      const r = await window.api.aiParse(t);
+      const r = await window.api.aiParse(t, { title: (S.scriptFileName || '') });
       S.scriptPreview = r;
       const doneHint = '完成：' + KINDS.map(k => `${DATA_TYPE[k]} ${(r.entities[k] || []).length} 条`).join(' · ');
-      S.scriptState = doneHint;
-      openScriptPreview(r, 'auto', '剧本解析完成：' + doneHint + '\n预览勾选后（默认全选）确认写入工作台；可在此处直接给导入卡套用「卡片模板」。');
-      const curState = q('drawerScriptState'); if (curState) curState.textContent = doneHint;
+      const partialHint = r && r.cancelled ? '（已取消：以下为已解析完成的部分结果）' : '';
+      S.scriptState = partialHint + doneHint;
+      openScriptPreview(r, 'auto', (r && r.cancelled ? '解析已取消，以下为已完成的部分结果' : '剧本解析完成：' + doneHint) + '\n预览勾选后（默认全选）确认写入工作台；可在此处直接给导入卡套用「卡片模板」。');
+      const curState = q('drawerScriptState'); if (curState) curState.textContent = partialHint + doneHint;
     } catch (e) {
       S.scriptState = '';
       const curState = q('drawerScriptState'); if (curState) curState.textContent = '';
@@ -8500,7 +8528,7 @@
   function paintQqDirect() {
     const panel = document.getElementById('qqdPanel'); if (!panel) return;
     const CC = window.DiceUIConnCenter || {};
-    const st = _dw.qqStatus || { state: 'stopped' };
+    const st = Object.assign({}, _dw.qqStatus || { state: 'stopped' }, { signCheck: _dw.qqSignCheck || null });
     panel.innerHTML = (CC.renderQqDirectPanel || (() => ''))(st);
     const light = document.getElementById('qqdLight');
     if (light) {
@@ -8525,29 +8553,42 @@
       _dw.qqStatus = v || _dw.qqStatus; paintQqDirect();
       if (!v) return;
       if (v.type === 'online') toast('QQ 骰娘已登入' + (v.nickname || v.uin ? '：' + (v.nickname || v.uin) : ''), 'ok');
+      else if (v.type === 'kickoff') toast('QQ 被踢下线' + (v.kickCode ? '（原因码 ' + v.kickCode + '）' : '') + (v.kickMessage ? '：' + v.kickMessage : '') + '；同一账号与 PC 端 QQ 会互踢，建议改用独立小号', 'err');
       else if (v.type === 'offline' || v.type === 'login-error') toast('QQ 登入异常：' + (v.lastError || ''), 'err');
       else if (v.type === 'engine-missing') toast(v.lastError || '未找到 QQ 协议引擎', 'err');
     });
   }
+  /* 收集 QQ 直连卡片当前输入（含签名服务/协议版本/平台），供登录前下发主进程。 */
+  function qqDirectCfgFromCard() {
+    const card = document.querySelector('[data-channel="qqdirect"]');
+    const cfg = dwNetCfg().qqdirect;
+    if (card) card.querySelectorAll('input[data-field]').forEach((inp) => { cfg[inp.getAttribute('data-field')] = inp.value; });
+    return cfg;
+  }
   async function qqDirectAct(act) {
     const api = dwApi();
     if (!api || !api.diceQq) { toast('当前环境未暴露 QQ 直连接口', 'err'); return; }
-    const uinEl = document.querySelector('[data-channel="qqdirect"] input[data-field="uin"]');
     const pwdEl = document.getElementById('qqdPassword');
-    const uin = uinEl ? uinEl.value.trim() : '';
-    if (uin) { const c = dwNetCfg(); c.qqdirect.uin = uin; persist(); }
+    const cfg = qqDirectCfgFromCard();
+    const uin = String(cfg.uin || '').trim();
+    if (uin) persist();
     try {
-      if (act === 'qq-qr') { toast('正在获取二维码…', ''); await api.diceQq.login({ mode: 'qr', uin }); }
+      if (act === 'qq-qr') { toast('正在获取二维码…', ''); await api.diceQq.login({ mode: 'qr', uin, cfg }); }
       else if (act === 'qq-pwd') {
         const password = pwdEl ? pwdEl.value : '';
         if (!uin) { toast('请先填写 QQ 账号', 'err'); return; }
         if (!password) { toast('请填写密码，或改用扫码登录', 'err'); return; }
-        toast('正在登录…', ''); await api.diceQq.login({ mode: 'password', uin, password });
+        toast('正在登录…', ''); await api.diceQq.login({ mode: 'password', uin, password, cfg });
         if (pwdEl) pwdEl.value = ''; // 密码不落地、不驻留
       } else if (act === 'qq-confirm') { await api.diceQq.confirmQr(); }
       else if (act === 'qq-slider') { await api.diceQq.slider((document.getElementById('qqdSlider') || {}).value || ''); }
       else if (act === 'qq-sms') { await api.diceQq.sms((document.getElementById('qqdSms') || {}).value || ''); }
-      else if (act === 'qq-logout') { await api.diceQq.logout(); toast('已退出 QQ 登录', 'ok'); }
+      else if (act === 'qq-logout') { await api.diceQq.logout(); _dw.qqSignCheck = null; toast('已退出 QQ 登录', 'ok'); }
+      else if (act === 'qq-signcheck') {
+        toast('正在自检签名服务…', '');
+        _dw.qqSignCheck = await api.diceQq.signCheck();
+        toast(_dw.qqSignCheck && _dw.qqSignCheck.ok ? '签名服务可用' : ('签名服务不可用：' + ((_dw.qqSignCheck && _dw.qqSignCheck.reason) || '未知')), (_dw.qqSignCheck && _dw.qqSignCheck.ok) ? 'ok' : 'err');
+      }
     } catch (e) { toast('QQ 直连操作失败：' + ((e && e.message) || e), 'err'); }
     await refreshQqDirect();
   }

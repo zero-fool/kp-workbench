@@ -39,7 +39,7 @@
     error: ['异常', 'fail'],
   };
 
-  /* QQ 直连登入卡片外壳：账号输入 + 两种登录方式按钮 + 动态状态区（#qqdPanel）。
+  /* QQ 直连登入卡片外壳：账号输入 + 两种登录方式按钮 + 风控治理配置 + 动态状态区（#qqdPanel）。
    * 密码框刻意不带 data-field：避免被通用输入绑定写进设置明文落盘；仅点击登录时即时读取。 */
   function qqDirectCard(cfg) {
     const qd = (cfg && cfg.qqdirect) || {};
@@ -47,6 +47,7 @@
       <div class="dice-channel-card qqd-card" data-channel="qqdirect">
         <h4>QQ 直连登入（扫码 / 账号密码）<span class="grow"></span><span id="qqdLight" class="dice-light off">已登出</span></h4>
         <div class="qqd-hint">直接在软件里登入 QQ 骰娘账号即可收发群/私聊指令，<b>无需配置 OneBot 协议端</b>。</div>
+        <div class="qqd-warn">⚠ 同一个 QQ 号与电脑端官方 QQ 同时在线会互相挤下线；骰娘建议使用<b>独立小号</b>，或改用下方「高级」里的 OneBot 中转。</div>
         <label>QQ 账号 <input data-field="uin" placeholder="骰娘 QQ 号，如 123456789" value="${esc(qd.uin || '')}"></label>
         <label>密码 <input id="qqdPassword" type="password" placeholder="仅账号密码登录时填写，不会保存"></label>
         <div class="qqd-actions">
@@ -54,6 +55,14 @@
           <button class="ghost" data-qact="qq-pwd">🔑 账号密码登录</button>
           <button class="ghost" data-qact="qq-logout">⏏ 退出登录</button>
         </div>
+        <details class="qqd-risk">
+          <summary>风控治理（签名服务 / 协议版本 / 平台）</summary>
+          <div class="qqd-hint">接入签名服务（QSign 等）是降低风控最关键的一环；不填时 icqq 登录极易触发滑动/短信验证甚至冻结。</div>
+          <label>签名服务地址 <input data-field="signApiAddr" placeholder="如 http://127.0.0.1:8080" value="${esc(qd.signApiAddr || '')}"></label>
+          <label>协议版本 ver <input data-field="ver" placeholder="留空用引擎默认，如 8.9.63" value="${esc(qd.ver || '')}"></label>
+          <label>登录平台 platform <input data-field="platform" placeholder="留空默认 android（移动端，最不易与 PC 冲突）" value="${esc(qd.platform || '')}"></label>
+          <div class="qqd-actions"><button class="ghost" data-qact="qq-signcheck">🔍 签名服务自检</button></div>
+        </details>
         <div id="qqdPanel" class="qqd-panel"><div class="hint">选择一种方式登录；首次登录若提示滑动/短信验证，按下方提示完成即可。</div></div>
       </div>`;
   }
@@ -88,6 +97,7 @@
   }
 
   /* QQ 直连动态状态区：随登录状态切换二维码 / 滑动验证 / 短信验证 / 在线信息。
+   * U1-17/U1-19：追加登录诊断（协议/签名服务/设备指纹/被踢原因/退避）与签名服务自检结果。
    * app.js 每次收到 dice-qq:event 或刷新时重绘此片段（只替换 #qqdPanel，不动输入框）。 */
   function renderQqDirectPanel(st) {
     const s = st || {};
@@ -120,7 +130,27 @@
     } else {
       body = `<div class="hint">选择一种方式登录；首次登录若提示滑动/短信验证，这里会给出对应操作。</div>`;
     }
-    return head + err + body;
+    return head + err + body + diagBlock(s);
+  }
+
+  /* 登录诊断块：协议/签名服务/设备指纹/被踢原因/退避/最近事件 */
+  function diagBlock(s) {
+    const d = s && s.diagnostics;
+    if (!d) return '';
+    const rows = [];
+    rows.push(`协议 ${esc(d.platform || '')}${d.platformDefault ? '（默认移动端）' : ''}${d.ver ? ' · ver ' + esc(d.ver) : ''}`);
+    rows.push(`签名服务 ${d.signConfigured ? '已配置：' + esc(d.signApiAddr) : '未配置'}`);
+    rows.push(`设备指纹 ${d.deviceFingerprint ? esc(d.deviceFingerprint) : '首次登录将生成并固定'}${d.deviceFixed ? '（已固定复用）' : ''}`);
+    if (d.cooldownLeft > 0) rows.push(`退避中：还需 ${d.cooldownLeft} 秒（连续失败会延长）`);
+    if (d.lastKick) rows.push(`最近被踢：原因码 ${esc(d.lastKick.code || '—')}${d.lastKick.message ? ' · ' + esc(d.lastKick.message) : ''}`);
+    const route = `<div class="qqd-diag-route">${esc(d.routeHint || '')}</div>`;
+    const sc = s.signCheck;
+    const scLine = sc ? `<div class="qqd-diag-sc ${sc.ok ? 'ok' : 'bad'}">签名服务自检：${sc.ok ? '可用' : '不可用'}${sc.reason ? '（' + esc(sc.reason) + '）' : ''}</div>` : '';
+    return `<details class="qqd-diag" open>
+      <summary>登录诊断</summary>
+      ${rows.map((r) => `<div class="qqd-diag-row">${r}</div>`).join('')}
+      ${route}${scLine}
+    </details>`;
   }
 
   return { renderStatusLight, renderChannelWizard, summarizeStatus, renderQqDirectPanel };
