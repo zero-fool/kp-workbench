@@ -1195,6 +1195,9 @@ button.ghost.small-secondary{opacity:.85}
 .qqd-risk{margin:8px 0 2px}
 .qqd-risk>summary{cursor:pointer;font-size:12px;color:var(--ink-soft);padding:4px 2px}
 .qqd-risk[open]>summary{margin-bottom:8px}
+.qqd-toggle{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink);margin:6px 0;cursor:pointer}
+.qqd-toggle input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent);flex:0 0 auto;cursor:pointer}
+.dice-channel-card input:disabled{opacity:.45;cursor:not-allowed}
 .qqd-diag{margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:color-mix(in srgb,var(--line) 10%,transparent)}
 .qqd-diag>summary{cursor:pointer;font-size:12px;color:var(--ink-soft)}
 .qqd-diag-row{margin-top:5px;font-size:12px;color:var(--ink-soft);line-height:1.6;word-break:break-word}

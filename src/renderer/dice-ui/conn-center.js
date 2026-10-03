@@ -57,7 +57,8 @@
         </div>
         <details class="qqd-risk">
           <summary>风控治理（签名服务 / 协议版本 / 平台）</summary>
-          <div class="qqd-hint">接入签名服务（QSign 等）是降低风控最关键的一环；不填时 icqq 登录极易触发滑动/短信验证甚至冻结。</div>
+          <div class="qqd-hint">接入签名服务（QSign 等）是降低风控最关键的一环；不填时 icqq 登录极易触发滑动/短信验证甚至冻结。签名服务也可一键关闭（见下）。</div>
+          <label class="qqd-toggle"><input type="checkbox" data-field="signEnabled"${qd.signEnabled === false ? '' : ' checked'}> 启用签名服务</label>
           <label>签名服务地址 <input data-field="signApiAddr" placeholder="如 http://127.0.0.1:8080" value="${esc(qd.signApiAddr || '')}"></label>
           <label>协议版本 ver <input data-field="ver" placeholder="留空用引擎默认，如 8.9.63" value="${esc(qd.ver || '')}"></label>
           <label>登录平台 platform <input data-field="platform" placeholder="留空默认 android（移动端，最不易与 PC 冲突）" value="${esc(qd.platform || '')}"></label>
@@ -139,7 +140,7 @@
     if (!d) return '';
     const rows = [];
     rows.push(`协议 ${esc(d.platform || '')}${d.platformDefault ? '（默认移动端）' : ''}${d.ver ? ' · ver ' + esc(d.ver) : ''}`);
-    rows.push(`签名服务 ${d.signConfigured ? '已配置：' + esc(d.signApiAddr) : '未配置'}`);
+    rows.push(`签名服务 ${d.signEnabled === false ? '已关闭（可在风控治理中重新开启）' : (d.signConfigured ? '已启用：' + esc(d.signApiAddr) : '未启用（未填地址）')}`);
     rows.push(`设备指纹 ${d.deviceFingerprint ? esc(d.deviceFingerprint) : '首次登录将生成并固定'}${d.deviceFixed ? '（已固定复用）' : ''}`);
     if (d.cooldownLeft > 0) rows.push(`退避中：还需 ${d.cooldownLeft} 秒（连续失败会延长）`);
     if (d.lastKick) rows.push(`最近被踢：原因码 ${esc(d.lastKick.code || '—')}${d.lastKick.message ? ' · ' + esc(d.lastKick.message) : ''}`);

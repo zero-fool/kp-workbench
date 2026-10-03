@@ -323,6 +323,26 @@ test('登录诊断：配置的 platform/ver/signApiAddr 如实反映', () => {
   assert.strictEqual(d.signApiAddr, 'http://127.0.0.1:8080');
 });
 
+test('签名服务开关：signEnabled=false 时地址保留但诊断按关闭呈现、客户端不带 sign_api_addr', async () => {
+  const { adapter, fe } = makeAdapter({ signApiAddr: 'http://127.0.0.1:8080', signEnabled: false });
+  const d = adapter.status().diagnostics;
+  assert.strictEqual(d.signEnabled, false);
+  assert.strictEqual(d.signConfigured, false);
+  assert.strictEqual(d.signApiAddr, 'http://127.0.0.1:8080');   // 地址仍在配置里，重新勾选即可恢复
+  assert.match(d.routeHint, /已关闭/);
+  await adapter.start();
+  assert.strictEqual(fe.clients[0].config.sign_api_addr, undefined);
+  await adapter.stop();
+});
+
+test('签名服务开关：signCheck 在关闭时立即返回已关闭（不发起网络请求）', async () => {
+  const { adapter } = makeAdapter({ signApiAddr: 'http://127.0.0.1:8080', signEnabled: false });
+  const r = await adapter.signCheck();
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /已关闭/);
+  await adapter.stop();
+});
+
 test('适配器 signCheck：未配置签名服务时立即返回不可用（不发起网络请求）', async () => {
   const { adapter } = makeAdapter();
   const r = await adapter.signCheck();

@@ -122,6 +122,8 @@ function createQqDirectAdapter(deps) {
     } catch (_) { /* 诊断记录失败不影响登录 */ }
   }
   function signAddr() { return String(cfg.signApiAddr || '').trim(); }
+  /* 签名服务总开关：signEnabled === false 时即使填了地址也视为关闭（可选择关闭）。 */
+  function signOn() { return cfg.signEnabled !== false && !!signAddr(); }
   /* 按账号隔离登录态目录：icqq 会把 device.json 写在此目录，固定复用即「固定设备指纹」。
    * 未填账号（纯扫码且不留账号）时退回 dataDir 根目录。 */
   function sessionDir() {
@@ -158,7 +160,8 @@ function createQqDirectAdapter(deps) {
       platformDefault: cfg.platform == null,
       ver: cfg.ver || '',
       signApiAddr: signAddr(),
-      signConfigured: !!signAddr(),
+      signEnabled: cfg.signEnabled !== false,
+      signConfigured: !!signOn(),
       deviceFile: fp.deviceFile,
       deviceFingerprint: fp.fingerprint,
       deviceFixed: fp.fixed,
@@ -167,7 +170,9 @@ function createQqDirectAdapter(deps) {
       kicks: diag.kicks.slice(-5),
       lastKick: diag.lastKick,
       events: diag.events.slice(-10),
-      routeHint: signAddr() ? '已配置签名服务：登录风控风险显著降低。' : NO_SIGN_HINT,
+      routeHint: cfg.signEnabled === false
+        ? '签名服务已关闭：登录风控风险较高，建议重新开启签名服务并自检，或改用「高级」里的 OneBot 中转。'
+        : (signAddr() ? '已启用签名服务：登录风控风险显著降低。' : NO_SIGN_HINT),
     };
   }
 
@@ -275,9 +280,10 @@ function createQqDirectAdapter(deps) {
   }
   function stopQrPoll() { if (qrTimer) { clearInterval(qrTimer); qrTimer = null; } }
 
-  /* 影响客户端构造的关键配置：变更后需重建客户端，否则新填的签名服务/协议版本不生效。 */
+  /* 影响客户端构造的关键配置：变更后需重建客户端，否则新填的签名服务/协议版本不生效。
+   * signEnabled 关闭时按「无签名服务」处理，故 key 里用 signOn() 的生效值而非原始地址。 */
   function confKey() {
-    return [sessionDir(), cfg.platform || '', cfg.ver || '', signAddr(), cfg.enginePath || '', cfg.reconnInterval || ''].join('|');
+    return [sessionDir(), cfg.platform || '', cfg.ver || '', signOn() ? signAddr() : '', cfg.enginePath || '', cfg.reconnInterval || ''].join('|');
   }
   function ensureClient() {
     const key = confKey();
@@ -302,9 +308,9 @@ function createQqDirectAdapter(deps) {
     const conf = { log_level: cfg.logLevel || 'off', data_dir: dir, ignore_self: true };
     if (cfg.platform != null) conf.platform = cfg.platform;
     if (cfg.ver) conf.ver = cfg.ver;
-    if (signAddr()) conf.sign_api_addr = signAddr();
+    if (signOn()) conf.sign_api_addr = signAddr();
     if (cfg.reconnInterval != null) conf.reconn_interval = cfg.reconnInterval;
-    logDiag('client', `data_dir=${dir} platform=${conf.platform || DEFAULT_PLATFORM} ver=${conf.ver || '默认'} sign=${conf.sign_api_addr || '未配置'}`);
+    logDiag('client', `data_dir=${dir} platform=${conf.platform || DEFAULT_PLATFORM} ver=${conf.ver || '默认'} sign=${signOn() ? (conf.sign_api_addr || '未配置') : '已关闭'}`);
     client = wire(createEngineClient(mod, conf));
     clientKey = key;
     return client;
@@ -444,6 +450,16 @@ function createQqDirectAdapter(deps) {
 
     /* U1-19：签名服务连通性自检。无签名服务时 icqq 登录极易触发验证/冻结，这是风控缓解最关键的一环。 */
     async signCheck() {
+      /* 未启用（未填地址或已关闭）时不发起网络请求，直接返回不可用及原因。 */
+      if (!signOn()) {
+        const r = {
+          ok: false, addr: '',
+          reason: cfg.signEnabled === false ? '签名服务已关闭（可在风控治理中重新开启）' : '未填写签名服务地址',
+        };
+        logDiag('sign-check', `签名服务未启用：${r.reason}`);
+        emit('sign-check', { signCheck: r });
+        return r;
+      }
       const r = await probeSignService(signAddr(), { timeout: cfg.signCheckTimeout });
       logDiag('sign-check', r.ok ? `签名服务可用 ${r.addr}` : `签名服务不可用：${r.reason}`);
       emit('sign-check', { signCheck: r });

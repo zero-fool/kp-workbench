@@ -8654,8 +8654,15 @@
   function qqDirectCfgFromCard() {
     const card = document.querySelector('[data-channel="qqdirect"]');
     const cfg = dwNetCfg().qqdirect;
-    if (card) card.querySelectorAll('input[data-field]').forEach((inp) => { cfg[inp.getAttribute('data-field')] = inp.value; });
+    if (card) card.querySelectorAll('input[data-field]').forEach((inp) => { cfg[inp.getAttribute('data-field')] = inp.type === 'checkbox' ? inp.checked : inp.value; });
     return cfg;
+  }
+  /* 签名服务开关联动：关闭时禁用地址输入（配置仍在，重新勾选即恢复）。 */
+  function applySignEnabled(card) {
+    if (!card) return;
+    const cb = card.querySelector('input[data-field="signEnabled"]');
+    const addr = card.querySelector('input[data-field="signApiAddr"]');
+    if (cb && addr) addr.disabled = !cb.checked;
   }
   async function qqDirectAct(act) {
     const api = dwApi();
@@ -8709,9 +8716,15 @@
       if (!cfg[ch]) cfg[ch] = {};
       card.querySelectorAll('input[data-field]').forEach((inp) => {
         const f = inp.getAttribute('data-field');
-        inp.addEventListener('input', () => { cfg[ch][f] = inp.value; persist(); });
+        if (inp.type === 'checkbox') {
+          inp.addEventListener('change', () => { cfg[ch][f] = inp.checked; persist(); applySignEnabled(card); });
+        } else {
+          inp.addEventListener('input', () => { cfg[ch][f] = inp.value; persist(); });
+        }
       });
     });
+    // 签名服务开关：初始按配置状态联动禁用/启用地址输入
+    applySignEnabled(el.querySelector('[data-channel="qqdirect"]'));
     el.querySelectorAll('button[data-act]').forEach((btn) => {
       btn.onclick = async () => {
         const card = btn.closest('[data-channel]'); if (!card) return;
