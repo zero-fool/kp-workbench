@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root{
+    --panel:#fffdf8; --panel2:#f8f2e8; --panel3:#f0e7d9;
+    --accent:#b3402f; --accent2:#8f271c; --accent-ink:#fff8f1;
+    --line:#e7ddca; --line2:#d6c7a9; --line3:#c4b290;
+    --card:#fffdf8;
+    --radius:10px; --shadow:0 6px 18px rgba(30,50,80,.10);
+  }
+  body{background:#e9e1d2;font-family:"Inter","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;padding:24px;font-size:13px;color:#3b3226}
+  .setcard{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 18px;width:520px}
+  .setcard h4{margin:0 0 10px;font-size:14px}
+  .toggle-row{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;transition:border-color .15s;user-select:none;display:flex;align-items:center;gap:8px}
+  .toggle-row:has(input:checked){background:color-mix(in srgb,var(--accent) 8%,var(--panel2));border-color:var(--line2)}
+  .toggle-row input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent);flex:0 0 auto;cursor:pointer;margin:0}
+  .toggle-row>span{flex:1;min-width:0}
+  .toggle-row b{font-size:13px;display:block;line-height:1.5}
+  .toggle-row .hint{color:var(--ink-faint,#999);font-size:12px;display:block;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="setcard">
+  <div style="font-weight:bold;font-size:16px;margin-bottom:6px">更新设置</div>
+  <div class="note" style="margin-bottom:8px">自更新会从 GitHub Releases 检测新版本…当前版本 v3.2.5。</div>
+  <label class="toggle-row"><input type="checkbox" id="c1" checked>
+    <span><b>启动时自动检查更新</b><br><span class="hint">应用启动约 1 分钟后静默检查，失败不打扰；勾选间隔内的重复启动会跳过检查。</span></span></label>
+  <br>
+  <label class="toggle-row"><input type="checkbox" id="c2" checked>
+    <span><b>检测到新版本后自动下载</b><br><span class="hint">下载完成后会弹窗询问是否立即重启更新；取消则稍后可在「更新公告」页手动重启。</span></span></label>
+</div>
+</body>
+</html>

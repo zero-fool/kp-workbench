@@ -363,10 +363,12 @@ input.search{min-width:220px}
 .chatdrawer .chatinput button{padding:7px 10px;flex:0 0 auto;font-size:13px;min-height:38px}
 .chatdrawer .chatinput #drawerSend{align-self:stretch;display:flex;align-items:center;justify-content:center}
 /* AI 行为开关（AI 配置页） */
-.toggle-row{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;transition:border-color .15s;user-select:none}
+.toggle-row{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;transition:border-color .15s;user-select:none;display:flex;align-items:center;gap:8px}
 .toggle-row:has(input:checked){background:color-mix(in srgb,var(--accent) 8%,var(--panel2));border-color:var(--line2)}
-.toggle-row input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent);flex:0 0 auto;cursor:pointer}
-.toggle-row b{font-size:13px;display:block}
+.toggle-row input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent);flex:0 0 auto;cursor:pointer;margin:0}
+.toggle-row>span{flex:1;min-width:0}
+.toggle-row b{font-size:13px;display:block;line-height:1.5}
+.toggle-row .hint{display:block;line-height:1.5}
 .credit{white-space:normal}
 
 /* 剧本解析 */
