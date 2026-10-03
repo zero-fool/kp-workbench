@@ -364,7 +364,7 @@ input.search{min-width:220px}
 .chatdrawer .chatinput #drawerSend{align-self:stretch;display:flex;align-items:center;justify-content:center}
 /* AI 行为开关（AI 配置页） */
 .toggle-row{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;transition:border-color .15s;user-select:none}
-.toggle-row:has(input:checked){border-color:var(--accent)}
+.toggle-row:has(input:checked){background:color-mix(in srgb,var(--accent) 8%,var(--panel2));border-color:var(--line2)}
 .toggle-row input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent);flex:0 0 auto;cursor:pointer}
 .toggle-row b{font-size:13px;display:block}
 .credit{white-space:normal}
