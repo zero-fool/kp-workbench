@@ -241,3 +241,52 @@ test('多档案：创建/复制/删除与保留名校验，主档案不可删', 
     assert.ok(!s.listArchives().some(a => a.name === '团A'));
   } finally { rm(dir); }
 });
+
+/* ---------------- P0-14：快照降频 + 紧凑序列化 ---------------- */
+
+test('P0-14 紧凑序列化：分片实体文件与快照均无 2 空格缩进', async () => {
+  const dir = mk();
+  try {
+    const s = new DataStore(dir);
+    bootstrap(s);
+    const d = s.load();
+    d.entities.npcs.push({ id: 'n1', name: '店主', note: '矮人' });
+    d.settings.archiveLabel = '紧凑测试';
+    s.save(d);
+
+    const shardContent = fs.readFileSync(path.join(dir, 'kp-main', 'npcs.json'), 'utf8');
+    assert.ok(!/^\s{2}/m.test(shardContent), '分片实体文件应为紧凑 JSON，不应含缩进');
+    assert.ok(shardContent.includes('"n1"'));
+
+    // 触发一次快照，检查快照文件同样紧凑
+    s._lastSnapTs = 0; s._lastWriteHash = 'changed'; s._lastSnapHash = 'old';
+    await s.maybeSnapshot(s.load());
+    const snaps = s.listSnapshots();
+    assert.equal(snaps.length, 1);
+    const snapContent = fs.readFileSync(path.join(dir, 'snapshots', snaps[0].file), 'utf8');
+    assert.ok(!/^\s{2}/m.test(snapContent), '快照应为紧凑 JSON，不应含缩进');
+  } finally { rm(dir); }
+});
+
+test('P0-14 快照降频：settings.snapshotMinutes 生效，间隔不足不沉淀', async () => {
+  const dir = mk();
+  try {
+    const s = new DataStore(dir);
+    bootstrap(s);
+    const d = s.load();
+    d.settings.snapshotMinutes = 5;                            // 5 分钟沉淀一次
+    d.entities.pcs.push({ id: 'p1', name: '调查员' });
+    s.write(d);                                                // 只写盘不触发快照，避免 save 已异步沉淀
+
+    // 内容已变且上次沉淀在 10 秒前：5 分钟间隔内应跳过
+    s._lastSnapTs = Date.now() - 10 * 1000;
+    s._lastWriteHash = 'changed'; s._lastSnapHash = 'old';
+    await s.maybeSnapshot(d);
+    assert.equal(s.listSnapshots().length, 0, '间隔不足 5 分钟不应沉淀快照');
+
+    // 重置节流时间戳后应沉淀
+    s._lastSnapTs = 0;
+    await s.maybeSnapshot(d);
+    assert.equal(s.listSnapshots().length, 1, '重置节流后应沉淀快照');
+  } finally { rm(dir); }
+});

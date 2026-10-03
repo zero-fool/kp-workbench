@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { suggestRelations } = require('../src/main/ai');
+const { suggestRelations, relationDiag } = require('../src/main/ai');
 
 function withServer(handler) {
   return new Promise((resolve) => {
@@ -71,6 +71,85 @@ test('关系补全：未提供源文本时不注入原文段，仍正常工作',
     assert.equal(out.length, 1);
     assert.equal(out[0].from, '阿瑟');
     assert.equal(out[0].label, '师徒');
+  } finally { srv.close(); }
+});
+
+test('关系补全：原文共现的实体即使排在列表末尾也进入展示（候选预筛，不被 90 条截断丢弃）', async () => {
+  let seen = '';
+  const { srv, base } = await withServer(async (req, res) => {
+    seen = await body(req);
+    res.setHeader('Content-Type', 'application/json');
+    res.end(okJson([{ op: 'add', from: '深夜来客', to: '密使接头人', label: '私下会面' }]));
+  });
+  try {
+    const npcs = [];
+    // 前 95 个与原文无关的 NPC，故意放在列表前段占满旧版 90 条上限
+    for (let i = 0; i < 95; i++) npcs.push({ name: '路人' + (i + 1), note: '与剧情无关的路人' });
+    // 真正在原文中共现的一对，排在列表末尾——旧版 slice(0,90) 会直接丢弃
+    npcs.push({ name: '深夜来客', note: '深夜敲响酒馆后门，神色匆忙' });
+    npcs.push({ name: '密使接头人', note: '在码头等候，随身带着火鳞商会的信物' });
+    const entities = { npcs, pcs: [], regions: [], logs: [], mobs: [], rules: [], lore: [] };
+    const cfg = { model: 'm', apiKey: 'k', baseUrl: base, timeoutMs: 3000, maxTokens: 500 };
+    const rawText = '深夜来客在后门与密使接头人碰面，交换了密信。';
+    const out = await suggestRelations(entities, { nodes: [], edges: [] }, cfg, rawText);
+    const userMsg = JSON.parse(seen).messages[1].content;
+    /* 共现的一对应被提升进展示行，且其关键内容出现在提示词中 */
+    assert.match(userMsg, /深夜来客/);
+    assert.match(userMsg, /密使接头人/);
+    assert.match(userMsg, /深夜敲响酒馆后门/);
+    assert.match(userMsg, /火鳞商会的信物/);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].from, '深夜来客');
+    assert.equal(out[0].to, '密使接头人');
+  } finally { srv.close(); }
+});
+
+test('关系补全：白名单覆盖全部实体，超出旧版 90 条上限的卡片名也能被接受', async () => {
+  const { srv, base } = await withServer(async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(okJson([{ op: 'add', from: '后排角色150', to: '前排角色1', label: '旧识' }]));
+  });
+  try {
+    const npcs = [];
+    for (let i = 1; i <= 200; i++) npcs.push({ name: '后排角色' + i, note: '编号 ' + i });
+    npcs.push({ name: '前排角色1', note: '第一位' });
+    const entities = { npcs, pcs: [], regions: [], logs: [], mobs: [], rules: [], lore: [] };
+    const cfg = { model: 'm', apiKey: 'k', baseUrl: base, timeoutMs: 3000, maxTokens: 500 };
+    const out = await suggestRelations(entities, { nodes: [], edges: [] }, cfg, '');
+    assert.equal(out.length, 1);
+    assert.equal(out[0].from, '后排角色150', '第 150 号卡片超出旧版 90 条白名单上限，扩容后应能被接受');
+  } finally { srv.close(); }
+});
+
+test('关系补全：AI 首次输出不可解析时，附加提示重试一次并成功取回结果', async () => {
+  relationDiag.parseRetries = 0;
+  const seen = [];
+  const { srv, base } = await withServer(async (req, res) => {
+    const b = await body(req);
+    seen.push(b);
+    res.setHeader('Content-Type', 'application/json');
+    if (seen.length === 1) {
+      // 首次：带 markdown 代码块与解释文字，不可解析
+      res.end(okJson({ content: '```json\n以下是推断结果：\n不是数组' }));
+    } else {
+      // 重试：纯 JSON 数组
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{ op: 'add', from: '老周（酒馆老板）', to: '火鳞商会', label: '秘密效忠' }]) } }] }));
+    }
+  });
+  try {
+    const entities = {
+      npcs: [{ name: '老周（酒馆老板）', role: '酒馆老板', secret: '暗地里效忠火鳞商会' }],
+      lore: [{ name: '火鳞商会', content: '王都最大的商会' }],
+      pcs: [], regions: [], logs: [], mobs: [], rules: []
+    };
+    const cfg = { model: 'm', apiKey: 'k', baseUrl: base, timeoutMs: 3000, maxTokens: 500 };
+    const out = await suggestRelations(entities, { nodes: [], edges: [] }, cfg, '');
+    assert.equal(seen.length, 2, '首次解析失败后应再发一次请求');
+    /* 重试请求的 user 消息应带上纯 JSON 提示 */
+    assert.match(JSON.parse(seen[1]).messages[1].content, /只输出一个 JSON 数组/);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].from, '老周（酒馆老板）');
+    assert.equal(relationDiag.parseRetries, 1, '解析失败重试计数应为 1');
   } finally { srv.close(); }
 });
 

@@ -12,6 +12,7 @@
     "test": "node --test \"tests/**/*.test.js\" && node tools/regress.test.js",
     "verify": "node tools/wiring-audit.js && node tools/scan-thirdparty.js && node tools/regress.test.js && node tools/dice-regression.js",
     "bench": "node tools/perf-bench.js",
+    "build:renderer": "node tools/build-renderer.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -27,7 +28,8 @@
   "devDependencies": {
     "cross-env": "^7.0.3",
     "electron": "^31.7.7",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "esbuild": "^0.28.2"
   },
   "build": {
     "appId": "com.kp.workbench",
@@ -40,10 +42,49 @@
       "buildResources": "build"
     },
     "npmRebuild": false,
+    "compression": "maximum",
     "files": [
       "src/**/*",
+      "out/**/*",
       "node_modules/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/codepage/**",
+      "!node_modules/pdfjs-dist/cmaps/**",
+      "!node_modules/pdfjs-dist/standard_fonts/**",
+      "!node_modules/pdfjs-dist/web/**",
+      "!node_modules/pdfjs-dist/image_decoders/**",
+      "!node_modules/pdfjs-dist/types/**",
+      "!node_modules/pdfjs-dist/**/*.map",
+      "!node_modules/pdfjs-dist/build/pdf.js",
+      "!node_modules/pdfjs-dist/build/pdf.min.js",
+      "!node_modules/pdfjs-dist/build/pdf.sandbox.js",
+      "!node_modules/pdfjs-dist/build/pdf.sandbox.min.js",
+      "!node_modules/pdfjs-dist/build/pdf.worker.entry.js",
+      "!node_modules/pdfjs-dist/build/pdf.worker.min.js",
+      "!node_modules/pdfjs-dist/legacy/build/pdf.worker.js",
+      "!node_modules/pdfjs-dist/legacy/build/pdf.min.js",
+      "!node_modules/pdfjs-dist/legacy/build/pdf.sandbox.js",
+      "!node_modules/pdfjs-dist/legacy/build/pdf.sandbox.min.js",
+      "!node_modules/pdfjs-dist/README.md",
+      "!node_modules/pdfjs-dist/CODE_OF_CONDUCT.md",
+      "!node_modules/xlsx/dist/xlsx.core.min.js",
+      "!node_modules/xlsx/dist/xlsx.core.min.map",
+      "!node_modules/xlsx/dist/xlsx.extendscript.js",
+      "!node_modules/xlsx/dist/xlsx.full.min.js",
+      "!node_modules/xlsx/dist/xlsx.full.min.map",
+      "!node_modules/xlsx/dist/xlsx.mini.min.js",
+      "!node_modules/xlsx/dist/xlsx.mini.min.map",
+      "!node_modules/xlsx/dist/xlsx.zahl.js",
+      "!node_modules/xlsx/dist/xlsx.zahl.mjs",
+      "!node_modules/xlsx/dist/cpexcel.full.mjs",
+      "!node_modules/xlsx/dist/shim.min.js",
+      "!node_modules/xlsx/dist/LICENSE",
+      "!node_modules/xlsx/xlsx.mjs",
+      "!node_modules/xlsx/bin/**",
+      "!node_modules/xlsx/types/**",
+      "!node_modules/xlsx/*.png",
+      "!node_modules/xlsx/README.md",
+      "!node_modules/xlsx/CHANGELOG.md"
     ],
     "win": {
       "target": [

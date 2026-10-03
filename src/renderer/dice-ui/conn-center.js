@@ -106,7 +106,10 @@
     const head = `<div class="qqd-status"><span class="dice-light ${cls}">${esc(label)}</span>
       ${s.nickname || s.uin ? `<span class="hint">账号 ${esc(s.uin || '')}${s.nickname ? '（' + esc(s.nickname) + '）' : ''}</span>` : ''}
       <span class="grow"></span>${s.engineReady ? '<span class="hint">引擎已就绪</span>' : ''}</div>`;
-    const err = s.lastError ? `<div class="qqd-err">⚠ ${esc(s.lastError)}</div>` : '';
+    const err = s.lastError ? `<div class="qqd-err">⚠ ${esc(s.lastError)}
+      ${s.errHint ? `<div class="qqd-hint err-hint">${esc(s.errHint)}</div>` : ''}
+      <div class="qqd-actions"><button class="ghost" data-qact="qq-to-onebot">⇄ 改用 OneBot 中转（高级）</button></div>
+    </div>` : '';
     let body = '';
     if (s.qrImage) {
       body = `<div class="qrcode-pane">

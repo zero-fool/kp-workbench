@@ -55,7 +55,7 @@ function autoMigrateLegacyData(target) {
   return false;
 }
 
-const { DataStore } = require('./store');
+const { DataStore, emptyData } = require('./store');
 const ai = require('./ai');
 const promptHub = require('./prompt-hub');
 const exporter = require('./exporter');
@@ -81,77 +81,103 @@ const windowManager = createWindowManager({
 });
 const dataDir = resolveDataDir();
 runlog.init(dataDir);
-autoMigrateLegacyData(dataDir);
 const store = new DataStore(dataDir);
-let doc = store.load();
-if (!doc.fields) doc.fields = ai.defaultFields();
-if (!doc.settings.activeProfileId && doc.profiles.length) doc.settings.activeProfileId = doc.profiles[0].id;
-/* 卡片模板：首次启动/升级时把内置规则书模板(coc/dnd)注入 settings.templates，用户自建模板保留 */
-if (!Array.isArray(doc.settings.templates)) doc.settings.templates = [];
-{
-  const have = new Set(doc.settings.templates.map(t => t && t.id));
-  for (const b of ai.BUILTIN_TEMPLATES) {
-    if (!have.has(b.id)) { doc.settings.templates.unshift(JSON.parse(JSON.stringify(b))); have.add(b.id); }
-  }
+let doc = null;                     // P0-15：数据延迟加载（窗口先出），启动完成前为 null
+let dataReady = false;
+let dataBooted = null;              // Promise：启动数据加载完成后 resolve
+
+/* P0-15 启动路径优化：窗口先出、数据后置。
+ * 原先启动时同步 autoMigrate + load + 模板注入 + 整档 save 会阻塞窗口创建（数据越大越明显）。
+ * 现改为窗口先创建，本函数在后台异步完成迁移/读取/注入/首写；store:getAll / store:save
+ * 会等待 dataBooted 放行，保证首个 IPC 就能拿到完整数据，渲染层无需改动。 */
+function bootData() {
+  dataBooted = new Promise((resolve) => {
+    /* 用 setImmediate 把重活让出当前 tick：窗口先绘制，数据加载随后在后台完成 */
+    setImmediate(() => {
+      try {
+        autoMigrateLegacyData(dataDir);
+        doc = store.load();
+        if (!doc.fields) doc.fields = ai.defaultFields();
+        if (!doc.settings.activeProfileId && doc.profiles.length) doc.settings.activeProfileId = doc.profiles[0].id;
+        /* 卡片模板：首次启动/升级时把内置规则书模板(coc/dnd)注入 settings.templates，用户自建模板保留 */
+        if (!Array.isArray(doc.settings.templates)) doc.settings.templates = [];
+        {
+          const have = new Set(doc.settings.templates.map(t => t && t.id));
+          for (const b of ai.BUILTIN_TEMPLATES) {
+            if (!have.has(b.id)) { doc.settings.templates.unshift(JSON.parse(JSON.stringify(b))); have.add(b.id); }
+          }
+        }
+        /* 工作台 AI：仅保留连接配置与总开关，与骰娘 AI 完全分离（骰娘不再读写 settings.ai）。 */
+        {
+          if (!doc.settings.ai) doc.settings.ai = {};
+          if (doc.settings.ai.enabled === undefined) doc.settings.ai.enabled = true;
+        }
+        /* 骰娘 AI（与工作台 AI 完全独立）：开关存 settings.dice.aiSwitches，连接存 settings.dice.aiPort。
+         * 首次升级时把旧 settings.ai 里的骰娘开关与工作台凭证一次性迁移过来，保证既有配置不丢；
+         * 迁移完成后骰娘只认自己的开关与端口，工作台关闭 AI / 取消任务都不会波及。 */
+        {
+          if (!doc.settings.dice) doc.settings.dice = {};
+          const d = doc.settings.dice;
+          const a = doc.settings.ai || {};
+          const oldF = a.features || {};
+          const def = { dice: true, optimize: true, interject: false, meme: true, kpAdvice: true };
+          if (!d.aiSwitches) {
+            d.aiSwitches = {
+              enabled: a.enabled !== false,
+              features: {
+                dice: oldF.dice !== false, optimize: oldF.optimize !== false, interject: oldF.interject === true,
+                meme: oldF.meme !== false, kpAdvice: oldF.kpAdvice !== false
+              },
+              interjectProb: Number.isFinite(a.interjectProb) ? a.interjectProb : 15,
+              memeProb: Number.isFinite(a.memeProb) ? a.memeProb : 25,
+              optimizePrompt: typeof a.optimizePrompt === 'string' ? a.optimizePrompt : ''
+            };
+          }
+          const sw = d.aiSwitches;
+          if (!sw.features) sw.features = {};
+          for (const f of Object.keys(def)) if (sw.features[f] === undefined) sw.features[f] = def[f];
+          if (sw.enabled === undefined) sw.enabled = true;
+          if (sw.interjectProb === undefined) sw.interjectProb = 15;   // 随机插话命中率(%)
+          if (sw.memeProb === undefined) sw.memeProb = 25;             // 插话时附带"偷来的表情"的概率(%)
+          if (typeof sw.optimizePrompt !== 'string') sw.optimizePrompt = ''; // 骰点优化附加提示词
+          if (!d.aiPort) d.aiPort = {};
+          /* 旧版骰娘曾借用工作台凭证；此处一次性把工作台连接复制为骰娘独立端口，避免升级后骰娘 AI 失效。 */
+          if (!d.aiPortMigrated) {
+            if (!d.aiPort.base && a.baseUrl) d.aiPort = { enabled: true, base: a.baseUrl, key: a.apiKey, model: a.model, timeoutMs: a.timeoutMs };
+            d.aiPortMigrated = true;
+          }
+        }
+        /* 提示词中枢：settings.prompts.master(总提示词，每次 AI 运行都会注入) + settings.prompts.scenes(各场景覆盖) */
+        {
+          if (!doc.settings.prompts) doc.settings.prompts = {};
+          const sp = doc.settings.prompts;
+          if (typeof sp.master !== 'string') sp.master = '';
+          if (!sp.scenes || typeof sp.scenes !== 'object') sp.scenes = {};
+          for (const key of Object.keys(promptHub.defaultScenes())) {
+            if (!sp.scenes[key] || typeof sp.scenes[key] !== 'object') sp.scenes[key] = {};
+          }
+          /* U2-4 叙事风格包：选中键 + 生效文本（非空文本才注入） */
+          if (!sp.style || typeof sp.style !== 'object') sp.style = { key: 'none', text: '' };
+          if (typeof sp.style.key !== 'string') sp.style.key = 'none';
+          if (typeof sp.style.text !== 'string') sp.style.text = '';
+        }
+        /* 分场景记忆文件目录：data/memories/<scene>.md，供每次 AI 运行按场景注入"本场景"记忆尾部 */
+        fs.mkdirSync(promptHub.memoryDir(dataDir), { recursive: true });
+        /* 启动时对已有明文 API Key 做一次加密迁移（原先在 whenReady 中同步执行，随数据加载一并完成后落盘） */
+        if (hardenAiKeyIfNeeded()) runlog.info('启动时完成明文 API Key 加密迁移', {});
+        if (store._recoveredFrom) runlog.warn('读档自愈', { from: store._recoveredFrom });
+        store.save(doc);
+        dataReady = true;
+      } catch (e) {
+        runlog.error('启动数据加载失败，已用空档启动', { error: (e && e.message) || String(e) });
+        try { doc = emptyData(); } catch (_) {}
+        dataReady = true;
+      }
+      resolve();
+    });
+  });
+  return dataBooted;
 }
-/* 工作台 AI：仅保留连接配置与总开关，与骰娘 AI 完全分离（骰娘不再读写 settings.ai）。 */
-{
-  if (!doc.settings.ai) doc.settings.ai = {};
-  if (doc.settings.ai.enabled === undefined) doc.settings.ai.enabled = true;
-}
-/* 骰娘 AI（与工作台 AI 完全独立）：开关存 settings.dice.aiSwitches，连接存 settings.dice.aiPort。
- * 首次升级时把旧 settings.ai 里的骰娘开关与工作台凭证一次性迁移过来，保证既有配置不丢；
- * 迁移完成后骰娘只认自己的开关与端口，工作台关闭 AI / 取消任务都不会波及。 */
-{
-  if (!doc.settings.dice) doc.settings.dice = {};
-  const d = doc.settings.dice;
-  const a = doc.settings.ai || {};
-  const oldF = a.features || {};
-  const def = { dice: true, optimize: true, interject: false, meme: true, kpAdvice: true };
-  if (!d.aiSwitches) {
-    d.aiSwitches = {
-      enabled: a.enabled !== false,
-      features: {
-        dice: oldF.dice !== false, optimize: oldF.optimize !== false, interject: oldF.interject === true,
-        meme: oldF.meme !== false, kpAdvice: oldF.kpAdvice !== false
-      },
-      interjectProb: Number.isFinite(a.interjectProb) ? a.interjectProb : 15,
-      memeProb: Number.isFinite(a.memeProb) ? a.memeProb : 25,
-      optimizePrompt: typeof a.optimizePrompt === 'string' ? a.optimizePrompt : ''
-    };
-  }
-  const sw = d.aiSwitches;
-  if (!sw.features) sw.features = {};
-  for (const f of Object.keys(def)) if (sw.features[f] === undefined) sw.features[f] = def[f];
-  if (sw.enabled === undefined) sw.enabled = true;
-  if (sw.interjectProb === undefined) sw.interjectProb = 15;   // 随机插话命中率(%)
-  if (sw.memeProb === undefined) sw.memeProb = 25;             // 插话时附带“偷来的表情”的概率(%)
-  if (typeof sw.optimizePrompt !== 'string') sw.optimizePrompt = ''; // 骰点优化附加提示词
-  if (!d.aiPort) d.aiPort = {};
-  /* 旧版骰娘曾借用工作台凭证；此处一次性把工作台连接复制为骰娘独立端口，避免升级后骰娘 AI 失效。 */
-  if (!d.aiPortMigrated) {
-    if (!d.aiPort.base && a.baseUrl) d.aiPort = { enabled: true, base: a.baseUrl, key: a.apiKey, model: a.model, timeoutMs: a.timeoutMs };
-    d.aiPortMigrated = true;
-  }
-}
-/* 提示词中枢：settings.prompts.master(总提示词，每次 AI 运行都会注入) + settings.prompts.scenes(各场景覆盖) */
-{
-  if (!doc.settings.prompts) doc.settings.prompts = {};
-  const sp = doc.settings.prompts;
-  if (typeof sp.master !== 'string') sp.master = '';
-  if (!sp.scenes || typeof sp.scenes !== 'object') sp.scenes = {};
-  for (const key of Object.keys(promptHub.defaultScenes())) {
-    if (!sp.scenes[key] || typeof sp.scenes[key] !== 'object') sp.scenes[key] = {};
-  }
-  /* U2-4 叙事风格包：选中键 + 生效文本（非空文本才注入） */
-  if (!sp.style || typeof sp.style !== 'object') sp.style = { key: 'none', text: '' };
-  if (typeof sp.style.key !== 'string') sp.style.key = 'none';
-  if (typeof sp.style.text !== 'string') sp.style.text = '';
-}
-/* 分场景记忆文件目录：data/memories/<scene>.md，供每次 AI 运行按场景注入"本场景"记忆尾部 */
-const memoryDirPath = promptHub.memoryDir(dataDir);
-fs.mkdirSync(memoryDirPath, { recursive: true });
-store.save(doc);
 function dayStamp() { const d = new Date(); const p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
 
 /* ---- 运行记录（RunLog）：持续记录全过程，不只记报错 ----
@@ -351,7 +377,8 @@ function diceAiCfg() {
 }
 
 function registerIpc() {
-  ipcMain.handle('store:getAll', () => {
+  ipcMain.handle('store:getAll', async () => {
+    await dataBooted; // P0-15：窗口先出，渲染层首个请求在此等待数据后台加载完成
     let sessionRecovered = false;
     try { sessionRecovered = fs.existsSync(_sessionFile()); _clearSession(); } catch (_) {}
     if (sessionRecovered) runlog.warn('检测到上次未正常退出，数据已保留', {});
@@ -369,7 +396,8 @@ function registerIpc() {
     if (store._recoveredFrom) { out.recovered = store._recoveredFrom; store._recoveredFrom = null; } // 一次性透传「读档自愈」提示
     return out;
   });
-  ipcMain.handle('store:save', (e, d) => {
+  ipcMain.handle('store:save', async (e, d) => {
+    await dataBooted; // P0-15：启动早期渲染层可能先触发保存，等待数据就绪再落盘
     if (d && d.__patch) {
       /* 差量补丁：只合并「有值字段」，未携带的实体分片/关系网沿用主进程 doc，避免重复写盘 */
       const p = d;
@@ -1593,12 +1621,12 @@ function registerIpc() {
 
 app.whenReady().then(() => {
   registerIpc();
-  // 启动时对已有明文 API Key 做一次加密迁移
-  if (hardenAiKeyIfNeeded()) store.save(doc);
   // 向 AI 层注入提示词中枢上下文：dataDir 用于分场景记忆读写；此后各 AI 调用自动注入总提示词+本场景记忆
   ai.setHubContext({ dataDir });
+  // P0-15 启动路径优化：窗口先出（数据在后台 bootData 异步加载；明文 Key 加密迁移已并入其中）
   windowManager.createWindow();
   windowManager.createTray();
+  bootData();
   // 启动静默检查更新：受「启动时自动检查」开关与检查间隔（默认 24h）限制，失败只落日志不打扰用户
   setTimeout(() => { try { if (updater) updater.autoCheck(); } catch (_) {} }, 60 * 1000);
   // 自动备份：按用户配置的间隔（默认 30 分钟）+ 退出前各一次。

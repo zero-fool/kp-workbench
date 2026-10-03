@@ -4,6 +4,7 @@
  * 状态归属：win / isQuitting 仍由 main.js 持有——registerIpc 与 app 生命周期在多处依赖它们，
  * 若搬进本模块会造成可变状态跨模块复制，窗口销毁重建后 main.js 侧引用即失配。
  * 因此本模块只持有自己独有的 tray / trayHintShown，win / isQuitting 一律经访问器读写。 */
+const fs = require('fs');
 const path = require('path');
 const { BrowserWindow, Tray, Menu, nativeImage, shell, app } = require('electron');
 
@@ -47,7 +48,9 @@ function createWindowManager({ runlog, getWin, setWin, getQuitting, setQuitting 
     });
     setWin(win);
     win.setMenuBarVisibility(false);
-    win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+    /* 渲染层优先加载 esbuild 打包产物（out/renderer/，单 bundle）；未构建时回退源目录，开发/测试均可运行 */
+    const bundledIndex = path.join(__dirname, '..', '..', 'out', 'renderer', 'index.html');
+    win.loadFile(fs.existsSync(bundledIndex) ? bundledIndex : path.join(__dirname, '..', 'renderer', 'index.html'));
     win.on('maximize', () => { try { win.webContents.send('win:maximized', true); } catch (_) {} });
     win.on('unmaximize', () => { try { win.webContents.send('win:maximized', false); } catch (_) {} });
     // 关闭到托盘：直接关闭窗口（含自绘标题栏的关闭按钮）时拦下，隐藏而非退出，避免误关丢状态。

@@ -13,6 +13,7 @@ const NAME = {
  * 因此遭遇不会出现在资料卡网格 / 全局搜索 / 关系网等既有卡片体系中，仅作为数据被持久化与计数。 */
 const KIND_LIST = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore', 'encounters'];
 const NAME_FIELD = { pcs: 'name', npcs: 'name', regions: 'name', logs: 'name', mobs: 'name', rules: 'name', lore: 'name', encounters: 'name' };
+const SNAPSHOT_MIN_INTERVAL = 60 * 1000;   // P0-14 版本快照最小间隔（默认 1 分钟；可经 settings.snapshotMinutes 调大，单位分钟）
 
 function emptyData() {
   return {
@@ -36,12 +37,13 @@ class DataStore {
     this.backups = path.join(folder, 'backups');
     this.snapshots = path.join(folder, 'snapshots');   // 自动「版本快照」目录（随每次内容变更去重沉淀）
     this._lastSnapHash = null;                           // 内容哈希去重：内容没变就不新写快照
-    this._lastSnapTs = 0;                                // 节流：两次快照之间至少间隔 8 秒
+    this._lastSnapTs = 0;                                // 节流：两次快照之间至少间隔 SNAPSHOT_MIN_INTERVAL（可配置）
     this._recoveredFrom = null;                          // 读档自愈来源（'backup' | 'snapshot' | null）
     this.maps = path.join(folder, 'maps');               // 外置底图目录（base64 → 文件）
     this._lastWriteHash = null;                          // write() 已算好的哈希，供 maybeSnapshot 复用
     this._shardDir = null;                               // 分片目录路径（load 时确定）
     this._entityHashes = {};                             // 各实体类型的上次写入哈希，用于增量写入
+    this._lastMetaHash = null;                           // _meta.json 上次写入哈希，内容未变不写盘
     this._snapBusy = false;                              // 快照异步写入进行中标记，避免并发写重名
     this._doc = null;                                    // 内存态文档缓存：供备份轮询/meta 复用，避免周期性整档读盘
     fs.mkdirSync(this.folder, { recursive: true });
@@ -52,7 +54,7 @@ class DataStore {
 
   fileFor(name) { return name === 'main' ? path.join(this.folder, 'kp-data.json') : path.join(this.folder, 'kp-' + name + '.json'); }
 
-  switchTo(name) { this.name = name; this.file = this.fileFor(name); this._shardDir = null; this._entityHashes = {}; this._lastSnapHash = null; this._lastSnapTs = 0; }
+  switchTo(name) { this.name = name; this.file = this.fileFor(name); this._shardDir = null; this._entityHashes = {}; this._lastMetaHash = null; this._lastSnapHash = null; this._lastSnapTs = 0; }
 
   /* 归档目录：所有档案 JSON 存于 data/ 文件夹内，主档案固定为 kp-data.json。
    * 注意：主文件 kp-data.json 必须被目录扫描显式跳过，否则会被 kp-*.json
@@ -184,14 +186,19 @@ class DataStore {
   async maybeSnapshot(d) {
     if (this._snapBusy) return;                                       // 上一次快照未落地，本轮回退跳过，避免并发写重名
     const now = Date.now();
-    if (this._lastSnapTs && now - this._lastSnapTs < 8000) return;    // 8 秒节流，避免高频改动的磁盘压力
+    // P0-14 降频：默认 1 分钟沉淀一次；可经 settings.snapshotMinutes（分钟）调大，避免高频改动的磁盘压力
+    const cfgMin = d && d.settings && Number(d.settings.snapshotMinutes);
+    const interval = cfgMin > 0 && Number.isFinite(cfgMin)
+      ? Math.max(cfgMin * 60 * 1000, SNAPSHOT_MIN_INTERVAL)
+      : SNAPSHOT_MIN_INTERVAL;
+    if (this._lastSnapTs && now - this._lastSnapTs < interval) return;
     const h = this._lastWriteHash;                                    // 复用 write() 已算好的哈希，不再重复序列化
     if (!h || h === this._lastSnapHash) { this._lastSnapTs = now; return; }
     const ts = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19) + '-' + Math.floor(now / 1000);
     const name = 'snap-' + ts + '.json';
     this._snapBusy = true;
     try {
-      await fs.promises.writeFile(path.join(this.snapshots, name), JSON.stringify(d, null, 2), 'utf8');
+      await fs.promises.writeFile(path.join(this.snapshots, name), JSON.stringify(d), 'utf8');  // 紧凑序列化
       this._lastSnapHash = h; this._lastSnapTs = now;
       pruneSnapshots(this.snapshots, 40);                             // 只保留最近 40 份，防止无限增长
     } catch (_) {
@@ -401,11 +408,11 @@ class DataStore {
     }
 
     if (this._shardDir) {
-      /* 分片写入：只重写哈希变更的实体文件，_meta.json 每次都写（体积极小） */
+      /* 分片写入：只重写哈希变更的实体文件（紧凑序列化），_meta.json 也按哈希跳过未变更 */
       fs.mkdirSync(this._shardDir, { recursive: true });
       const hashes = [];
       for (const k of KIND_LIST) {
-        const content = JSON.stringify(d.entities[k] || [], null, 2);
+        const content = JSON.stringify(d.entities[k] || []);
         const h = quickHash(content);
         hashes.push(h);
         if (h !== this._entityHashes[k]) {
@@ -416,15 +423,20 @@ class DataStore {
           }
         }
       }
-      // 写入 _meta.json（不含 entities）
+      // 写入 _meta.json（不含 entities）；内容未变则跳过，减少无谓写盘
       const meta = Object.assign({}, d);
       delete meta.entities;
-      const metaText = JSON.stringify(meta, null, 2);
-      this._writeShardFile('_meta', path.join(this._shardDir, '_meta.json'), metaText);
+      const metaText = JSON.stringify(meta);
+      const mh = quickHash(metaText);
+      if (mh !== this._lastMetaHash) {
+        if (this._writeShardFile('_meta', path.join(this._shardDir, '_meta.json'), metaText)) {
+          this._lastMetaHash = mh;
+        }
+      }
       this._lastWriteHash = quickHash(metaText + hashes.join(','));
     } else {
       /* 旧格式单文件写入（未迁移到分片的兼容路径） */
-      const text = JSON.stringify(d, null, 2);
+      const text = JSON.stringify(d);
       this._writeShardFile('_legacy', this.file, text);
       this._lastWriteHash = quickHash(text);
     }

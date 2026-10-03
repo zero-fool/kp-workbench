@@ -2127,6 +2127,62 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       ? true : '风控治理样式缺失';
   });
 
+  console.log('\n[P2-17] app.js 拆分视图模块：工厂在册 / 代理桩对齐 / 水合上下文 / 打包守卫');
+  const viewsDir = path.join(RENDERER_DIR, 'views');
+  const viewFiles = fs.readdirSync(viewsDir).filter(f => f.endsWith('.js')).sort();
+  const viewSrcs = viewFiles.map(f => fs.readFileSync(path.join(viewsDir, f), 'utf8'));
+  const appSrc = fs.readFileSync(APP, 'utf8');
+  check('P2-17 视图模块在册：stats / runlog / help / changelog 四个工厂文件', () => {
+    const names = viewFiles.map(f => f.replace(/\.js$/, ''));
+    return (names.includes('stats') && names.includes('runlog') && names.includes('help') && names.includes('changelog'))
+      ? true : '缺视图模块文件: ' + names.join(', ');
+  });
+  check('P2-17 工厂注册：每个 views/*.js 都以 window.KPViews.<名> 注册工厂', () => {
+    const bad = viewFiles.filter(f => {
+      const name = f.replace(/\.js$/, '');
+      return !new RegExp('window\\.KPViews\\.' + name + '\\s*=\\s*function\\s*\\(KP\\)').test(fs.readFileSync(path.join(viewsDir, f), 'utf8'));
+    });
+    return bad.length ? '未注册: ' + bad.join(', ') : true;
+  });
+  check('P2-17 代理桩对齐：app.js 桩调用的方法均在对应工厂 return 中', () => {
+    const membersOf = {};
+    for (const f of viewFiles) {
+      const code = fs.readFileSync(path.join(viewsDir, f), 'utf8');
+      const name = f.replace(/\.js$/, '');
+      /* 工厂 return 是文件内最后一个 return 对象（视图函数内部可能有更早的 return，取其最后者） */
+      const all = [...code.matchAll(/return\s*\{([\s\S]*?)\};/g)];
+      const m = all.length ? all[all.length - 1] : null;
+      membersOf[name] = m ? m[1].split(',').map(s => s.trim().split(':')[0].split(/\s+/)[0]).filter(Boolean) : [];
+    }
+    const miss = [];
+    /* 逐个代理桩匹配：每个桩是「const v = window.KPViews.<名>; if (v && typeof v.<方法> === 'function')」 */
+    for (const m of appSrc.matchAll(/window\.KPViews\.([A-Za-z0-9_]+);[\s\S]*?typeof v\.([A-Za-z0-9_]+)\s*===\s*['"]function['"]/g)) {
+      const name = m[1], fn = m[2];
+      if (!membersOf[name].includes(fn)) miss.push(name + '.' + fn);
+    }
+    return miss.length ? '缺失: ' + miss.join(', ') : true;
+  });
+  check('P2-17 水合上下文：KP 注入 DATA_TYPE / STATS_K 供视图使用', () => {
+    return (/updHumanSize,\s*DATA_TYPE,\s*STATS_K/.test(appSrc) && /for \(const k of Object\.keys\(reg\)\)/.test(appSrc))
+      ? true : 'hydrateViews 上下文未注入共享常量';
+  });
+  check('P2-17 接线：index.html 加载全部 4 个视图脚本', () => {
+    for (const n of ['changelog', 'help', 'stats', 'runlog']) {
+      if (!new RegExp('<script src="views/' + n + '\.js"></script>').test(html)) return '缺 views/' + n + '.js';
+    }
+    return true;
+  });
+  check('P2-17 打包守卫：out/renderer 产物单 bundle + assets 复制', () => {
+    const outHtml = path.join(__dirname, '..', 'out', 'renderer', 'index.html');
+    if (!fs.existsSync(outHtml)) return true; // 未构建时跳过（npm run build:renderer 后生效）
+    const o = fs.readFileSync(outHtml, 'utf8');
+    const tags = [...o.matchAll(/<script[^>]+src="([^"]+)"[^>]*>/g)].map(m => m[1]);
+    const local = tags.filter(s => !/^(https?:)?\/\//.test(s));
+    const assets = fs.readdirSync(path.join(__dirname, '..', 'out', 'renderer', 'assets'));
+    return (local.length === 1 && local[0] === 'renderer.bundle.js' && fs.existsSync(path.join(__dirname, '..', 'out', 'renderer', 'renderer.bundle.js')) && assets.length === 4)
+      ? true : '产物 bundle/资产不齐（构建后重跑）';
+  });
+
   console.log('\n[回归测试汇总] GREEN ' + pass + ' · RED ' + fail);
   process.exit(fail ? 1 : 0);
 })();

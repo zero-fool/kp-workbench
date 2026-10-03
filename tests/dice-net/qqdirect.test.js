@@ -5,7 +5,7 @@ const { EventEmitter } = require('node:events');
 const { normalizeQqEvent, makeSessionId, planQqDirectMessages, textFromElements } =
   require('../../src/dice-net/qqdirect/normalize');
 const { loadEngine, createEngineClient } = require('../../src/dice-net/qqdirect/engine');
-const { createQqDirectAdapter, toDataUrl, probeSignService, readDeviceFingerprint } =
+const { createQqDirectAdapter, toDataUrl, probeSignService, readDeviceFingerprint, isFakeOnline, classifyQqError } =
   require('../../src/dice-net/qqdirect');
 
 /* ---------- 归一：icqq 事件 → MessageIn ---------- */
@@ -132,16 +132,26 @@ function fakeEngine() {
   return { mod: { createClient }, log, clients };
 }
 
-function makeAdapter(extra) {
+function makeAdapter(extra, depsExtra) {
   const fe = fakeEngine();
   const events = [];
   const inbound = [];
-  const adapter = createQqDirectAdapter({
+  const adapter = createQqDirectAdapter(Object.assign({
     cfg: { qqdirect: Object.assign({ engine: fe.mod }, extra || {}) },
     onQqEvent: (p) => events.push(p),
-  });
+  }, depsExtra || {}));
   adapter.onInbound((m) => inbound.push(m));
   return { adapter, fe, events, inbound };
+}
+
+/* 可控定时器：捕获 schedule/clear，flush 手动触发已到期的回调（用于重连闭环测试）。 */
+function makeScheduler() {
+  const queue = [];
+  let seq = 0;
+  const schedule = (fn, ms) => { const h = ++seq; queue.push({ h, fn, ms }); return h; };
+  const clear = (h) => { const i = queue.findIndex((q) => q.h === h); if (i >= 0) queue.splice(i, 1); };
+  const flush = async () => { const copy = queue.splice(0); for (const t of copy) await t.fn(); };
+  return { schedule, clear, queue, flush };
 }
 
 test('适配器：初始状态 stopped，start 无参只准备客户端', async () => {
@@ -382,5 +392,138 @@ test('退避：登录失败后冷却期内再次登录被拦截', async () => {
   fe.clients[0].emit('system.login.error', { code: 45, message: '密码错误' });
   assert.ok(adapter.status().cooldownLeft > 0);
   await assert.rejects(() => adapter.loginQr(12345), /过于频繁/);
+  await adapter.stop();
+});
+
+/* ---------- P0-5：断线自动重连闭环 ---------- */
+
+test('P0-5 断线自动重连：network 事件进入 starting 并调度重连，到期后调用登录', async () => {
+  const sched = makeScheduler();
+  const { adapter, fe, events } = makeAdapter({}, { schedule: sched.schedule, clearSchedule: sched.clear });
+  await adapter.start();
+  const c = fe.clients[0];
+  c.emit('system.online');
+  assert.strictEqual(adapter.status().state, 'running');
+
+  c.emit('system.offline.network', { message: '网络波动' });
+  let st = adapter.status();
+  assert.strictEqual(st.state, 'starting');
+  assert.strictEqual(st.reconnect.scheduled, true);
+  assert.strictEqual(st.reconnect.attempts, 1);
+  assert.ok(events.some((e) => e.type === 'reconnect-scheduled'));
+  assert.ok(events.some((e) => e.type === 'offline'));       // setState('starting','offline')
+  assert.strictEqual(sched.queue.length, 1);
+
+  await sched.flush();
+  assert.ok(fe.log.some((r) => r[0] === 'login'));          // 自动重连真正调起登录
+  await adapter.stop();
+});
+
+test('P0-5 被踢/风控不自动重登：kickoff 取消重连计划并进入 stopped', async () => {
+  const sched = makeScheduler();
+  const { adapter, fe, events } = makeAdapter({}, { schedule: sched.schedule, clearSchedule: sched.clear });
+  await adapter.start();
+  const c = fe.clients[0];
+  c.emit('system.online');
+  c.emit('system.offline.network', {});
+  assert.strictEqual(adapter.status().reconnect.scheduled, true);
+
+  c.emit('system.offline.kickoff', { code: 3, message: '其它设备登录' });
+  const st = adapter.status();
+  assert.strictEqual(st.state, 'stopped');
+  assert.strictEqual(st.reconnect.scheduled, false);
+  assert.strictEqual(sched.queue.length, 0);                 // 计划已被取消
+  assert.strictEqual(fe.log.some((r) => r[0] === 'login'), false);
+  assert.ok(events.some((e) => e.type === 'kickoff'));
+  await adapter.stop();
+});
+
+test('P0-5 连续重连超过上限转人工：停止调度并进入 error 广播 giveup', async () => {
+  const sched = makeScheduler();
+  const { adapter, fe, events } = makeAdapter({}, { schedule: sched.schedule, clearSchedule: sched.clear });
+  await adapter.start();
+  const c = fe.clients[0];
+  c.emit('system.online');
+  for (let i = 0; i <= 5; i += 1) c.emit('system.offline.network', {}); // 1..6 次：前 5 次调度，第 6 次 giveup
+  const st = adapter.status();
+  assert.strictEqual(st.reconnect.scheduled, false);
+  assert.strictEqual(st.state, 'error');
+  assert.match(st.lastError, /仍未恢复/);
+  assert.strictEqual(sched.queue.length, 0);
+  assert.ok(events.some((e) => e.type === 'reconnect-giveup'));
+  await adapter.stop();
+});
+
+/* ---------- P0-6：假在线检测 ---------- */
+
+test('P0-6 假在线判定（纯函数）：超时/非 running/无消息/阈值关闭', () => {
+  assert.strictEqual(isFakeOnline(100000, 'running', 90000, 5000), true);    // 静默 10s ≥ 5s
+  assert.strictEqual(isFakeOnline(100000, 'running', 96000, 5000), false);   // 静默 4s < 5s
+  assert.strictEqual(isFakeOnline(100000, 'stopped', 90000, 5000), false);   // 非 running
+  assert.strictEqual(isFakeOnline(100000, 'running', 0, 5000), false);       // 尚无消息不判
+  assert.strictEqual(isFakeOnline(100000, 'running', 90000, 0), false);      // 阈值 ≤0 = 关闭
+});
+
+test('P0-6 假在线巡检：超时无消息触发重连计划，消息到达则刷新 lastMsgAt 保持健康', async () => {
+  let now = 0;
+  const sched = makeScheduler();
+  const { adapter, fe, events } = makeAdapter(
+    { onlineSilenceMs: 60000 },                              // 阈值 60s，便于测试
+    { now: () => now, schedule: sched.schedule, clearSchedule: sched.clear },
+  );
+  await adapter.start();
+  const c = fe.clients[0];
+  now = 1000;
+  c.emit('system.online');                                   // lastMsgAt = 1000
+  c.emit('message.group', { message_type: 'group', group_id: 5, user_id: 6, raw_message: '.r', sender: {} });
+  assert.strictEqual(adapter.status().lastMsgAt, 1000);
+
+  now = 1000 + 30 * 1000;                                    // 静默 30s < 60s → 健康
+  adapter._runFakeOnlineCheck();
+  assert.strictEqual(adapter.status().state, 'running');
+  assert.strictEqual(adapter.status().reconnect.scheduled, false);
+
+  now = 1000 + 61 * 1000;                                    // 静默 61s ≥ 60s → 假在线
+  adapter._runFakeOnlineCheck();
+  const st = adapter.status();
+  assert.strictEqual(st.state, 'starting');
+  assert.strictEqual(st.reconnect.scheduled, true);
+  assert.ok(events.some((e) => e.type === 'fake-online'));   // setState('starting','fake-online')
+  assert.ok(events.some((e) => e.type === 'reconnect-scheduled'));
+  await adapter.stop();
+});
+
+/* ---------- P1-7：登录错误分类 ---------- */
+
+test('P1-7 错误分类（纯函数）：错误码优先、文案兜底、未知码归 other', () => {
+  assert.strictEqual(classifyQqError('1', '').category, 'password');       // 密码错码
+  assert.strictEqual(classifyQqError('10', '').category, 'banned');        // 冻结码
+  assert.strictEqual(classifyQqError('155', '').category, 'risk');         // 风控码
+  assert.strictEqual(classifyQqError('120', '').category, 'device');       // 新设备验证码
+  assert.strictEqual(classifyQqError('5', '').category, 'version');        // 版本过低码
+  assert.strictEqual(classifyQqError('262', '').category, 'network');      // 网络码
+  assert.strictEqual(classifyQqError('', '账号已被冻结').category, 'banned');  // 文案兜底
+  assert.strictEqual(classifyQqError('', '密码错误次数过多').category, 'password');
+  assert.strictEqual(classifyQqError('9999', '未知机器码').category, 'unknown'); // 未知
+  const cls = classifyQqError('155', '频繁');
+  assert.ok(cls.hint.length > 10);                                          // 每条建议都给了可操作文案
+});
+
+test('P1-7 登录失败事件携带分类与建议：状态上报 errCategory/errHint，成功后清除', async () => {
+  const { adapter, fe, events } = makeAdapter();
+  await adapter.start();
+  const c = fe.clients[0];
+  c.emit('system.login.error', { code: 1, message: '密码错误' });
+  let st = adapter.status();
+  assert.strictEqual(st.state, 'error');
+  assert.strictEqual(st.errCategory, 'password');
+  assert.ok(st.errHint && st.errHint.length > 10);
+  const ev = events.filter((e) => e.type === 'login-error').at(-1); // 取显式 emit 的那条（setState 广播无分类字段）
+  assert.ok(ev);
+  assert.strictEqual(ev.errCategory, 'password');
+  assert.strictEqual(ev.errCode, 1);
+  c.emit('system.online');                                    // 登录成功 → 分类清除
+  st = adapter.status();
+  assert.strictEqual(st.errCategory, null);
   await adapter.stop();
 });

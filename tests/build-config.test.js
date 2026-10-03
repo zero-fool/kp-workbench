@@ -20,6 +20,15 @@ test('打包：build.files 不含 bridge（旧桥插件已退役）且保留 src
   assert.ok(files.includes('src/**/*'), 'src 应保留在打包清单');
 });
 
+test('打包：build.files 包含 out/**/*（渲染层构建产物随包分发）', () => {
+  const files = (pkg.build && pkg.build.files) || [];
+  assert.ok(files.includes('out/**/*'), 'out 应加入打包清单: ' + files.join(', '));
+});
+
+test('打包：package.json 提供 build:renderer 脚本', () => {
+  assert.match(pkg.scripts['build:renderer'] || '', /node tools\/build-renderer\.js/);
+});
+
 test('开发日志：docs/DEVLOG.md 存在且含 v3.0 条目', () => {
   const devlog = fs.readFileSync(path.join(ROOT, 'docs', 'DEVLOG.md'), 'utf8');
   assert.match(devlog, /## v3\.0/);

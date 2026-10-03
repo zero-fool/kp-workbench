@@ -27,6 +27,11 @@ const DEFAULT_PLATFORM = 'android';   // 默认移动端协议：与电脑端官
 const LOGIN_MIN_INTERVAL = 3000;      // 同一会话两次「发起登录」的最小间隔（频控，避免连点）
 const BACKOFF_BASE = 8000;            // 首次失败冷却 8s
 const BACKOFF_MAX = 5 * 60 * 1000;    // 冷却上限 5min
+const RECONNECT_BASE = 3000;          // 断线自动重连：首次等待 3s
+const RECONNECT_MAX = 2 * 60 * 1000;  // 重连等待上限 2min（指数退避）
+const RECONNECT_MAX_ATTEMPTS = 5;     // 连续自动重连上限，超过后转人工处理
+const FAKE_ONLINE_THRESHOLD = 10 * 60 * 1000; // 假在线判定：running 状态连续无消息时长（默认 10min）
+const FAKE_CHECK_INTERVAL = 60 * 1000;        // 假在线巡检间隔
 const DEVICE_FILE = 'device.json';    // icqq 在此文件缓存设备指纹，复用即「固定设备」
 const CONFLICT_HINT = '同一 QQ 号与电脑端官方 QQ 同时在线会互相挤下线；骰娘建议使用独立小号，或改用「高级」里的 OneBot 中转。';
 const NO_SIGN_HINT = '未配置签名服务：icqq 登录极易触发滑动/短信验证甚至冻结，建议填写签名服务地址（QSign 等）并自检，或改用「高级」里的 OneBot 中转。';
@@ -106,19 +111,52 @@ function toDataUrl(image) {
   return '';
 }
 
+/** P0-6 假在线判定（纯函数，便于单测）：
+ *  only running 状态、且确有收到过消息、且静默时长 ≥ 阈值时判为假在线；阈值 ≤ 0 视为关闭。 */
+function isFakeOnline(now, state_, lastMsgAt, thresholdMs) {
+  return thresholdMs > 0 && state_ === 'running' && lastMsgAt > 0 && now - lastMsgAt >= thresholdMs;
+}
+
+/* P1-7：QQ 登录错误分类（纯函数，便于单测）——把 icqq 错误码/文案映射为
+ * 风控 / 冻结 / 密码错 / 设备锁 / 版本 / 网络 / 其他 等类别，每类附一段用户可操作建议。
+ * 优先级：先按错误码精确匹配，再按文案关键词兜底（避免未知码直接甩给用户）。 */
+const QQ_ERR_RULES = [
+  { cat: 'banned', code: /^(6|10|16|17|38|103|104|235|1501)$/, msg: /冻结|封禁|被锁|锁定/, hint: '该账号疑似被冻结 / 封禁（频繁登录或设备异常会触发）。请用手机 QQ 官方渠道申诉解封，或换独立小号；短时间内反复重试会加重风控。' },
+  { cat: 'password', code: /^(1|2|9|33|34)$/, msg: /密码错误|密码不正确|账号或密码/, hint: '账号或密码不正确（或输错次数过多）。请核对 QQ 账号与密码后重试；连续输错会触发更严风控，建议稍作间隔。' },
+  { cat: 'device', code: /^(21|120)$/, msg: /设备锁|新设备|设备验证/, hint: '新设备登录需要验证（设备锁 / 新设备确认）。请优先改用「扫码登录」在手机 QQ 上确认；或先在风控治理中配置签名服务并固定设备指纹。' },
+  { cat: 'version', code: /^(5|24|51|64)$/, msg: /版本过低|版本不兼容|需要更新/, hint: '协议版本过低 / 引擎不兼容。请在「风控治理」中填写更高的协议版本 ver（如 8.9.63），或核对签名服务与引擎版本是否匹配。' },
+  { cat: 'risk', code: /^(35|36|37|50|52|155)$/, msg: /频繁|过快|风控|失败次数过多|需要验证码/, hint: '登录过于频繁触发风控。请按提示冷却后再试（连续失败会延长冷却）；建议配置签名服务并保持设备指纹固定，或改用独立小号。' },
+  { cat: 'network', code: /^(262|100)$/, msg: /网络|超时|无法连接|服务器错误/, hint: '网络异常导致登录失败。请检查网络连通性、签名服务地址是否可达，稍后重试。' },
+];
+function classifyQqError(code, message) {
+  const c = String(code == null ? '' : code).trim();
+  const m = String(message == null ? '' : message);
+  for (const r of QQ_ERR_RULES) { if (c && r.code.test(c)) return { category: r.cat, hint: r.hint }; }
+  for (const r of QQ_ERR_RULES) { if (r.msg.test(m)) return { category: r.cat, hint: r.hint }; }
+  return { category: 'unknown', hint: '未知登录错误。请查看上方错误详情；建议先在「风控治理」配置签名服务再试，持续失败则改用独立小号或 OneBot 中转。' };
+}
+
 function createQqDirectAdapter(deps) {
   const o = deps || {};
   const cfg = (o.cfg && o.cfg.qqdirect) || {};
   const engine = cfg.engine;                                  // 引擎注入点（单测 / 自备实现）
   const onEvent = typeof o.onQqEvent === 'function' ? o.onQqEvent : null;
   const dataDir = cfg.dataDir || o.dataDir || path.join(os.homedir(), '.kp-workbench', 'qq');
+  const nowFn = typeof o.now === 'function' ? o.now : Date.now;             // 时间注入点（单测）
+  const schedule = o.schedule || ((fn, ms) => setTimeout(fn, ms));          // 定时器注入点（单测）
+  const cancelSchedule = o.clearSchedule || ((h) => clearTimeout(h));
 
   let cb = null;
   let client = null;
   let started = false;
   let state = 'stopped';
   let lastError = null;
+  let errInfo = null;                                            // P1-7：最近一次登录错误的分类与建议（category/hint）
   let reconnects = 0;
+  let reconnectTimer = null;                                   // P0-5 自动重连定时器
+  let reconnectNextAt = 0;                                     // 下次自动重连时刻（供界面展示）
+  let lastMsgAt = 0;                                           // P0-6 最后收到消息时间（假在线判定）
+  let fakeCheckTimer = null;                                   // P0-6 假在线巡检定时器
   let engineName = '';
   let clientKey = '';                                         // 创建 client 时的配置指纹；配置变更后据此重建客户端
   let qrTimer = null;
@@ -206,6 +244,67 @@ function createQqDirectAdapter(deps) {
 
   function setState(next, type) { state = next; emit(type || 'state'); }
 
+  /* P0-5 自动重连闭环：网络抖动 → 指数退避自动重连；被踢 / 风控 / 超限 → 只提示人工，绝不自动重登。
+   * 被 scheduleReconnect 调用的各处（network 掉线 / 假在线巡检）都在 increment reconnects 后进入，
+   * 重连计划可被新的掉线事件重新武装（退避随次数增大），超过上限即放弃转人工。 */
+  function clearReconnect() {
+    if (reconnectTimer) { cancelSchedule(reconnectTimer); reconnectTimer = null; }
+    reconnectNextAt = 0;
+  }
+  function scheduleReconnect(reason, hint) {
+    if (reconnects > RECONNECT_MAX_ATTEMPTS) {               // 连续多次失败：停止自动重连，转人工
+      lastError = `连续自动重连 ${reconnects} 次仍未恢复，请检查网络后手动重新登录`;
+      logDiag('reconnect-giveup', lastError);
+      clearReconnect();
+      setState('error', 'reconnect-giveup');
+      emit('reconnect-giveup', { reason, reconnectAttempts: reconnects });
+      return;
+    }
+    const wait = Math.min(RECONNECT_MAX, RECONNECT_BASE * Math.pow(2, Math.min(reconnects - 1, 6)));
+    clearReconnect();
+    reconnectNextAt = nowFn() + wait;
+    logDiag('reconnect-schedule', `${reason}：第 ${reconnects} 次，${Math.round(wait / 1000)}s 后重连`);
+    lastError = `${hint}（${Math.round(wait / 1000)}s 后自动重连，第 ${reconnects} 次）`;
+    emit('reconnect-scheduled', { reason, waitMs: wait, attempt: reconnects, nextAt: reconnectNextAt });
+    reconnectTimer = schedule(async () => {
+      reconnectTimer = null;
+      reconnectNextAt = 0;
+      if (!started || !client) return;                        // 已登出/停止，放弃
+      logDiag('reconnect', '开始自动重连');
+      try {
+        if (typeof client.reconnect === 'function') await client.reconnect();
+        else if (me.uin) await client.login(me.uin);
+        else await client.login();
+      } catch (e) {
+        lastError = '自动重连失败：' + ((e && e.message) || e);
+        noteLoginFailure();
+        logDiag('reconnect-fail', lastError);
+        setState('error', 'reconnect-error');
+        emit('reconnect-error', { error: lastError });
+      }
+    }, wait);
+    if (reconnectTimer && reconnectTimer.unref) reconnectTimer.unref();
+  }
+
+  /* P0-6 假在线巡检：running 状态下连续超过阈值未收到消息即视为假在线，并复用重连闭环。 */
+  function fakeCheckMs() { return Number(cfg.fakeCheckMs) > 0 ? Number(cfg.fakeCheckMs) : FAKE_CHECK_INTERVAL; }
+  function fakeThresholdMs() { return Number(cfg.onlineSilenceMs) > 0 ? Number(cfg.onlineSilenceMs) : FAKE_ONLINE_THRESHOLD; }
+  function checkFakeOnline() {
+    const now = nowFn();
+    if (!isFakeOnline(now, state, lastMsgAt, fakeThresholdMs())) return;
+    logDiag('fake-online', `已在线但 ${Math.round((now - lastMsgAt) / 1000)}s 无消息，疑似假在线`);
+    setState('starting', 'fake-online');
+    scheduleReconnect('fake-online', '长时间未收到消息，疑似假在线');
+  }
+  function startFakeCheck() {
+    stopFakeCheck();
+    fakeCheckTimer = setInterval(checkFakeOnline, fakeCheckMs());
+    if (fakeCheckTimer.unref) fakeCheckTimer.unref();
+  }
+  function stopFakeCheck() {
+    if (fakeCheckTimer) { clearInterval(fakeCheckTimer); fakeCheckTimer = null; }
+  }
+
   function wire(c) {
     c.on('system.login.qrcode', (e) => {
       qr.image = toDataUrl(e && e.image);
@@ -231,11 +330,15 @@ function createQqDirectAdapter(deps) {
     });
     c.on('system.login.error', (e) => {
       const code = (e && e.code) || '';
-      lastError = `登录失败 ${code}：${(e && e.message) || '未知错误'}`.trim();
+      const message = (e && e.message) || '未知错误';
+      const cls = classifyQqError(code, message);               // P1-7：错误分类 + 可操作建议
+      errInfo = cls;
+      lastError = `登录失败 ${code}：${message}`.trim();
       noteLoginFailure();
       stopQrPoll();
       logDiag('login-error', lastError);
       setState('error', 'login-error');
+      emit('login-error', { errCode: code, errCategory: cls.category, errHint: cls.hint });
     });
     c.on('system.online', () => {
       stopQrPoll();
@@ -244,18 +347,26 @@ function createQqDirectAdapter(deps) {
       me.uin = c.uin || me.uin;
       me.nickname = c.nickname || me.nickname;
       lastError = null;
+      errInfo = null;                                            // P1-7：登录成功即清除错误分类
       reconnects = 0;
+      clearReconnect();
+      lastMsgAt = nowFn();
       diag.loginAttempts = 0; diag.cooldownUntil = 0; diag.notedSeq = -1; // 登录成功即清零退避
       logDiag('online', `已在线 uin=${me.uin || ''}`);
       setState('running', 'online');
+      startFakeCheck();
     });
     c.on('system.offline.network', (e) => {
+      stopFakeCheck();
       reconnects += 1;
-      lastError = `网络中断，正在重连${e && e.message ? '：' + e.message : ''}`;
-      logDiag('offline-network', lastError);
+      const reason = (e && e.message) || '网络中断';
+      logDiag('offline-network', `网络中断${reason ? '：' + reason : ''}`);
       setState('starting', 'offline');
+      scheduleReconnect('network', `网络中断${reason ? '：' + reason : ''}`);
     });
     c.on('system.offline.kickoff', (e) => {
+      stopFakeCheck();
+      clearReconnect();
       const code = (e && e.code) || '';
       const message = (e && e.message) || '';
       lastError = `已被踢下线${code ? '（原因码 ' + code + '）' : ''}${message ? '：' + message : ''}`;
@@ -267,13 +378,15 @@ function createQqDirectAdapter(deps) {
       emit('kickoff', { kickCode: code, kickMessage: message, conflict: CONFLICT_HINT });
     });
     c.on('system.offline', () => {
-      if (state === 'running') { lastError = '连接已断开'; logDiag('offline', lastError); setState('stopped', 'offline'); }
+      if (state === 'running') { stopFakeCheck(); lastError = '连接已断开'; logDiag('offline', lastError); setState('stopped', 'offline'); }
     });
     c.on('message.group', (e) => {
+      lastMsgAt = nowFn();
       const msg = normalizeQqEvent(e);
       if (msg && cb) cb(msg);
     });
     c.on('message.private', (e) => {
+      lastMsgAt = nowFn();
       const msg = normalizeQqEvent(e);
       if (msg && cb) cb(msg);
     });
@@ -333,8 +446,11 @@ function createQqDirectAdapter(deps) {
   }
 
   async function doLogin(fn) {
+    stopFakeCheck();
+    clearReconnect();                       // 用户手动发起登录时取消旧重连计划
     started = true;
     lastError = null;
+    errInfo = null;                          // P1-7：重新登录时清除上次错误分类
     attemptSeq += 1;
     qr.image = ''; qr.tip = ''; qr.at = 0;
     pending = null;
@@ -412,6 +528,8 @@ function createQqDirectAdapter(deps) {
 
     async logout() {
       stopQrPoll();
+      stopFakeCheck();
+      clearReconnect();
       const c = client;
       client = null;
       started = false;
@@ -419,6 +537,8 @@ function createQqDirectAdapter(deps) {
       qr.image = ''; qr.tip = ''; qr.at = 0;
       me.uin = null; me.nickname = '';
       lastError = null;
+      reconnects = 0;
+      lastMsgAt = 0;
       diag.lastLoginAt = 0; // 主动登出后允许立即重新登录（失败退避 cooldownUntil 仍保留）
       if (c && typeof c.logout === 'function') { try { await c.logout(false); } catch (_) {} }
       state = 'stopped';
@@ -457,6 +577,15 @@ function createQqDirectAdapter(deps) {
         phone: pending ? pending.phone : '',
         reconnects,
         lastError,
+        errCategory: errInfo ? errInfo.category : null,          // P1-7：错误分类（界面给出可操作建议）
+        errHint: errInfo ? errInfo.hint : '',
+        reconnect: {
+          scheduled: !!reconnectTimer,
+          attempts: reconnects,
+          maxAttempts: RECONNECT_MAX_ATTEMPTS,
+          nextAt: reconnectNextAt,
+        },
+        lastMsgAt,
         connections: state === 'running' ? 1 : 0,
         cooldownLeft: Math.max(0, Math.ceil((diag.cooldownUntil - Date.now()) / 1000)), // U1-19：退避剩余秒数
         conflict: CONFLICT_HINT,                                                        // U1-17：与 PC 端 QQ 互踢提示
@@ -481,7 +610,13 @@ function createQqDirectAdapter(deps) {
       emit('sign-check', { signCheck: r });
       return r;
     },
+
+    /* P0-6 假在线巡检（内部方法，测试直接触发）：running 且超时无消息 → 标记假在线并重连。 */
+    _runFakeOnlineCheck() { checkFakeOnline(); },
   };
 }
 
-module.exports = { createQqDirectAdapter, normalizeQqEvent, makeSessionId, toDataUrl, probeSignService, readDeviceFingerprint };
+module.exports = {
+  createQqDirectAdapter, normalizeQqEvent, makeSessionId, toDataUrl,
+  probeSignService, readDeviceFingerprint, isFakeOnline, classifyQqError,
+};

@@ -1724,6 +1724,13 @@ function parseJsonObj(txt) {
   if (!x) throw new Error('响应中未找到合法 JSON');
   return x.value;
 }
+/* P0-2 关系补全诊断计数：AI 首次输出不可解析时触发一次「纯 JSON」重试，计数供测试与排查 */
+/* P1-3 输入指纹缓存：relationCache 容量上限 RELATION_CACHE_MAX，命中复用上次结果避免重复烧 token */
+const relationDiag = { parseRetries: 0, cacheHits: 0 };
+const RELATION_CACHE_MAX = 50;
+const relationCache = new Map(); // fpKey → { ops, at }
+function relFpHash(s) { let h = 5381; const str = String(s || ''); for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
+const RELATION_RETRY_HINT = '\n\n注意：你上一次输出没有给出可解析的 JSON 数组（可能带了 markdown 代码块、解释文字或格式错误）。请只输出一个 JSON 数组（没有结果时输出 []），不要任何额外文字。';
 async function suggestRelations(entities, relations, cfg, rawText) {
   /* 关系推断最依赖的卡片内容字段（每字段截断到单字段上限，避免大段正文刷爆 token） */
   const CONTENT_FIELDS = {
@@ -1737,29 +1744,90 @@ async function suggestRelations(entities, relations, cfg, rawText) {
   };
   const FIELD_LIMIT = 80;    // 单个文本字段截断长度
   const ENTITY_LIMIT = 150;  // 单张卡片展示上限（名称+标签+内容）
-  const lines = [];
+  /* P1-3 输入指纹缓存：对「实体名+关键内容+原文+现有连线（+模型）」取指纹，命中直接复用上次结果。
+   * 指纹覆盖真正决定提示词与校验结果的全部输入，卡片/原文未变即命中，避免重复请求烧 token。 */
+  const fpParts = [];
+  for (const k of _K) {
+    for (const it of ((entities && entities[k]) || [])) {
+      const nm = String(it.name || it.title || '').trim(); if (!nm) continue;
+      let det = '';
+      for (const fk of CONTENT_FIELDS[k] || []) det += '|' + String(it[fk] == null ? '' : it[fk]).replace(/\s+/g, ' ').trim().slice(0, FIELD_LIMIT);
+      fpParts.push(k + ':' + nm + det);
+    }
+  }
+  fpParts.sort();
+  const fpEdges = ((relations && relations.edges) || []).filter(e => e && e.from && e.to)
+    .map(e => e.from + '␟' + e.to + '␟' + String(e.label || '').trim()).sort();
+  const fpKey = relFpHash(fpParts.join('\n') + '\n␟␟' + String(rawText || '') + '\n␟␟' + fpEdges.join('\n') + '\n␟␟' + (cfg && cfg.model || ''));
+  const cached = relationCache.get(fpKey);
+  if (cached) { relationDiag.cacheHits += 1; return cached.ops.map(o => ({ ...o })); }
+  /* P0-1 候选预筛：白名单取全部实体（不再按类截断），展示行按「原文共现相关度」排序后每类取 Top N。
+   * 无原文时相关度全为 0，稳定排序保持插入顺序，行为与旧版一致。 */
+  const kl = { pcs: '人物卡', npcs: 'NPC', regions: '地区', logs: '日志', mobs: '怪物', rules: '规则', lore: '背景' };
+  const nodes = ((relations && relations.nodes) || []).filter(n => n && n.id);
+  const edges = ((relations && relations.edges) || []).filter(e => e && e.from && e.to);
+  const id2n = {}; for (const n of nodes) id2n[n.id] = String(n.label || '').trim();
+  const pairKey = (a, b) => [String(a || '').trim(), String(b || '').trim()].sort().join('␟');
   const nameSet = new Set();  // 白名单直接取实体名，不依赖展示行格式（名称含括号也不误伤）
   const nameNorm = new Map(); // 归一化名 → 原始名：容忍 AI 输出名称的细微出入（全/半角、空白、括号备注），仍能对回卡片真名
-  const kl = { pcs: '人物卡', npcs: 'NPC', regions: '地区', logs: '日志', mobs: '怪物', rules: '规则', lore: '背景' };
+  const all = [];             // 全部实体（供打分与展示行构建）
   for (const k of _K) {
-    for (const it of ((entities && entities[k]) || []).slice(0, 90)) {
+    for (const it of ((entities && entities[k]) || [])) {
       const nm = String(it.name || it.title || '').trim(); if (!nm) continue;
       nameSet.add(nm);
       const nk = normName(nm);
       if (nk && !nameNorm.has(nk)) nameNorm.set(nk, nm);
-      const tag = [kl[k] || k, it.faction, it.subtitle || it.role].filter(Boolean).join(' · ');
+      all.push({ k, name: nm, it });
+    }
+  }
+  /* 原文共现打分：同一段落共同出现的实体对，双方相关度 +4（优先注入彼此大概率有关系的一批）；
+   * 已存在连线的端点额外 +10，保证 edit/del 定位所需的卡片一定进入展示。 */
+  const score = new Map();
+  const rawTxt = String(rawText || '');
+  const normRaw = normName(rawTxt);
+  if (normRaw) {
+    const present = [];
+    for (const e of all) {
+      const nk = normName(e.name);
+      const bare = normName(String(e.name).replace(/[（(].*?[）)]/g, '')); // 去括号备注后单独匹配
+      if (normRaw.includes(nk) || (bare.length >= 2 && normRaw.includes(bare))) present.push({ name: e.name, nk, bare });
+    }
+    const paras = String(rawTxt).split(/\n+/).map((s) => normName(s)).filter(Boolean);
+    for (const p of paras) {
+      const hit = [];
+      for (const pe of present) {
+        if (p.includes(pe.nk) || (pe.bare.length >= 2 && p.includes(pe.bare))) hit.push(pe.name);
+      }
+      for (let i = 0; i < hit.length; i++) {
+        for (let j = i + 1; j < hit.length; j++) {
+          score.set(hit[i], (score.get(hit[i]) || 0) + 4);
+          score.set(hit[j], (score.get(hit[j]) || 0) + 4);
+        }
+      }
+    }
+  }
+  for (const e of edges) {
+    const a = String(id2n[e.from] || e.from).trim(), b = String(id2n[e.to] || e.to).trim();
+    if (a) score.set(a, (score.get(a) || 0) + 10);
+    if (b) score.set(b, (score.get(b) || 0) + 10);
+  }
+  /* 展示行：按相关度排序、每类截断 90 条（分数相同保持插入顺序，无原文时与旧版一致） */
+  const lines = [];
+  for (const k of _K) {
+    const ranked = all.filter((e) => e.k === k)
+      .map((e) => ({ e, s: score.get(e.name) || 0 }))
+      .sort((x, y) => y.s - x.s);
+    for (const { e } of ranked.slice(0, 90)) {
+      const nm = e.name;
+      const tag = [kl[k] || k, e.it.faction, e.it.subtitle || e.it.role].filter(Boolean).join(' · ');
       const det = [];
       for (const fk of CONTENT_FIELDS[k] || []) {
-        const v = String(it[fk] == null ? '' : it[fk]).replace(/\s+/g, ' ').trim();
+        const v = String(e.it[fk] == null ? '' : e.it[fk]).replace(/\s+/g, ' ').trim();
         if (v) det.push(v.slice(0, FIELD_LIMIT));
       }
       lines.push(nm + '(' + (tag || kl[k] || k) + ')' + (det.length ? '\n　　' + det.join('；') : ''));
     }
   }
-  const nodes = ((relations && relations.nodes) || []).filter(n => n && n.id);
-  const edges = ((relations && relations.edges) || []).filter(e => e && e.from && e.to);
-  const id2n = {}; for (const n of nodes) id2n[n.id] = String(n.label || '').trim();
-  const pairKey = (a, b) => [String(a || '').trim(), String(b || '').trim()].sort().join('␟');
   const existingPairs = new Set();
   for (const e of edges) { const a = id2n[e.from] || e.from, b = id2n[e.to] || e.to; if (a && b && a !== b) existingPairs.add(pairKey(a, b)); }
   const existingReadable = edges.map(e => (id2n[e.from] || e.from) + '——(' + (e.label || '关系') + ')——' + (id2n[e.to] || e.to));
@@ -1782,9 +1850,18 @@ async function suggestRelations(entities, relations, cfg, rawText) {
     + '\n\n现有连线（供 add 去重、edit/del 定位）：' + (existingReadable.length ? existingReadable.join('　') : '（暂无）')
     + '\n\n清单（名称后是卡片关键内容）\n' + lines.join('\n').slice(0, 14000)
     + (raw ? '\n\n原始文本摘录\n' + raw.slice(0, 8000) : '');
-  const res = await apiCall(cfg, sys, user);
+  /* P1-4：优先声明 response_format(json_object) 强约束输出 schema（上游不支持时 rawJsonReply 会自动去掉重试）；
+   * 解析仍失败再走 P0-2 定向重试。 */
   let arr = [];
-  try { arr = parseJsonObj(res); } catch (_) { arr = []; }
+  try { arr = parseJsonObj(await rawJsonReply(cfg, sys, user, 4000)); } catch (_) { arr = []; }
+  if (!Array.isArray(arr)) {
+    /* P0-2：解析失败（格式错 / 带 markdown / 非数组）单独重试一次，避免整批结果白白丢失。
+     * 重试仍走 requestCompletions，受预算熔断与重试上限保护。 */
+    relationDiag.parseRetries += 1;
+    try {
+      arr = parseJsonObj(await rawJsonReply(cfg, sys, user + RELATION_RETRY_HINT, 4000));
+    } catch (_) { arr = []; }
+  }
   if (!Array.isArray(arr)) arr = [];
   const out = [];
   const pick = (v) => { const f = String(v || '').trim(); return f || null; };
@@ -2022,4 +2099,4 @@ async function breakdownScenario(cfg, text, settings, opts) {
   return { scenes: result, failed };
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, usageLog, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity };
+module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, usageLog, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity };

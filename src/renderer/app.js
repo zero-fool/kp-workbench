@@ -1212,9 +1212,15 @@
     const sel = q('themeSelect');
     sel.innerHTML = THEMES.map(([k, l]) => `<option value="${k}" ${S.settings.theme === k ? 'selected' : ''}>${l} ${k}</option>`).join('');
   }
+  let _themeT = null; // P1-11：主题切换过渡 class 的移除定时器
   function applyTheme(name, skipPersist) {
     if (!name) name = S.settings.theme || 'parchment';
-    document.documentElement.dataset.theme = name;
+    /* P1-11：切换瞬间挂 .theme-switching 过渡 class（颜色平滑过渡），320ms 后移除，避免常驻 transition 开销 */
+    const htmlEl = document.documentElement;
+    htmlEl.classList.add('theme-switching');
+    if (_themeT) clearTimeout(_themeT);
+    _themeT = setTimeout(() => htmlEl.classList.remove('theme-switching'), 320);
+    htmlEl.dataset.theme = name;
     S.settings.theme = name;
     pushDensityAttr((S.settings.layout && S.settings.layout.density) || 'comfortable');
     buildThemeSelect();
@@ -3321,7 +3327,7 @@
       <div id="impMeta" class="hint" style="margin:6px 0"></div>
       <div id="impFileList" style="margin:2px 0 4px"></div>
       <div class="row full"><label>导入内容（大文件此处为预览，完整内容已存盘，供后续 AI 分析）</label><textarea id="impRaw" rows="6" placeholder="选择文件，内容会自动显示在这里；也可直接在此粘贴文本…"></textarea></div>
-      <label class="toggle-row" style="display:flex;gap:10px;align-items:center;margin:6px 0">
+      <label class="toggle-row" style="gap:10px;margin:6px 0">
         <input type="checkbox" id="impSupplement">
         <span><b>允许 AI 补充创作</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">默认关闭：AI 只依据导入文本实际信息分类填卡、缺失字段留空、绝不编造。勾选并经确认后才允许合理补写。</span></span>
       </label>
@@ -3704,7 +3710,7 @@
         <div class="pdesc">${esc((p.persona || '').slice(0, 60))}${(p.persona || '').length > 60 ? '…' : ''}</div>
         <div class="pmeta">${act ? '● 使用中' : '○ 未启用'}</div>
         <div class="pf">${esc(((p.style || '') + '\n' + (p.setting || '')).trim().slice(0, 140)) || '<span style="color:var(--ink-faint)">未填写话风/设定</span>'}</div>
-        <label class="toggle-row" style="display:flex;align-items:center;gap:8px;margin:8px 0 2px">
+        <label class="toggle-row" style="margin:8px 0 2px">
           <input type="checkbox" ${act ? 'checked' : ''} onchange="WB.togglePersona('${p.id}', this.checked)">
           <span style="font-size:12px"><b>开启（套用此人设对话）</b><br><span class="hint" style="color:var(--ink-faint);font-size:11px">开启后 AI 使用此人设与使用者对话；同一时间仅一个生效</span></span></label>
         <div class="card-actions">
@@ -3810,23 +3816,23 @@
       </div>
       <div class="setcard"><h4>AI 行为开关</h4>
         <div style="display:grid;grid-template-columns:1fr;gap:12px">
-          <label class="toggle-row" style="display:flex;align-items:center;gap:10px">
+          <label class="toggle-row" style="gap:10px">
             <input type="checkbox" id="aif_usePersona" ${chk(ai.usePersona !== false)}>
             <span><b>启用当前人设</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">AI 在对话时会遵循「AI 设定」中的人设、话风与世界观设定</span></span>
           </label>
-          <label class="toggle-row" style="display:flex;align-items:center;gap:10px">
+          <label class="toggle-row" style="gap:10px">
             <input type="checkbox" id="aif_useLore" ${chk(ai.useLoreRef !== false)}>
             <span><b>自动引入背景/规则</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">每次对话时自动把「背景」「规则」实体里的内容整理给 AI 作为参考，保持设定连贯性</span></span>
           </label>
-          <label class="toggle-row" style="display:flex;align-items:center;gap:10px">
+          <label class="toggle-row" style="gap:10px">
             <input type="checkbox" id="aif_allowTools" ${chk(!!ai.allowTools)}>
             <span><b>允许文件上传工具</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">开启后 AI 对话页可上传本地文本文件读取内容，并可将 AI 回复导出为新 txt 文件</span></span>
           </label>
-          <label class="toggle-row" style="display:flex;align-items:center;gap:10px">
+          <label class="toggle-row" style="gap:10px">
             <input type="checkbox" id="aif_longMemory" ${chk(!!ai.longMemory)}>
             <span><b>启用长期记忆</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">保留重要的对话要点或设定，让 AI 在长对话中保持记忆连贯</span></span>
           </label>
-          <label class="toggle-row" style="display:flex;align-items:center;gap:10px">
+          <label class="toggle-row" style="gap:10px">
             <input type="checkbox" id="aif_useUserPrefs" ${chk(ai.useUserPrefs !== false)}>
             <span><b>启用用户偏好记忆</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">在下方写下你的使用习惯、格式要求、期望风格等，AI 会优先遵守并在每次对话中贯彻</span></span>
           </label>
@@ -3912,12 +3918,12 @@
     const sw = diceAiSwitches();
     const feats = sw.features || {};
     const rows = DICE_AI_FEATS.map((f) => `
-      <label class="toggle-row" style="display:flex;align-items:center;gap:10px">
+      <label class="toggle-row" style="gap:10px">
         <input type="checkbox" data-sw="${f.key}" ${chk(feats[f.key] !== false)} onchange="WB.saveDiceAiSwitches()">
         <span><b>${f.label}</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">${f.hint}</span></span>
       </label>`).join('');
     box.innerHTML = `
-      <label class="toggle-row" style="display:flex;align-items:center;gap:10px">
+      <label class="toggle-row" style="gap:10px">
         <input type="checkbox" id="dsw_total" ${chk(sw.enabled)} onchange="WB.saveDiceAiSwitches()">
         <span><b>总开关（所有骰娘 AI 功能）</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">关闭后不发起任何 AI 请求，仅此页面可重新开启</span></span>
       </label>
@@ -4569,180 +4575,58 @@
     persist();
   }
 
-  /* ========== 统计分析（数据构成 · 投骰热力图 · 数据活跃曲线） ========== */
+  /* ========== 统计分析（视图实现已抽出到 views/stats.js，此处保留薄代理桩 + 共享常量） ========== */
   const STATS_K = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore', 'encounters'];
-  function stsCount(k) { return ((S.data.entities && S.data.entities[k]) || []).length; }
+  function stsCount(k) {
+    const v = window.KPViews && window.KPViews.stats;
+    if (v && typeof v.stsCount === 'function') return v.stsCount.apply(this, arguments);
+  }
   function renderStats() {
-    const dayMs = 864e5;
-    const dice = (S.settings && Array.isArray(S.settings.diceLog)) ? S.settings.diceLog : [];
-    const heat = stsHeatmap(dice);
-    const act = stsActivity(dice, 30, dayMs);
-    // KPI 概览
-    let tots = 0; const comp = [];
-    for (const k of STATS_K) { const n = stsCount(k); tots += n; comp.push([k, n]); }
-    const kpi = [
-      ['资料总数', tots], ['日志', stsCount('logs')], ['投骰次数', dice.length], ['遭遇场次', stsCount('encounters')],
-      ['近30天投骰', act.byDay.reduce((a, x) => a + x.n, 0)], ['日均(近30天)', dice.length ? (act.byDay.reduce((a, x) => a + x.n, 0) / Math.max(1, act.byDay.length)).toFixed(1) : 0]
-    ].map(([l, v]) => `<div class="stat-kpi"><b>${v}</b><span>${l}</span></div>`).join('');
-    let html = `<div class="page-title"><h2>统计分析</h2><span class="hint">档案数据构成 · 投骰时段热力 · 近期活跃曲线</span></div>`;
-    html += `<div class="toolbar" style="margin-bottom:10px">
-      <button onclick="WB.statsExport()">⬇ 导出统计文本</button>
-      <button class="ghost" onclick="WB.statsCopy()">⧉ 复制概览</button>
-      <span class="grow"></span><span class="hint">数据含投骰与遭遇等全部档案维度</span></div>`;
-    html += `<div class="stat-kpis">${kpi}</div>`;
-    // 1) 数据构成
-    html += `<div class="setcard"><h4>数据构成（各类型资料条数 / 占比）</h4>${stsComposition(comp, tots)}</div>`;
-    // 2) 投骰热力图
-    html += `<div class="setcard"><h4>投骰热力图 <span class="hint">一周内不同时段（0-23 时 × 周一~周日）的投骰频次</span></h4>${heat}</div>`;
-    // 3) 数据活跃曲线
-    html += `<div class="setcard"><h4>数据活跃曲线 <span class="hint">近 ${act.days} 天累计投骰/事件数（投骰越多、团越活跃）</span></h4>${act.html}</div>`;
-    contentInner(html);
+    const v = window.KPViews && window.KPViews.stats;
+    if (v && typeof v.renderStats === 'function') return v.renderStats.apply(this, arguments);
   }
 
-  /* ========== 运行记录（RunLog）========== */
-  const RUNLOG_LEVELS = ['INFO', 'WARN', 'ERROR'];
-  const _runlog = { day: '', level: '', query: '', buf: [] };
+  /* ========== 运行记录（视图实现已抽出到 views/runlog.js，此处保留薄代理桩） ========== */
   async function renderRunlog() {
-    let html = `<div class="page-title"><h2>📜 运行记录</h2><span class="hint">软件持续记录全过程（不只报错）。遇到问题时可在此查看，或一键导出发给我，即可快速定位。</span>
-      <span style="flex:1"></span>
-      <button onclick="WB.runlogExport()" class="ghost" id="rlExport">⬇ 导出记录</button>
-      <button onclick="WB.runlogOpen()" class="ghost" title="在文件夹中查看原始日志">🗔 打开日志文件夹</button>
-      <button onclick="WB.runlogRefresh()" class="ghost">↻ 刷新</button></div>`;
-    // 日志文件夹位置提示（用户可直接到该文件路径自己找，也能发给你）
-    const fp = (await window.api.runlog.folder().catch(() => null));
-    if (fp && fp.path) {
-      html += `<div class="setcard" style="margin-bottom:10px"><b>保存位置：</b><code style="word-break:break-all">${esc(fp.path)}</code>
-        <span class="hint" style="display:block;margin-top:4px">每次运行都写入 <b>latest.log</b>（最近运行记录，固定路径）；按天另存为 2026-09-28.log 等文件。发生问题时可到该文件夹直接取出，或点「⬇ 导出记录」打包给我。</span></div>`;
-    }
-    // 过滤器
-    html += `<div class="toolbar" style="margin-bottom:10px;flex-wrap:wrap;gap:6px">
-      <span class="hint">日期：</span><select id="rlDay" onchange="WB.runlogPickDay(this.value)" style="max-width:160px"></select>
-      <span class="hint">等级：</span><select id="rlLevel" onchange="WB.runlogFilter()"><option value="">全部</option>${RUNLOG_LEVELS.map(l => `<option${_runlog.level === l ? ' selected' : ''}>${l}</option>`).join('')}</select>
-      <input id="rlQuery" value="${esc(_runlog.query)}" placeholder="关键词过滤…" style="max-width:220px" onkeydown="if(event.key==='Enter')WB.runlogFilter()">
-      <button class="ghost" onclick="WB.runlogFilter()">筛选</button>
-      <button class="ghost" onclick="WB.runlogClearFilter()">清除</button>
-      <span class="grow"></span><span class="hint" id="rlCount"></span></div>`;
-    html += `<div class="setcard" style="padding:0;overflow:hidden"><pre id="rlBody" class="runlog-body">加载中…</pre></div>`;
-    contentInner(html);
-    // 填充日期下拉 + 读取日志
-    const dayList = (await window.api.runlog.list().catch(() => [])) || [];
-    // 默认展示“最近运行（latest.log）”，用户一进来就能看到本次运行的过程
-    if (!_runlog.day) { if (dayList.some(d => d.day === 'latest')) _runlog.day = 'latest'; else if (dayList.length) _runlog.day = dayList[0].day; }
-    const daySel = document.getElementById('rlDay');
-    if (daySel) {
-      daySel.innerHTML = `<option value="">全部 (含每日文件)</option>` + dayList.map(d => `<option value="${d.day}"${_runlog.day === d.day ? ' selected' : ''}>${d.label || d.day}</option>`).join('');
-      if (_runlog.day && !dayList.some(d => d.day === _runlog.day)) _runlog.day = '';
-    }
-    await loadRunlogBody();
+    const v = window.KPViews && window.KPViews.runlog;
+    if (v && typeof v.renderRunlog === 'function') return v.renderRunlog.apply(this, arguments);
   }
-  async function loadRunlogBody() {
-    const body = document.getElementById('rlBody');
-    const cnt = document.getElementById('rlCount');
-    if (!body) return;
-    body.textContent = '加载中…';
-    const r = await window.api.runlog.read({ day: _runlog.day || undefined, level: _runlog.level || undefined, query: _runlog.query || undefined }).catch(() => null) || { lines: [], days: [] };
-    const lines = r.lines || [];
-    body.innerHTML = lines.length
-      ? lines.map(l => `<div>[<span class="rl-t">${esc(l.t)}</span>] [<b class="rl-${l.lv.toLowerCase()}">${l.lv}</b>] <span class="hint">${esc(_runlog.day ? '' : l.day)}</span>${esc(l.msg)}</div>`).join('\n')
-      : '<span class="hint">（当前筛选条件下暂无记录）</span>';
-    if (cnt) cnt.textContent = `共 ${lines.length} 条`;
+  function runlogRefresh() {
+    const v = window.KPViews && window.KPViews.runlog;
+    if (v && typeof v.runlogRefresh === 'function') return v.runlogRefresh.apply(this, arguments);
   }
-  function runlogRefresh() { loadRunlogBody(); }
   function runlogFilter() {
-    const q = document.getElementById('rlQuery'); if (q) _runlog.query = q.value.trim();
-    const lv = document.getElementById('rlLevel'); if (lv) _runlog.level = lv.value;
-    loadRunlogBody();
+    const v = window.KPViews && window.KPViews.runlog;
+    if (v && typeof v.runlogFilter === 'function') return v.runlogFilter.apply(this, arguments);
   }
-  function runlogPickDay(v) { _runlog.day = v || ''; loadRunlogBody(); }
+  function runlogPickDay(val) {
+    const v = window.KPViews && window.KPViews.runlog;
+    if (v && typeof v.runlogPickDay === 'function') return v.runlogPickDay.apply(this, arguments);
+  }
   function runlogClearFilter() {
-    _runlog.day = ''; _runlog.level = ''; _runlog.query = '';
-    const q = document.getElementById('rlQuery'); if (q) q.value = '';
-    const lv = document.getElementById('rlLevel'); if (lv) lv.value = '';
-    renderRunlog();
+    const v = window.KPViews && window.KPViews.runlog;
+    if (v && typeof v.runlogClearFilter === 'function') return v.runlogClearFilter.apply(this, arguments);
   }
   async function runlogExport() {
-    const btn = document.getElementById('rlExport'); if (btn) { btn.disabled = true; btn.textContent = '导出中…'; }
-    const r = await window.api.runlog.export().catch(e => ({ ok: false, error: String(e && e.message || e) }));
-    if (btn) { btn.disabled = false; btn.textContent = '⬇ 导出记录'; }
-    if (r && r.canceled) return;
-    if (r && r.ok) toast('运行记录已导出：' + r.path, 'ok');
-    else toast((r && r.error) || '导出失败', 'err');
+    const v = window.KPViews && window.KPViews.runlog;
+    if (v && typeof v.runlogExport === 'function') return v.runlogExport.apply(this, arguments);
   }
-  function runlogOpen() { window.api.runlog.open(); }
-  /* 数据构成：横向条形（SVG/纯 HTML 均可读） */
+  function runlogOpen() {
+    const v = window.KPViews && window.KPViews.runlog;
+    if (v && typeof v.runlogOpen === 'function') return v.runlogOpen.apply(this, arguments);
+  }
+  /* 数据构成/热力图/活跃曲线（实现已抽出到 views/stats.js，此处保留薄代理桩，供 statsSummaryText 等闭包内调用） */
   function stsComposition(comp, tots) {
-    if (!tots) return `<div class="empty">暂无资料，先到各类型页新增内容即可看到占比。</div>`;
-    const max = Math.max(1, ...comp.map(c => c[1]));
-    const rows = comp.filter(c => c[0] !== 'encounters').map(([k, n]) => {
-      const pct = (tots ? (n / tots * 100) : 0);
-      const w = Math.max(0, n / max * 100);
-      return `<div class="stat-barrow">
-        <span class="stat-bar-name">${DATA_TYPE[k] || k}</span>
-        <span class="stat-bar-track"><i style="width:${w}%"></i></span>
-        <span class="stat-bar-val">${n}<em>${pct.toFixed(1)}%</em></span>
-      </div>`;
-    }).join('');
-    return `<div class="stat-bars">${rows}</div><div class="hint" style="margin-top:6px">折线类图表用「投骰时间戳」绘制（档案实体多无建造时间，故以投骰作为活跃基线）。</div>`;
+    const v = window.KPViews && window.KPViews.stats;
+    if (v && typeof v.stsComposition === 'function') return v.stsComposition.apply(this, arguments);
   }
-  /* 投骰热力图：7 行(周一~周日) × 24 列(小时)，返回 SVG/HTML 矩阵 */
   function stsHeatmap(dice) {
-    const grid = []; // [day(0=Mon)][hour]
-    for (let d = 0; d < 7; d++) grid.push(new Array(24).fill(0));
-    const WD = ['一', '二', '三', '四', '五', '六', '日'];
-    for (const it of dice) {
-      const t = it && it.t ? new Date(String(it.t)) : null;
-      if (!t || isNaN(t.getTime())) continue;
-      grid[(t.getDay() + 6) % 7][t.getHours()]++;
-    }
-    let mx = 1; for (const r of grid) for (const v of r) mx = Math.max(mx, v);
-    const cell = 22, gap = 2, pad = 30, ch = cell * 7 + gap * 6;
-    let s = `<svg viewBox="0 0 ${pad + 24 * (cell + gap) + 8} ${ch + 18}" style="width:100%;max-width:760px;display:block">
-      ${WD.map((dd, d) => `<text x="4" y="${pad + d * (cell + gap) + cell - 6}" font-size="11" fill="var(--ink-faint)">${dd}</text>`).join('')}
-      ${grid.map((row, d) => row.map((v, h) => {
-        const t = v ? Math.max(1, Math.round((v / mx) * 100)) : 0;
-        const col = t <= 0 ? 'var(--bg3)' : (t < 25 ? 'color-mix(in srgb,var(--accent) 28%,var(--bg3))' : t < 55 ? 'color-mix(in srgb,var(--accent) 55%,var(--bg3))' : t < 85 ? 'color-mix(in srgb,var(--accent) 78%,var(--bg3))' : 'var(--accent)');
-        return `<rect x="${pad + h * (cell + gap)}" y="${d * (cell + gap)}" width="${cell}" height="${cell}" rx="3" fill="${col}">
-          <title>周${WD[d]} ${h} 时：${v} 次</title></rect>`;
-      }).join('')).join('')}
-      ${Array.from({ length: 24 }, (_, h) => h % 3 === 0 ? `<text x="${pad + h * (cell + gap) + 4}" y="${ch + 14}" font-size="10" fill="var(--ink-faint)">${h}</text>` : '').join('')}
-    </svg>`;
-    const maxDay = grid.reduce((a, r) => a + r.reduce((x, v) => x + v, 0), 0);
-    const peak = grid.map((r, di) => r.reduce((m, v, h) => v > m.n ? { n: v, h } : m, { n: 0, h: -1 }).n)
-      .reduce((a, n, di) => n > a.n ? { n, di } : a, { n: 0, di: -1 });
-    const peakTxt = (peak && peak.n && peak.di >= 0)
-      ? `密集时段：周${WD[peak.di]} · ${grid[peak.di].reduce((m, v, h) => v > m.n ? { n: v, h } : m, { n: 0 }).h} 时（${peak.n} 次）`
-      : '尚无有效投骰记录';
-    return `<div class="stat-heat">${s}<div class="hint" style="margin-top:6px">共 ${maxDay} 次投骰 · ${peakTxt} · 深色=更频繁</div></div>`;
+    const v = window.KPViews && window.KPViews.stats;
+    if (v && typeof v.stsHeatmap === 'function') return v.stsHeatmap.apply(this, arguments);
   }
-  /* 数据活跃曲线：近 N 天累计投骰（SVG 面积/折线） */
   function stsActivity(dice, days, dayMs) {
-    const now = new Date(); now.setHours(0, 0, 0, 0);
-    const byDay = [];
-    for (let i = days - 1; i >= 0; i--) { const d = new Date(now.getTime() - i * dayMs); byDay.push({ d, n: 0 }); }
-    const idx = new Map(byDay.map((x, i) => [x.d.getTime(), i]));
-    for (const it of dice) {
-      const t = it && it.t ? new Date(String(it.t)) : null;
-      if (!t || isNaN(t.getTime())) continue;
-      const k = new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime();
-      const i = idx.get(k); if (i !== undefined) byDay[i].n++;
-    }
-    let cum = 0; const series = byDay.map(x => { cum += x.n; return cum; });
-    const W = byDay.length, H = 120, pad = 8;
-    const VW = 600, maxC = Math.max(1, series[series.length - 1] || 1);
-    const px = i => pad + (i / Math.max(1, W - 1)) * (VW - pad * 2);
-    const py = v => H - pad - (v / maxC) * (H - pad - 8);
-    const pts = series.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
-    const area = `${px(0)},${H} ${pts} ${px(W - 1)},${H}`;
-    // 最近若干天为时间轴刻度
-    const ticks = [0, Math.floor((W - 1) / 3), Math.floor(2 * (W - 1) / 3), W - 1];
-    return { days: W, byDay,
-      html: `<div class="stat-activity">
-        <svg viewBox="0 0 ${VW} ${H + 18}" style="width:100%;max-width:740px;display:block">
-          <polyline points="${area}" fill="color-mix(in srgb,var(--accent) 22%,transparent)" stroke="none"></polyline>
-          <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"></polyline>
-          ${ticks.map(i => `<text x="${px(i)}" y="${H + 12}" font-size="10" fill="var(--ink-faint)" text-anchor="middle">${byDay[i].d.getMonth() + 1}/${byDay[i].d.getDate()}</text>`).join('')}
-          <text x="${VW}" y="10" font-size="10" fill="var(--ink-faint)" text-anchor="end">累计 ${series[series.length - 1]}</text>
-        </svg></div>` };
+    const v = window.KPViews && window.KPViews.stats;
+    if (v && typeof v.stsActivity === 'function') return v.stsActivity.apply(this, arguments);
   }
 
   /* ========== AI 数据审查 ========== */
@@ -4763,156 +4647,10 @@
     }
   }
 
-  /* ========== 更新公告 ========== */
-  /* ========== 帮助中心 ========== */
-  const HELP_CATS = [
-    { id: 'start', ic: '🚀', title: '开团流程', html: () => `
-      <p>从零搭建一团（一套跑团世界）的完整顺序如下：</p>
-      <ol class="help-steps">
-        <li><b>配置 AI（可选但推荐）</b> —— 进入「工作台 AI 功能 → AI 配置」，填写 baseUrl / 模型 / API Key 并保存，点「测试连通」验证。这样才能用 AI 拆登记、生成内容。详见下文「AI 设置」。</li>
-        <li><b>新建团档案</b> —— 在「总览看板 → 开始使用」输入一个团名，点「＋ 新建档案并进入」。每套团/世界独立开档，互不干扰。</li>
-        <li><b>导入原材料</b> —— 在「工作台功能」的「规则速查」「背景城设」等页面粘贴或导入你的剧本、设定、笔记（支持 txt/md/docx/pdf/xlsx）。或在「工作台 AI 功能 → 原始文本」导入纯文本整理。</li>
-        <li><b>AI 拆分登记</b> —— 资料页点「AI 拆分登记」，把长文本一键拆成 人物卡 / NPC / 地区 / 日志 / 怪物 / 规则 / 背景 7 类资料卡。</li>
-        <li><b>按需创作</b> —— 用「AI 助手」对话写剧情、「地图」布置场景、「本地掷骰」投掷检定、「记录润色」把跑团记录润成文章。</li>
-        <li><b>定期备份</b> —— 「设置 → 偏好设置 → 数据」可手动备份（每 30 分钟与退出前自动备份），还可导出 JSON 换机交接。</li>
-      </ol>` },
-    { id: 'ai', ic: '🤖', title: 'AI 设置与 API 配置', html: () => `
-      <div class="helph3">1. 配置接口（全局，一次搞定）</div>
-      <p>进入侧栏「工作台 AI 功能 → AI 配置」：</p>
-      <ol class="help-steps">
-        <li><b>接口地址 baseUrl</b> —— 服务商提供的 API 根地址，如 <code>https://api.deepseek.com/v1</code>（兼容 OpenAI 格式的大模型服务均可）。</li>
-        <li><b>模型 model</b> —— 你在服务商开通的模型名，如 <code>deepseek-chat</code>。</li>
-        <li><b>API Key</b> —— 你的密钥，使用系统级加密保存在本机，不会明文写入数据文件。</li>
-        <li>可调「温度」「超时」，然后点「保存配置」→「测试连通」确认成功。</li>
-      </ol>
-      <p>该连接被「AI 助手 / 剧本解析 / 记录润色 / 资料生成」统一使用。</p>
-      <div class="helph3">2. 设定 AI 人设（AI 设定页）</div>
-      <p>新建角色卡 = <b>人设</b>（身份/性格/生平/外貌）+ <b>话风</b>（说话方式/语气/口头禅）+ <b>设定</b>（世界观/规则/约束）。点「开启」即可套用，同一时间仅一个生效。对话时 AI 会遵循这一人设。</p>
-      <div class="helph3">3. 行为开关与长期记忆（AI 配置页）</div>
-      <p>可开关：启用当前人设、自动引入背景/规则作为参考、允许文件上传、启用长期记忆。长期记忆需手动逐条添加（会自动注入每次对话，保持长对话连贯），也可用「剧情要点」一键从近期对话提炼写入。</p>` },
-    { id: 'data', ic: '🗂', title: '资料管理（7 类资料卡）', html: () => `
-      <p>工作台把团内内容分为 7 类，侧栏「工作台功能」区逐项管理：</p>
-      <ul class="help-list">
-        <li><b>人物卡 (PC)</b> —— 玩家扮演的角色；AI 拆分登记时自动排除，不把玩家角色混入 NPC。</li>
-        <li><b>NPC</b> —— 非玩家角色。</li>
-        <li><b>地区</b> —— 场景、地点、区域。</li>
-        <li><b>日志</b> —— 事件、线索、剧情点。</li>
-        <li><b>怪物</b> —— 敌人与遭遇。</li>
-        <li><b>规则</b> —— 规则书条目与设定。</li>
-        <li><b>背景</b> —— 世界观、背景设定。</li>
-      </ul>
-      <p>字段可自定义（设置 → 字段），可切换卡片模板（人物卡/NPC/怪物）。每页支持「新增 / 导入 / 生成（AI） / 搜索筛选 / 编辑/删除」。</p>` },
-    { id: 'tools', ic: '🛠', title: '工具使用', html: () => `
-      <div class="helph3">地图</div>
-      <ul class="help-list">
-        <li>「＋ 新建地图」手动建图：上传底图、网格、标记、区域、迷雾，支持缩放/平移/导出 PNG，无需 AI 也能搭。</li>
-        <li>「AI 设计地图」：粘贴文字描述，一键生成体型草图，预览确认后应用。</li>
-      </ul>
-      <div class="helph3">本地掷骰 / 骰娘鉴定</div>
-      <ul class="help-list">
-        <li>支持 DnD5e 与 CoC 规则，可自定义投掷表达式（如 <code>2d6+3</code>）、快捷检定与 AI 判定。</li>
-      </ul>
-      <div class="helph3">记录润色</div>
-      <ul class="help-list">
-        <li>粘贴跑团记录 → AI 补全背景润色成文章，可导出 txt；也可基于日志一键生成战报。</li>
-      </ul>` },
-    { id: 'diceai', ic: '🎛', title: '骰娘 AI 设置', html: () => `
-      <p>侧栏「骰娘 AI 设置」专管骰娘运行时用到的 AI 能力，与工作台 AI（AI 助手 / 剧本解析 / 记录润色）相互独立。</p>
-      <div class="helph3">AI 功能开关</div>
-      <ul class="help-list">
-        <li><b>总开关</b>：关闭后骰娘不发起任何 AI 请求，最省 token；仅此页可重新开启。</li>
-        <li>可按功能细分开关：骰娘专属 AI 对话（<code>.ai</code>）、骰点文本优化、随机插话、表情包（偷表情）、KP 建议。</li>
-      </ul>
-      <div class="helph3">群聊 AI 行为</div>
-      <ul class="help-list">
-        <li><b>随机插话概率</b>：每条回复后骰娘主动接话的命中概率。</li>
-        <li><b>插话附带表情概率</b>：每次插话时顺带一个收藏表情的概率。</li>
-        <li>需先在「AI 功能开关」中开启对应功能，概率才会生效。</li>
-      </ul>
-      <div class="helph3">表情包库</div>
-      <ul class="help-list">
-        <li>从群里“偷”到的表情（emoji / 图片 / 文本图）会自动收集到这里，可手动录入、打标签、随机调用。</li>
-        <li>关闭「表情包(meme)」开关后，插话不再附带表情，但收集仍会进行。</li>
-      </ul>` },
-    { id: 'chat', ic: '💬', title: 'AI 助手与侧栏对话', html: () => `
-      <p>「AI 助手」页与右侧常驻抽屉（💬 AI 对话）共用同一段会话。</p>
-      <ul class="help-list">
-        <li>按实体类型生成 NPC / 人物卡 / 地区 / 日志 / 怪物。</li>
-        <li>「润色上一段」「续写剧情」「剧情要点」「剧情建议」等快捷操作。</li>
-        <li>「⇥ 把回复建为资料卡」：把最近一条 AI 回复一键拆为资料卡。</li>
-        <li>「剧本解析」：粘贴剧本一键拆成多类资料，勾选后写入。</li>
-      </ul>` },
-    { id: 'relation', ic: '☸', title: '关系网', html: () => `
-      <p>在全 canvas 上搭建角色/势力/地点之间的关系网络。</p>
-      <ul class="help-list">
-        <li>添加节点，用连线连接并标注类型（盟友/敌对/从属/未知），可着色。</li>
-        <li>「一键整理」按连通分组自动聚簇排布；支持过滤、缩放、居中、位置持久化。</li>
-        <li>「AI 建议关系」让 AI 分析现有节点给出新增关系建议；支持一键撤销误操作。</li>
-      </ul>` },
-    { id: 'raw', ic: '📄', title: '原始文本与剧本进度', html: () => `
-      <p>导入任意文本类文件，自动去乱码、保留结构，得到纯净文本；也可用「AI 建议」在关键句子后内联插入带团建议（节奏、NPC 扮演、数值调整、线索埋设等），不改动原文本身。</p>
-      <div class="helph3">剧本分幕与开团进度</div>
-      <p>点「🎬 剧本分幕」可把整篇团本拆成一幕幕剧本（每幕含地点、出场人物、剧情经过、关键线索与道具）。切到「🎬 剧本分幕」标签后即可进入开团推进模式：</p>
-      <ul class="help-list">
-        <li><b>进度胶囊</b>：点每幕右上角的胶囊循环切换「未开始 → 进行中 → 已完成 → 略过」。把某幕设为「进行中」时，原先进行中的幕会自动收尾为「已完成」，顺位推进不会错位；也可点「设为当前」直接跳过去。</li>
-        <li><b>伏笔兑现</b>：每幕「关键线索 / 伏笔」前都有勾选框，向玩家兑现后勾上即点亮划线。尚未兑现的伏笔会全部汇总在顶部的「本场待办」条里（点击可直接定位到那一幕），不再担心「埋了坑忘了填」。</li>
-        <li><b>现场备注</b>：每幕底部可随手记录临场情况（玩家的选择、裁决结果、被迫偏离原剧情等），下次开团会自动带进开团清单。</li>
-        <li><b>一键生成开团清单</b>：把当前幕的地点/出场/道具/线索与全部待兑现伏笔整理成一段提示词，自动填入侧栏对话并复制到剪贴板，直接发给 AI 索取本幕开场白与检查点提示。</li>
-        <li><b>重开进度</b>：进度与剧本原文彻底分离，剧本内容一个字都不会被改动。随时可「重开进度」清空重来；剧本被 AI 重新分幕或幕数变化后，旧进度自动作废，不会错位勾到别的幕。</li>
-      </ul>` },
-    { id: 'memory', ic: '🧠', title: '长期记忆与快捷键', html: () => `
-      <div class="helph3">长期记忆</div>
-      <p>在「AI 配置」逐条记录关键设定/进度/待办，AI 每次对话自动注入，保持长对话连贯。「剧情要点」可一键提炼近期对话中的要点写入。</p>
-      <div class="helph3">全局快捷键</div>
-      <ul class="help-list">
-        <li><code>Ctrl+K</code> 命令面板 · <code>Ctrl+Shift+F</code> 全局搜索</li>
-        <li><code>Ctrl+N</code> 新建卡片 · <code>Ctrl+D</code> 骰娘 · <code>Ctrl+E</code> 临场战斗 · <code>Ctrl+T</code> 统计分析 · <code>Esc</code> 关闭浮层</li>
-      </ul>` },
-    { id: 'dataflow', ic: '🗄', title: '数据、备份与换机', html: () => `
-      <ul class="help-list">
-        <li><b>多档案</b>：设置 → 数据，可新建/切换/复制/删除多套团档案。</li>
-        <li><b>自动备份</b>：每 30 分钟 + 退出应用前各备份一次；点「还原」可回滚。</li>
-        <li><b>版本快照</b>：每次变更自动沉淀一份，一键回滚（保留最近 40 份）。</li>
-        <li><b>自动自愈</b>：读档失败自动回退到最近完好备份/快照。</li>
-        <li><b>导出/导入 JSON</b>：打包全部资料 + AI 内容（不含密钥等“设定”），换机交接更安全。</li>
-      </ul>` },
-    { id: 'about', ic: 'ℹ', title: '关于与反馈', html: () => `
-      <p><b>KP 跑团工作台</b> v${APP_VERSION}（Electron 桌面版）—— 一款专为 TRPG 主持人（KP / 守密人 / GM）打造的 Windows 桌面辅助工具：资料管理、AI 辅助创作、地图与关系网、骰娘检定、记录润色、统计分析，全部收在一个免安装即用的应用里。制作人：<b>零弈秋</b>。</p>
-      <ul class="help-list">
-        <li><b>桌面外壳</b>：Electron（含 Chromium / Node.js），随包附第三方许可文本。</li>
-        <li><b>骰娘内核</b>：自研 dice-core（表达式求值 / 规则判定 / 指令大脑 / 连接通道），可完全脱离 AI 独立运转。</li>
-        <li><b>AI 能力</b>：调用你自己配置的 OpenAI 兼容接口，密钥本机加密保存，不经过本项目的任何服务器。</li>
-        <li><b>数据自持</b>：资料全部保存在本地 <code>data</code> 目录，不上传、不经第三方服务器，请定期备份。</li>
-        <li><b>免费</b>：个人独立开发的免费辅助工具，请勿用于商业用途。</li>
-      </ul>
-      <div class="helph3">借鉴与第三方说明</div>
-      <p>本项目整体为自研实现，除下列明确列明的参考内容外，<b>不复制、不捆绑任何第三方软件的代码、素材、插件包、台词、人设与品牌</b>；发布前会经零第三方残留扫描强制校验。凡有参考，均在此列明：</p>
-      <ul class="help-list">
-        <li><b>DiceZone / Dice-Next</b>（AGPL-3.0 开源骰娘）—— 为让用户沿用既有操作习惯，<b>参照其公开指令表对齐了骰娘指令的名称与写法</b>（如 <code>.ra</code> / <code>.rd</code> / <code>.en</code> / <code>.log</code> 等；指令语法属通行习惯，不涉及代码复制）。CoC 房规分档（0–7 号）与疯狂症状表（<code>.ti</code> / <code>.li</code>）均<b>依据 CoC 7th 公开规则自行实现</b>，未复制其源码或数据。程序整体运行于自研 dice-core 内核，不捆绑其可执行文件与素材。</li>
-        <li><b>第三方跑团工具「枭雄」</b> —— 地图模块的界面格局与操作呈现风格（v2.4.0 起），仅参考交互与布局思路，未使用其代码、素材与数据格式。</li>
-        <li><b>OneBot 11</b>（社区公开协议标准）—— 骰娘接入 QQ 个人号的连接协议；按公开标准自行实现，<b>不随包捆绑任何第三方协议端</b>，需用户自备合规协议端，不逆向 QQ 私有协议。</li>
-        <li><b>QQ 官方机器人开放平台 API</b>（腾讯公开接口）—— 骰娘接入官方机器人的通道，仅调用公开开放接口并自行适配。</li>
-        <li><b>CoC 7th / DnD 5e</b> 规则体系 —— 检定分档与规则插件的规则依据，使用公开的规则体系本身，条目内容自行撰写与整理。</li>
-        <li><b>Electron / Chromium / Node.js</b> —— 桌面运行时与打包基础，开源组件，随包附第三方许可文本。</li>
-      </ul>
-      <div class="helph3">侵权联系删除</div>
-      <p>本项目尊重一切在先权利。若你是某项内容的权利人，认为本软件（含代码、文档、界面文案、示例数据或发布产物）中的任何部分侵犯了你的合法权益，请附权利证明与具体位置联系 <b>QQ 247910428</b>（或在本仓库提交 Issue）；核实后我们会立即删除或修改相关内容、必要时下架对应版本，并公开说明处理结果。上述说明如有表述不当之处，同样欢迎指出，我们将立即更正。</p>
-      <div class="helph3">免责声明</div>
-      <p>本工具为免费个人辅助软件，数据由用户自行录入与保管，请定期备份；使用中造成的任何损失（含数据丢失）作者概不负责，请勿用于商业用途或违反所在平台规则。内容仅供 TRPG 跑团与创作参考。</p>
-      <p>Bug / 建议反馈 QQ：<b>247910428</b>。</p>` }
-  ];
+  /* ========== 更新公告 ========== */  /* ========== 帮助中心（视图实现已抽出到 views/help.js，此处保留薄代理桩） ========== */
   function renderHelp() {
-    let html = `<div class="page-title"><h2>帮助中心</h2><span class="hint">功能使用手册 · 开团流程 · AI 配置 · 分门别类随时查阅</span></div>`;
-    html += `<div class="helpgrid"><aside class="helpnav">`;
-    for (const c of HELP_CATS) {
-      html += `<button class="ghost helpnav-item" onclick="WB.helpGo('${c.id}')">${c.ic} ${c.title}</button>`;
-    }
-    html += `</aside><div class="helpbody">`;
-    for (const c of HELP_CATS) {
-      html += `<div class="setcard helpcard" id="help-${c.id}"><h4>${c.ic} ${c.title}</h4>${c.html()}</div>`;
-    }
-    html += `</div></div>`;
-    contentInner(html);
+    const v = window.KPViews && window.KPViews.help;
+    if (v && typeof v.renderHelp === 'function') return v.renderHelp.apply(this, arguments);
   }
 
   /* ---- 更新公告 / 自更新入口 ----
@@ -5103,7 +4841,7 @@
       h += `<div class="setcard"><h4>快捷键</h4>
         <div class="note" style="margin-bottom:8px">点「修改」后按下新的组合键即可改绑（需含 Ctrl / Alt / Shift，F1~F12 例外）；改完即存，「↺」恢复默认。</div>
         <div id="shortcutList"></div>
-        <label class="toggle-row" style="display:flex;align-items:center;gap:10px;margin-top:12px">
+        <label class="toggle-row" style="gap:10px;margin-top:12px">
           <input type="checkbox" ${S.settings.singleKeyNav ? 'checked' : ''} onchange="WB.setSingleKeyNav(this.checked)">
           <span><b>单键快速跳转</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">开启后，光标不在输入框时按下列单键直接切视图；浮层（弹窗 / 命令面板 / 搜索）打开时不响应。</span></span></label>
         <div class="hint" id="singleKeyHint" style="margin-top:8px"></div></div>`;
@@ -5113,7 +4851,7 @@
       h += `<div class="setcard" id="promptCard"><div class="note">加载提示词模板…</div></div>
         <div class="setcard" id="promptHubCard"><div class="note">加载提示词中枢（总提示词 / 各场景 / 分场景记忆）…</div></div>
         <div class="setcard"><h4>内容安全过滤（可编辑）</h4>
-          <label class="toggle-row" style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <label class="toggle-row" style="gap:10px;margin-bottom:8px">
             <input type="checkbox" id="mod_master" ${(S.settings.ai && S.settings.ai.moderate !== false) ? 'checked' : ''} onchange="WB.setAiFlag('moderate', this.checked)">
             <span><b>启用内容安全过滤</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">拦截面向真实未成年人的性内容、自残自杀指导、非法毒品、提示词注入等高危请求并说明；不影响 TRPG 虚构创作。建议保持开启。改动即保存。</span></span></label>
           <div class="note" style="margin-bottom:8px">以下为逐条规则：每条的「正则/关键词」为 JS 正则，命中即按「提示文案」拦截；可逐条开关/改/删，也可点下方「添加规则」新增。改动即保存、立即生效。</div>
@@ -5677,8 +5415,14 @@
     if (el) { try { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } catch (_) {} }
   }
   /* 全局跨实体搜索（侧栏输入） */
+  /* P1-12：150ms 防抖——高频按键合并到一次检索，不再逐键对全库做扫描（2.8.2 已优化序列化，此处再压触发频率） */
+  let _gsDeb = null;
   function globalSearch(v) {
-    S.globalQuery = (v || '').trim();
+    if (_gsDeb) clearTimeout(_gsDeb);
+    _gsDeb = setTimeout(() => { _gsDeb = null; runGlobalSearch(String(v || '')); }, 150);
+  }
+  function runGlobalSearch(v) {
+    S.globalQuery = v.trim();
     S.gType = 'all';
     switchView(S.globalQuery ? 'search' : 'dash');
   }
@@ -8697,6 +8441,17 @@
         _dw.qqSignCheck = await api.diceQq.signCheck();
         toast(_dw.qqSignCheck && _dw.qqSignCheck.ok ? '签名服务可用' : ('签名服务不可用：' + ((_dw.qqSignCheck && _dw.qqSignCheck.reason) || '未知')), (_dw.qqSignCheck && _dw.qqSignCheck.ok) ? 'ok' : 'err');
       }
+      /* P1-8：登录失败时一键切 OneBot 中转——展开「高级」区、高亮 OneBot 卡片并给出操作指引 */
+      else if (act === 'qq-to-onebot') {
+        const adv = document.querySelector('.qqd-adv');
+        if (adv) adv.open = true;
+        const ob = document.querySelector('[data-channel="onebot11"]');
+        if (ob) {
+          try { ob.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
+          ob.classList.add('flash'); setTimeout(() => ob.classList.remove('flash'), 1600);
+        }
+        toast('已展开「高级」OneBot 中转：在服务端地址处填好后点「启动」即可接管骰娘连接', 'ok');
+      }
     } catch (e) { toast('QQ 直连操作失败：' + ((e && e.message) || e), 'err'); }
     await refreshQqDirect();
   }
@@ -9287,7 +9042,137 @@
   const REL_ETYPES = [['', '默认'], ['ally', '友好'], ['enemy', '敌对'], ['sub', '隶属'], ['un', '未知']];
   const REL_ECOLOR = { ally: '#3fa37f', enemy: '#e05d5d', sub: '#5d7fd6', un: '#9aa3b5', def: '#8a93a6' };
   function relEdgeColor(t) { return REL_ECOLOR[t] || REL_ECOLOR.def; }
-  const _rel = { tx: 80, ty: 60, k: 1, W: 900, H: 600, sel: null, multi: null, box: null, drag: null, pan: null, edgeMode: false, pendingFrom: null, svg: null, _escInstalled: false, _resizeInstalled: false, undo: [], filter: '' };
+  const _rel = { tx: 80, ty: 60, k: 1, W: 900, H: 600, sel: null, multi: null, box: null, drag: null, pan: null, edgeMode: false, pendingFrom: null, svg: null, _escInstalled: false, _resizeInstalled: false, undo: [], filter: '', _raf: 0, _rafKind: null, _domEls: null, _edgeIdx: null, _vpRect: null };
+  /* P1-10 网格分桶：节点按世界坐标归入 REL_CELL 大小的格子，框选/命中只查相交格子，避免数百节点时线性扫全表 */
+  const REL_CELL = 160;
+  let _relBuckets = null;
+  function relBuildBuckets(r) {
+    const m = new Map();
+    for (const n of r.nodes) {
+      if (typeof n.x !== 'number' || typeof n.y !== 'number') continue;
+      const k = Math.floor(n.x / REL_CELL) + ',' + Math.floor(n.y / REL_CELL);
+      const arr = m.get(k); if (arr) arr.push(n); else m.set(k, [n]);
+    }
+    return m;
+  }
+  function relQueryBuckets(x0, y0, x1, y1) {
+    if (!_relBuckets) _relBuckets = relBuildBuckets(relData());
+    const out = [];
+    for (let cx = Math.floor(x0 / REL_CELL); cx <= Math.floor(x1 / REL_CELL); cx++) {
+      for (let cy = Math.floor(y0 / REL_CELL); cy <= Math.floor(y1 / REL_CELL); cy++) {
+        const arr = _relBuckets.get(cx + ',' + cy);
+        if (arr) { for (const n of arr) out.push(n); }
+      }
+    }
+    return out;
+  }
+  function relBuildEdgeIdx(r) {
+    const m = new Map();
+    for (const e of r.edges) {
+      if (!relGetNode(r, e.from) || !relGetNode(r, e.to)) continue;
+      const a = m.get(e.from), b = m.get(e.to);
+      if (a) a.push(e); else m.set(e.from, [e]);
+      if (b) b.push(e); else m.set(e.to, [e]);
+    }
+    return m;
+  }
+  /* P2-13 视口虚拟化：仅渲染落在当前视口（含缓冲 margin）内的节点与两端都在视口内的连线。
+   * 屏幕 = 世界 * k + t ⇒ 世界 = (屏幕 - t) / k。vpRect 记录上次整帧渲染覆盖的世界范围，
+   * 平移/缩放（relPaintView）后若新视口越出该范围，说明有新节点进入，需要整帧重绘一次。 */
+  const REL_VP_MARGIN = 400;   // 视口外缓冲：提前渲染，避免平移时边缘空白闪烁
+  function relViewportRect() {
+    const x0 = (0 - _rel.tx) / _rel.k - REL_VP_MARGIN;
+    const y0 = (0 - _rel.ty) / _rel.k - REL_VP_MARGIN;
+    const x1 = (_rel.W - _rel.tx) / _rel.k + REL_VP_MARGIN;
+    const y1 = (_rel.H - _rel.ty) / _rel.k + REL_VP_MARGIN;
+    return { x0, y0, x1, y1 };
+  }
+  /* 返回世界坐标矩形内的节点 id 集合：先经分桶粗筛，再按坐标精过滤（不含 vpRect 记录，纯几何过滤） */
+  function relVpNodeIds(x0, y0, x1, y1) {
+    const cand = relQueryBuckets(x0, y0, x1, y1);
+    const ids = new Set();
+    for (const n of cand) {
+      if (typeof n.x === 'number' && typeof n.y === 'number' &&
+          n.x >= x0 && n.x <= x1 && n.y >= y0 && n.y <= y1) ids.add(n.id);
+    }
+    return ids;
+  }
+
+  /* P1-10 画布绘制节流：drag/pan/zoom 等连续手势同一帧只重绘一次，且按需选用最轻的重绘路径
+     view = 仅更新视口 transform（平移/缩放） · drag = 仅更新被拖节点与关联连线 · full = 整帧重建 */
+  function relSchedulePaint(kind) {
+    const rank = { view: 0, drag: 1, full: 2 };
+    if (_rel._raf) {
+      if ((rank[_rel._rafKind] || 0) < rank[kind]) _rel._rafKind = kind;
+      return;
+    }
+    _rel._rafKind = kind;
+    _rel._raf = requestAnimationFrame(() => {
+      _rel._raf = 0;
+      const k = _rel._rafKind; _rel._rafKind = null;
+      if (k === 'view') relPaintView();
+      else if (k === 'drag') relPaintDraggedOnly();
+      else relPaint();
+    });
+  }
+  /* 平移 / 缩放：整棵 SVG 只有 <g.rel-vp> 的 transform 变化，原地改属性即可，不重建 DOM。
+   * P2-13：若新视口越出上次渲染覆盖范围（relViewportRect 相对 vpRect），需整帧重绘补上进入视口的新节点。 */
+  function relPaintView() {
+    const svg = _rel.svg; if (!svg) return;
+    const vp = svg.querySelector('g.rel-vp');
+    if (vp) vp.setAttribute('transform', 'translate(' + _rel.tx.toFixed(1) + ',' + _rel.ty.toFixed(1) + ') scale(' + _rel.k.toFixed(4) + ')');
+    else relPaint();
+    const v = relViewportRect();
+    const p = _rel._vpRect;
+    if (!p || v.x0 < p.x0 || v.y0 < p.y0 || v.x1 > p.x1 || v.y1 > p.y1) relPaint();
+  }
+  /* 拖拽：只移动被拖节点（含多选整组）及其关联连线的几何属性，拖拽中不再整帧重建 SVG */
+  function relPaintDraggedOnly() {
+    const svg = _rel.svg; if (!svg || !_rel.drag) return;
+    const d = _rel.drag;
+    const r = relData();
+    if (!_rel._edgeIdx) _rel._edgeIdx = relBuildEdgeIdx(r);
+    if (!_rel._domEls) {
+      const els = { g: new Map(), line: new Map(), elabel: new Map() };
+      const gs = svg.querySelectorAll('g.rel-node');
+      for (let i = 0; i < gs.length; i++) els.g.set(gs[i].getAttribute('data-nid'), gs[i]);
+      const ls = svg.querySelectorAll('line.rel-edge');
+      for (let i = 0; i < ls.length; i++) els.line.set(ls[i].getAttribute('data-eid'), ls[i]);
+      const lbs = svg.querySelectorAll('text.rel-elabel');
+      for (let i = 0; i < lbs.length; i++) els.elabel.set(lbs[i].getAttribute('data-eid'), lbs[i]);
+      _rel._domEls = els;
+    }
+    const byId = {}; for (const n of r.nodes) byId[n.id] = n;
+    const R = 20;
+    const nids = d.multi ? d.multi : [d.primary];
+    for (const id of nids) {
+      const n = byId[id]; if (!n || typeof n.x !== 'number' || typeof n.y !== 'number') continue;
+      const g = _rel._domEls.g.get(String(id)); if (!g) continue;
+      const cx = n.x.toFixed(1), cy = n.y.toFixed(1);
+      const body = g.querySelector('circle.rel-n-body'); if (body) { body.setAttribute('cx', cx); body.setAttribute('cy', cy); }
+      const hitc = g.querySelector('circle.rel-n-hit'); if (hitc) { hitc.setAttribute('cx', cx); hitc.setAttribute('cy', cy); }
+      const lab = g.querySelector('text.rel-nlabel'); if (lab) { lab.setAttribute('x', cx); lab.setAttribute('y', (n.y + R + 16).toFixed(1)); }
+      const kind = g.querySelector('text.rel-nkind'); if (kind) { kind.setAttribute('x', cx); kind.setAttribute('y', (n.y - R - 6).toFixed(1)); }
+      const es = _rel._edgeIdx.get(String(id));
+      if (!es) continue;
+      for (const e of es) {
+        const a = byId[e.from], b = byId[e.to]; if (!a || !b) continue;
+        const line = _rel._domEls.line.get(String(e.id)); if (!line) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const len = Math.hypot(dx, dy);
+        let x2 = b.x, y2 = b.y, mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 12;
+        if (len > 1) {
+          const ux = dx / len, uy = dy / len;
+          x2 = b.x - ux * (R + 3); y2 = b.y - uy * (R + 3);
+          mx = (a.x + x2) / 2; my = (a.y + y2) / 2 - 12;
+        }
+        line.setAttribute('x1', a.x.toFixed(1)); line.setAttribute('y1', a.y.toFixed(1));
+        line.setAttribute('x2', x2.toFixed(1)); line.setAttribute('y2', y2.toFixed(1));
+        const lb = _rel._domEls.elabel.get(String(e.id));
+        if (lb) { lb.setAttribute('x', mx.toFixed(1)); lb.setAttribute('y', my.toFixed(1)); }
+      }
+    }
+  }
   let _relFocus = null;   // U2-3：由卡片「⇄ 关系网」带入的待定位节点（进入关系网视图后消费一次）
 
   function relData() {
@@ -9417,15 +9302,26 @@
     const byId = {}; for (const n of r.nodes) byId[n.id] = n;
     const kw = (_rel.filter || '').toLowerCase().trim();
     const hit = (n) => !kw || String(n.label || '').toLowerCase().includes(kw) || String(n.kind || '').toLowerCase().includes(kw) || String(n.desc || '').toLowerCase().includes(kw);
-    let eHtml = '', nHtml = '';
     const R = 20;
+    /* 筛选命中统计（全量数据，与渲染子集无关） */
     let visE = 0, visN = 0;
+    if (kw) {
+      for (const e of r.edges) { const a = byId[e.from], b = byId[e.to]; if (a && b && hit(a) && hit(b)) visE++; }
+      for (const n of r.nodes) if (hit(n)) visN++;
+    }
+    /* P2-13 视口虚拟化：默认只把「当前视口（含 REL_VP_MARGIN 缓冲）」内的节点与
+     * 两端都在视口内的连线渲染进 SVG，上千节点时 DOM 只驻留可见子集。
+     * 筛选中（kw）保持全量渲染：用户按关键词定位时希望看到所有命中节点（含淡出未命中），
+     * 此时不虚拟化以免过滤目标落在视口外而「看不见」。 */
+    const v = relViewportRect();
+    const visIds = kw ? null : relVpNodeIds(v.x0, v.y0, v.x1, v.y1);
+    let eHtml = '', nHtml = '';
     /* 方向箭头 marker：每种连线颜色一个箭头定义，markerUnits=strokeWidth 使箭头随描边/缩放同步缩放 */
     const defs = `<defs>${Object.entries(REL_ECOLOR).map(([key, col]) => `<marker id="relArw${key}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 10 5 L 0 10 z" fill="${col}"/></marker>`).join('')}</defs>`;
     for (const e of r.edges) {
       const a = byId[e.from], b = byId[e.to]; if (!a || !b) continue;
+      if (visIds && (!visIds.has(e.from) || !visIds.has(e.to))) continue;   /* P2-13 视口外连线不渲染 */
       const show = !kw || (hit(a) && hit(b));
-      if (show) visE++;
       const sel = _rel.sel === e.id;
       const ecol = relEdgeColor(e.type);
       /* 箭头：连线缩短到目标节点边缘，末端加 marker 指示「from ➔ to」方向 */
@@ -9443,9 +9339,10 @@
       if (show) eHtml += `<text class="rel-elabel" data-eid="${esc(e.id)}" style="fill:${ecol}" x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle">${esc(e.label || '关系')}</text>`;
     }
     for (const n of r.nodes) {
+      if (visIds && !visIds.has(n.id)) continue;   /* P2-13 视口外节点不渲染 */
       const col = REL_COLORS[n.kind] || REL_COLORS.base;
       const sel = _rel.sel === n.id || (_rel.multi && _rel.multi.includes(n.id));
-      const show = hit(n); if (show) visN++;
+      const show = hit(n);
       nHtml += `<g class="rel-node" data-nid="${esc(n.id)}">
         <circle class="rel-n-body${sel ? ' sel' : ''}${show ? '' : ' off'}" data-nid="${esc(n.id)}" r="${R}" cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" fill="${col}" fill-opacity="${sel ? 1 : 0.9}" stroke="${sel ? '#fff' : (show && kw ? '#ffd24d' : 'rgba(0,0,0,.35)')}" stroke-width="${sel ? 3 : (show && kw ? 2.5 : 1)}"/>
         <circle class="rel-n-hit${show ? '' : ' off'}" data-nid="${esc(n.id)}" r="${R + 12}" fill="transparent"/>
@@ -9469,6 +9366,10 @@
     const st = q('relStats'); if (st) st.textContent = kw ? `筛选到 ${visN}/${r.nodes.length} 节点 · ${visE}/${r.edges.length} 连线` : `共 ${r.nodes.length} 节点 · ${r.edges.length} 连线`;
     /* 拖动/框选过程中不重建侧栏：每次 pointermove 都 relPaint，重建会清空正在输入的表单内容与焦点 */
     if (!_rel.drag && !_rel.box) relUpdateSide();
+    /* P1-10：整帧重建后 DOM 元素引用与空间分桶全部作废，按需惰性重建 */
+    _relBuckets = null; _rel._domEls = null; _rel._edgeIdx = null;
+    /* P2-13：记录本次整帧渲染覆盖的世界范围（视口 + 缓冲），供 relPaintView 判定是否需要补绘 */
+    _rel._vpRect = { x0: v.x0, y0: v.y0, x1: v.x1, y1: v.y1 };
   }
   /* 筛选与视图工具 */
   function relFilter(v) { _rel.filter = String(v || ''); relPaint(); }
@@ -9478,7 +9379,7 @@
     const ux = (cxp - _rel.tx) / _rel.k, uy = (cyp - _rel.ty) / _rel.k;
     const nk = Math.min(40, Math.max(0.2, _rel.k * factor));
     _rel.tx = cxp - ux * nk; _rel.ty = cyp - uy * nk; _rel.k = nk;
-    relPaint();
+    relPaintView();
   }
   function relZoomIn() { relZoomAt(1.25); }
   function relZoomOut() { relZoomAt(0.8); }
@@ -9494,7 +9395,7 @@
       _rel.tx = _rel.W / 2 - ((minX + maxX) / 2) * _rel.k;
       _rel.ty = _rel.H / 2 - ((minY + maxY) / 2) * _rel.k;
     } else { _rel.tx = _rel.W / 2; _rel.ty = _rel.H / 2; }
-    relPaint();
+    relPaintView();
   }
   function relFit() {
     const r = relData(); if (!r.nodes.length) { relCenter(); return; }
@@ -9511,7 +9412,7 @@
     _rel.k = Math.max(0.1, k);
     _rel.tx = (_rel.W - (minX + maxX) * _rel.k) / 2;
     _rel.ty = (_rel.H - (minY + maxY) * _rel.k) / 2;
-    relPaint();
+    relPaintView();
   }
   function relPaintLegend() {
     const lg = q('relLegend'); if (!lg) return;
@@ -9579,25 +9480,26 @@
   }
   function relPointerMove(ev) {
     if (_rel.drag) {
+      _relBuckets = null;   // 节点坐标已变，空间分桶作废（下次框选前重建）
       const u = relToUser(ev);
       if (_rel.drag.multi) {
         for (const id of _rel.drag.multi) {
           const m = relGetNode(relData(), id), o = _rel.drag.offs[id];
           if (m && o) { m.x = u.x + o.offX; m.y = u.y + o.offY; }
         }
-        relPaint();
       } else {
         const n = relGetNode(relData(), _rel.drag.primary);
-        if (n) { n.x = u.x + _rel.drag.offX; n.y = u.y + _rel.drag.offY; relPaint(); }
+        if (n) { n.x = u.x + _rel.drag.offX; n.y = u.y + _rel.drag.offY; }
       }
+      relSchedulePaint('drag');
     } else if (_rel.box) {
       const u = relToUser(ev);
       _rel.box.sx1 = u.sx; _rel.box.sy1 = u.sy;
-      relPaint();
+      relSchedulePaint('full');
     } else if (_rel.pan) {
       _rel.tx = _rel.pan.tx + (ev.clientX - _rel.pan.px);
       _rel.ty = _rel.pan.ty + (ev.clientY - _rel.pan.py);
-      relPaint();
+      relSchedulePaint('view');
     }
   }
   function relPointerUp(ev) {
@@ -9616,7 +9518,8 @@
       }
       const x0 = (Math.min(b.sx0, b.sx1) - _rel.tx) / _rel.k, x1 = (Math.max(b.sx0, b.sx1) - _rel.tx) / _rel.k;
       const y0 = (Math.min(b.sy0, b.sy1) - _rel.ty) / _rel.k, y1 = (Math.max(b.sy0, b.sy1) - _rel.ty) / _rel.k;
-      const ids = relData().nodes.filter(n => typeof n.x === 'number' && typeof n.y === 'number' && n.x >= x0 && n.x <= x1 && n.y >= y0 && n.y <= y1).map(n => n.id);
+      /* P1-10：网格分桶只查与选框相交的格子，再精确过滤落在框内的节点 */
+      const ids = relQueryBuckets(x0, y0, x1, y1).filter(n => n.x >= x0 && n.x <= x1 && n.y >= y0 && n.y <= y1).map(n => n.id);
       _rel.multi = ids.length ? ids : null;
       _rel.sel = null;
       relPaint();
@@ -9633,7 +9536,7 @@
     const f = ev.deltaY < 0 ? 1.12 : 0.89;
     const nk = Math.min(40, Math.max(0.2, _rel.k * f));
     _rel.tx = u.sx - u.x * nk; _rel.ty = u.sy - u.y * nk; _rel.k = nk;
-    relPaint();
+    relSchedulePaint('view');
   }
   function relDblClick(ev) {
     const t = ev.target; const nid = (t && t.getAttribute) ? t.getAttribute('data-nid') : null;
@@ -10125,7 +10028,7 @@
   function hydrateViews() {
     const KP = {
       q, esc, escJs, uid, S, CH, persist, toast, contentInner, APP_VERSION, CHANGELOG,
-      updaterApi, updHumanSize
+      updaterApi, updHumanSize, DATA_TYPE, STATS_K
     };
     window.KP = KP;
     const reg = window.KPViews || {};
