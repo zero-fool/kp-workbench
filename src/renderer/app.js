@@ -16,8 +16,14 @@
   const KINDS = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
   const TPL_KINDS = ['pcs', 'npcs', 'mobs']; // 仅「卡片类」实体支持切换模板（模板改变显示字段集）
   const THEMES = [['ember', '残火纪·暗黑'], ['parchment', '现代卷宗'], ['lite', '极简浅色'], ['neon', '赛博霓虹'], ['dusk', '暮光护眼']];
-  const APP_VERSION = '3.2.3';
+  const APP_VERSION = '3.2.4';
   const CHANGELOG = [
+    { version: '3.2.4', date: '2026-10-03', type: '正式版·关系网增强', items: [
+      '关系网新增框选多节点：在画布空白处按住左键拖拽出现选择框，松开后框内节点全部选中并高亮，拖动任一选中节点即可整体移动（相对位置保持不变）；支持 Shift+点击节点增减选择、空白单击或 Esc 取消选择。',
+      '关系网新增方向箭头：连线统一缩短至目标节点边缘并加箭头，明确指示「从 ➔ 到」的关系方向，箭头颜色随连线类型着色，两节点过近时自动省略箭头避免遮挡。',
+      '平移方式调整：原「空白拖拽平移」改为框选手势，平移改用 Shift+拖拽或鼠标中键拖拽，界面提示同步更新。',
+      '验证：单元测试与回归测试全绿，npm run verify 通过。'
+    ] },
     { version: '3.2.3', date: '2026-10-03', type: '正式版·解析提速与风控治理', items: [
       'QQ 登入风控治理：接入签名服务（SL / QSign 等）并支持连通性自检；新增「登录诊断」展示协议版本 / 平台 / 设备指纹 / 被踢原因码与最近事件；登录态按账号固定复用设备指纹；登录失败指数退避、连点频控拦截；并明确提示「与电脑端官方 QQ 互踢，建议用独立小号或改走 OneBot 中转」。',
       'AI 生成质量整改（「结合对话」场景）：上下文默认只注入同类条目名称清单（不再灌整段对话与大量摘要），新增「生成 1 条 / 提取多条」模式选择，结构化生成 temperature 降至 0.3，明显减少跑题与胡乱编造。',
@@ -9190,7 +9196,7 @@
     startUpdateDownload, restartUpdate, laterUpdate, openReleasePage, saveUpdateSettings,
     relAddNode, relSaveNewNode, relSaveNode, relDelNode, relAddEdge, relSaveNewEdge, relSaveEdge, relDelEdge,
     relEdgePick, relConfirmEdge, relLayout, relUndo, relClear, relImportEnts, relAiSuggest, relGoNode,
-    relToggleList, relListPick, relFilter, relZoomIn, relZoomOut, relFit, relCenter, toggleDrawerScript, setImportTpl,
+    relToggleList, relListPick, relFilter, relZoomIn, relZoomOut, relFit, relCenter, relClearMulti, toggleDrawerScript, setImportTpl,
     relToggleAll, relApplyOps,
     rawInput, rawClear, rawSuggest, rawExport, removePendFile, clearPendFiles,
     rawScriptBreak, rawShowTxt, rawShowSug, rawShowScript, rawExportScript,
@@ -9259,7 +9265,7 @@
   const REL_ETYPES = [['', '默认'], ['ally', '友好'], ['enemy', '敌对'], ['sub', '隶属'], ['un', '未知']];
   const REL_ECOLOR = { ally: '#3fa37f', enemy: '#e05d5d', sub: '#5d7fd6', un: '#9aa3b5', def: '#8a93a6' };
   function relEdgeColor(t) { return REL_ECOLOR[t] || REL_ECOLOR.def; }
-  const _rel = { tx: 80, ty: 60, k: 1, W: 900, H: 600, sel: null, drag: null, pan: null, edgeMode: false, pendingFrom: null, svg: null, _escInstalled: false, _resizeInstalled: false, undo: [], filter: '' };
+  const _rel = { tx: 80, ty: 60, k: 1, W: 900, H: 600, sel: null, multi: null, box: null, drag: null, pan: null, edgeMode: false, pendingFrom: null, svg: null, _escInstalled: false, _resizeInstalled: false, undo: [], filter: '' };
   let _relFocus = null;   // U2-3：由卡片「⇄ 关系网」带入的待定位节点（进入关系网视图后消费一次）
 
   function relData() {
@@ -9281,7 +9287,7 @@
       toast('关系网里还没有「' + name + '」节点：可点「＋ 新增节点」或「从资料导入」后再来定位', 'warn');
       return false;
     }
-    _rel.sel = n.id;
+    _rel.sel = n.id; _rel.multi = null;
     if (typeof n.x === 'number' && typeof n.y === 'number') {
       _rel.tx = _rel.W / 2 - n.x * _rel.k;
       _rel.ty = _rel.H / 2 - n.y * _rel.k;
@@ -9302,7 +9308,7 @@
     if (!snap) { toast('没有可撤销的操作', ''); return; }
     const r = relData();
     r.nodes = snap.nodes; r.edges = snap.edges;
-    _rel.sel = null; relPersist('已撤销上一步'); relPaint();
+    _rel.sel = null; _rel.multi = null; _rel.box = null; relPersist('已撤销上一步'); relPaint();
   }
 
   function relAutoSize() {
@@ -9342,14 +9348,14 @@
         <button class="ghost" onclick="WB.relFit()" title="适应画布，一屏看全">⌂</button>
         <button class="ghost" onclick="WB.relCenter()" title="居中视图">◎</button>
         <span class="grow"></span>
-        <span class="hint">拖动节点 · 滚轮缩放 · 空白拖拽平移</span>
+        <span class="hint">拖动节点 · 空白拖拽框选 · Shift/中键 拖拽平移 · 滚轮缩放</span>
       </div>
       <div class="rel-wrap" id="relWrap">
         <svg id="relSvg" class="rel-svg"></svg>
         <div class="rel-side" id="relSide" hidden></div>
       </div>
       <div class="rel-legend" id="relLegend"></div>`);
-    _rel.sel = null; _rel.drag = null; _rel.pan = null; _rel.edgeMode = false; _rel.pendingFrom = null; _rel.listMode = false;
+    _rel.sel = null; _rel.multi = null; _rel.box = null; _rel.drag = null; _rel.pan = null; _rel.edgeMode = false; _rel.pendingFrom = null; _rel.listMode = false;
     const lb = q('relListBtn'); if (lb) lb.textContent = '☰ 关系清单';
     const sv2 = q('relSide'); if (sv2) { sv2.hidden = true; sv2.innerHTML = ''; }
     /* 缺坐标（含只有 x 没有 y 的脏数据）即补种，避免 relPaint 里 toFixed 抛错 */
@@ -9369,7 +9375,11 @@
     relPaintLegend();
     if (!_rel._escInstalled) {
       _rel._escInstalled = true;
-      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && _rel.edgeMode) { _rel.edgeMode = false; _rel.pendingFrom = null; relPaint(); } });
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (_rel.edgeMode) { _rel.edgeMode = false; _rel.pendingFrom = null; relPaint(); }
+        else if (_rel.multi || _rel.box) { _rel.multi = null; _rel.box = null; _rel.sel = null; relPaint(); }
+      });
     }
     if (!_rel._resizeInstalled) {
       _rel._resizeInstalled = true;
@@ -9388,36 +9398,55 @@
     let eHtml = '', nHtml = '';
     const R = 20;
     let visE = 0, visN = 0;
+    /* 方向箭头 marker：每种连线颜色一个箭头定义，markerUnits=strokeWidth 使箭头随描边/缩放同步缩放 */
+    const defs = `<defs>${Object.entries(REL_ECOLOR).map(([key, col]) => `<marker id="relArw${key}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 10 5 L 0 10 z" fill="${col}"/></marker>`).join('')}</defs>`;
     for (const e of r.edges) {
       const a = byId[e.from], b = byId[e.to]; if (!a || !b) continue;
       const show = !kw || (hit(a) && hit(b));
       if (show) visE++;
       const sel = _rel.sel === e.id;
       const ecol = relEdgeColor(e.type);
-      eHtml += `<line class="rel-edge${sel ? ' sel' : ''}${show ? '' : ' off'}" data-eid="${esc(e.id)}" style="stroke:${ecol}" x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"/>`;
-      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 12;
+      /* 箭头：连线缩短到目标节点边缘，末端加 marker 指示「from ➔ to」方向 */
+      const ekey = Object.prototype.hasOwnProperty.call(REL_ECOLOR, e.type) ? e.type : 'def';
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      let x2 = b.x, y2 = b.y, mkEnd = ` marker-end="url(#relArw${ekey})"`, mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 12;
+      if (len > 1) {
+        const ux = dx / len, uy = dy / len;
+        x2 = b.x - ux * (R + 3); y2 = b.y - uy * (R + 3);
+        mx = (a.x + x2) / 2; my = (a.y + y2) / 2 - 12;
+        if (len < 30) mkEnd = '';   /* 两点过近：箭头会被节点完全盖住，省略 */
+      }
+      eHtml += `<line class="rel-edge${sel ? ' sel' : ''}${show ? '' : ' off'}" data-eid="${esc(e.id)}" style="stroke:${ecol}"${mkEnd} x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/>`;
       if (show) eHtml += `<text class="rel-elabel" data-eid="${esc(e.id)}" style="fill:${ecol}" x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle">${esc(e.label || '关系')}</text>`;
     }
     for (const n of r.nodes) {
       const col = REL_COLORS[n.kind] || REL_COLORS.base;
-      const sel = _rel.sel === n.id;
+      const sel = _rel.sel === n.id || (_rel.multi && _rel.multi.includes(n.id));
       const show = hit(n); if (show) visN++;
       nHtml += `<g class="rel-node" data-nid="${esc(n.id)}">
-        <circle class="rel-n-body${show ? '' : ' off'}" data-nid="${esc(n.id)}" r="${R}" cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" fill="${col}" fill-opacity="${sel ? 1 : 0.9}" stroke="${sel ? '#fff' : (show && kw ? '#ffd24d' : 'rgba(0,0,0,.35)')}" stroke-width="${sel ? 3 : (show && kw ? 2.5 : 1)}"/>
+        <circle class="rel-n-body${sel ? ' sel' : ''}${show ? '' : ' off'}" data-nid="${esc(n.id)}" r="${R}" cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" fill="${col}" fill-opacity="${sel ? 1 : 0.9}" stroke="${sel ? '#fff' : (show && kw ? '#ffd24d' : 'rgba(0,0,0,.35)')}" stroke-width="${sel ? 3 : (show && kw ? 2.5 : 1)}"/>
         <circle class="rel-n-hit${show ? '' : ' off'}" data-nid="${esc(n.id)}" r="${R + 12}" fill="transparent"/>
         ${_rel.edgeMode && _rel.pendingFrom === n.id ? `<circle class="rel-n-pulse" data-nid="${esc(n.id)}" r="${R + 7}" fill="none" stroke="${col}" stroke-width="2"/>` : ''}
         ${show ? `<text class="rel-nlabel" text-anchor="middle" x="${n.x.toFixed(1)}" y="${(n.y + R + 16).toFixed(1)}" data-nid="${esc(n.id)}">${esc(n.label || '未命名')}</text>` : ''}
         ${show && n.kind ? `<text class="rel-nkind" text-anchor="middle" x="${n.x.toFixed(1)}" y="${(n.y - R - 6).toFixed(1)}" data-nid="${esc(n.id)}">${esc(relKindLabel(n.kind))}</text>` : ''}
       </g>`;
     }
+    /* 框选矩形（屏幕坐标系，画在 viewBox 顶层，不随视口缩放变形） */
+    let mqHtml = '';
+    if (_rel.box) {
+      const bx = Math.min(_rel.box.sx0, _rel.box.sx1), by = Math.min(_rel.box.sy0, _rel.box.sy1);
+      const bw = Math.abs(_rel.box.sx1 - _rel.box.sx0), bh = Math.abs(_rel.box.sy1 - _rel.box.sy0);
+      if (bw > 3 || bh > 3) mqHtml = `<rect class="rel-marquee" rx="4" x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}"/>`;
+    }
     svg.setAttribute('viewBox', `0 0 ${_rel.W} ${_rel.H}`);
-    svg.innerHTML = `<g class="rel-vp" transform="translate(${_rel.tx},${_rel.ty}) scale(${_rel.k})">
+    svg.innerHTML = `${defs}<g class="rel-vp" transform="translate(${_rel.tx},${_rel.ty}) scale(${_rel.k})">
         <g class="rel-edges">${eHtml}</g>
         <g class="rel-nodes">${nHtml}</g>
-      </g>`;
+      </g>${mqHtml}`;
     const st = q('relStats'); if (st) st.textContent = kw ? `筛选到 ${visN}/${r.nodes.length} 节点 · ${visE}/${r.edges.length} 连线` : `共 ${r.nodes.length} 节点 · ${r.edges.length} 连线`;
-    /* 拖动过程中不重建侧栏：每次 pointermove 都 relPaint，重建会清空正在输入的表单内容与焦点 */
-    if (!_rel.drag) relUpdateSide();
+    /* 拖动/框选过程中不重建侧栏：每次 pointermove 都 relPaint，重建会清空正在输入的表单内容与焦点 */
+    if (!_rel.drag && !_rel.box) relUpdateSide();
   }
   /* 筛选与视图工具 */
   function relFilter(v) { _rel.filter = String(v || ''); relPaint(); }
@@ -9483,24 +9512,66 @@
     if (nid && !eid) {
       // 连线模式：点击目标节点创建连线
       if (_rel.edgeMode && _rel.pendingFrom && _rel.pendingFrom !== nid) { relCreateEdgeQuick(_rel.pendingFrom, nid); return; }
+      // Shift+点击：把该节点加入 / 移出多选（配合框选做增删）
+      if (ev.shiftKey) {
+        const r = relData();
+        const list = _rel.multi ? _rel.multi.slice() : [];
+        /* 已有单选节点时，Shift 点击以它为起点累加 */
+        if (!list.length && _rel.sel && relGetNode(r, _rel.sel)) list.push(_rel.sel);
+        const i = list.indexOf(nid);
+        if (i >= 0) list.splice(i, 1); else list.push(nid);
+        _rel.multi = list.length ? list : null;
+        _rel.sel = _rel.multi ? nid : null;
+        if (_rel.sel && !relGetNode(r, _rel.sel)) _rel.sel = null;
+        relPaint();
+        return;
+      }
       const n = relGetNode(relData(), nid);
       const u = relToUser(ev);
-      _rel.drag = { id: nid, offX: n ? (n.x - u.x) : 0, offY: n ? (n.y - u.y) : 0 };
+      if (_rel.multi && _rel.multi.includes(nid)) {
+        /* 点击已多选中的节点：整组拖动（记录每个节点的偏移，保持相对位置） */
+        const offs = {};
+        for (const id of _rel.multi) { const m = relGetNode(relData(), id); if (m) offs[id] = { offX: m.x - u.x, offY: m.y - u.y }; }
+        _rel.drag = { multi: _rel.multi.slice(), offs, primary: nid };
+        _rel.sel = nid;
+      } else {
+        /* 点击未选中的节点：收敛为单节点拖动 */
+        _rel.multi = null;
+        _rel.drag = { multi: null, offs: null, primary: nid, offX: n ? (n.x - u.x) : 0, offY: n ? (n.y - u.y) : 0 };
+        _rel.sel = nid;
+      }
       try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
       ev.preventDefault();
       return;
     }
-    if (eid) { _rel.sel = eid; _rel.edgeMode = false; _rel.pendingFrom = null; relPaint(); return; }
-    // 空白处：平移
-    _rel.pan = { px: ev.clientX, py: ev.clientY, tx: _rel.tx, ty: _rel.ty };
+    if (eid) { _rel.sel = eid; _rel.multi = null; _rel.edgeMode = false; _rel.pendingFrom = null; relPaint(); return; }
+    // 空白处：Shift 或中键 → 平移；否则 → 框选
+    if (ev.button === 1 || ev.shiftKey) {
+      _rel.pan = { px: ev.clientX, py: ev.clientY, tx: _rel.tx, ty: _rel.ty };
+    } else {
+      const u = relToUser(ev);
+      _rel.box = { sx0: u.sx, sy0: u.sy, sx1: u.sx, sy1: u.sy };
+    }
     try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
     ev.preventDefault();
   }
   function relPointerMove(ev) {
     if (_rel.drag) {
       const u = relToUser(ev);
-      const n = relGetNode(relData(), _rel.drag.id);
-      if (n) { n.x = u.x + _rel.drag.offX; n.y = u.y + _rel.drag.offY; relPaint(); }
+      if (_rel.drag.multi) {
+        for (const id of _rel.drag.multi) {
+          const m = relGetNode(relData(), id), o = _rel.drag.offs[id];
+          if (m && o) { m.x = u.x + o.offX; m.y = u.y + o.offY; }
+        }
+        relPaint();
+      } else {
+        const n = relGetNode(relData(), _rel.drag.primary);
+        if (n) { n.x = u.x + _rel.drag.offX; n.y = u.y + _rel.drag.offY; relPaint(); }
+      }
+    } else if (_rel.box) {
+      const u = relToUser(ev);
+      _rel.box.sx1 = u.sx; _rel.box.sy1 = u.sy;
+      relPaint();
     } else if (_rel.pan) {
       _rel.tx = _rel.pan.tx + (ev.clientX - _rel.pan.px);
       _rel.ty = _rel.pan.ty + (ev.clientY - _rel.pan.py);
@@ -9509,13 +9580,30 @@
   }
   function relPointerUp(ev) {
     if (_rel.drag) {
-      const nid = _rel.drag.id; _rel.drag = null; _rel.pan = null;
-      _rel.sel = nid; _rel.edgeMode = false; _rel.pendingFrom = null;
+      const d = _rel.drag; _rel.drag = null; _rel.pan = null;
+      _rel.sel = d.primary;
+      _rel.multi = d.multi ? d.multi : _rel.multi;
+      _rel.edgeMode = false; _rel.pendingFrom = null;
       relPersist(); relPaint();
+    } else if (_rel.box) {
+      const b = _rel.box; _rel.box = null;
+      /* 空白单击（几乎无位移）：取消选择 */
+      if (Math.abs(b.sx1 - b.sx0) < 4 && Math.abs(b.sy1 - b.sy0) < 4) {
+        _rel.multi = null; _rel.sel = null; relPaint();
+        return;
+      }
+      const x0 = (Math.min(b.sx0, b.sx1) - _rel.tx) / _rel.k, x1 = (Math.max(b.sx0, b.sx1) - _rel.tx) / _rel.k;
+      const y0 = (Math.min(b.sy0, b.sy1) - _rel.ty) / _rel.k, y1 = (Math.max(b.sy0, b.sy1) - _rel.ty) / _rel.k;
+      const ids = relData().nodes.filter(n => typeof n.x === 'number' && typeof n.y === 'number' && n.x >= x0 && n.x <= x1 && n.y >= y0 && n.y <= y1).map(n => n.id);
+      _rel.multi = ids.length ? ids : null;
+      _rel.sel = null;
+      relPaint();
     } else if (_rel.pan) {
       _rel.pan = null;
     }
   }
+  /* 清除多选（侧栏「清除选择」按钮） */
+  function relClearMulti() { _rel.multi = null; _rel.sel = null; relPaint(); }
   function relWheel(ev) {
     const svg = _rel.svg; if (!svg) return;
     ev.preventDefault();
@@ -9532,7 +9620,7 @@
     appPrompt({ title: '重命名节点', label: '节点名称', value: n.label || '', okText: '保存' }, (v) => {
       if (v == null) return;
       const s = String(v).trim(); if (!s) { toast('名称不能为空', 'err'); return; }
-      n.label = s; _rel.sel = n.id; relPersist(); relPaint();
+      n.label = s; _rel.sel = n.id; _rel.multi = null; relPersist(); relPaint();
     });
   }
 
@@ -9568,6 +9656,19 @@
       return;
     }
     let sel = null;
+    /* 多选状态：优先展示「多选 N 个节点」面板 */
+    if (_rel.multi && _rel.multi.length > 1) {
+      const ms = _rel.multi.map(id => relGetNode(r, id)).filter(Boolean);
+      if (ms.length > 1) {
+        side.innerHTML = `<h4>多选 ${ms.length} 个节点</h4>
+          <div class="hint">拖动画布上任一选中节点即可整体移动，相对位置保持不变；按住 Shift 点击节点可继续增减选择。</div>
+          <div class="hint" style="margin-top:4px">已选：${esc(ms.slice(0, 8).map(n => n.label || n.id).join('、'))}${ms.length > 8 ? '…' : ''}</div>
+          <div class="foot" style="justify-content:flex-start;padding:0;margin-top:10px"><button class="ghost" onclick="WB.relClearMulti()">清除选择</button></div>`;
+        side.hidden = false;
+        return;
+      }
+      _rel.multi = null;
+    }
     if (_rel.sel) { const n = relGetNode(r, _rel.sel); if (n) sel = { type: 'node', node: n }; else { const e = r.edges.find(x => x.id === _rel.sel); if (e) sel = { type: 'edge', edge: e }; } }
     if (!sel) { side.hidden = true; side.innerHTML = ''; return; }
     side.hidden = false;
@@ -9596,7 +9697,7 @@
         <div class="foot" style="justify-content:flex-start;padding:0;margin-top:8px"><button onclick="WB.relSaveEdge()">保存</button><button class="danger" onclick="WB.relDelEdge()">删除</button></div>`;
     }
   }
-  function relEdgePick(id) { _rel.edgeMode = true; _rel.pendingFrom = id; _rel.sel = id; relPaint(); toast('点击画布上的目标节点以连线', 'ok'); }
+  function relEdgePick(id) { _rel.edgeMode = true; _rel.pendingFrom = id; _rel.sel = id; _rel.multi = null; relPaint(); toast('点击画布上的目标节点以连线', 'ok'); }
   function relConfirmEdge(fromId) {
     const sel = q('relEdgeTo'); const v = sel ? sel.value : '__pick';
     if (!v || v === '__pick') { toast('请选择目标节点或以画布点选', 'err'); return; }
@@ -9607,13 +9708,13 @@
     const r = relData();
     if (r.edges.some(e => (e.from === a && e.to === b) || (e.from === b && e.to === a))) { toast('这两点已有连线', 'err'); _rel.edgeMode = false; _rel.pendingFrom = null; relPaint(); return; }
     const e = { id: uid(), from: a, to: b, label: '关系' };
-    r.edges.push(e); _rel.sel = e.id; _rel.edgeMode = false; _rel.pendingFrom = null;
+    r.edges.push(e); _rel.sel = e.id; _rel.multi = null; _rel.edgeMode = false; _rel.pendingFrom = null;
     relPersist(); relPaint();
   }
   /* 关系清单：在侧栏以易读文本列出全部连线内容 */
   function relToggleList() {
     _rel.listMode = !_rel.listMode;
-    if (_rel.listMode) { _rel.sel = null; }
+    if (_rel.listMode) { _rel.sel = null; _rel.multi = null; }
     const lb = q('relListBtn'); if (lb) lb.textContent = _rel.listMode ? '✕ 收起清单' : '☰ 关系清单';
     const r = relData();
     const mayNeedLayout = _rel.listMode && r.nodes.length && r.nodes.some(n => typeof n.x !== 'number');
@@ -9621,7 +9722,7 @@
     relPaint();
   }
   function relListPick(id) {
-    _rel.sel = id;
+    _rel.sel = id; _rel.multi = null;
     const r = relData(); const e = r.edges.find(x => x.id === id);
     if (e) { const a = relGetNode(r, e.from), b = relGetNode(r, e.to); const an = a ? a.label : e.from, bn = b ? b.label : e.to; toast(an + ' ➔ ' + (e.label || '关系') + ' ➔ ' + bn, 'ok'); }
     relPaint();
@@ -9645,7 +9746,7 @@
     if (r.nodes.some(n => (n.label || '') === nm)) { toast('已存在同名节点', 'err'); return; }
     relAutoSize();
     r.nodes.push({ id: uid(), label: nm, kind, x: _rel.W / 2 + (Math.random() - 0.5) * 120, y: _rel.H / 2 + (Math.random() - 0.5) * 120 });
-    _rel.sel = r.nodes[r.nodes.length - 1].id; closeModal();
+    _rel.sel = r.nodes[r.nodes.length - 1].id; _rel.multi = null; closeModal();
     relPersist(); relPaint();
   }
   function relSaveNode() {
@@ -9663,7 +9764,7 @@
     const r = relData();
     r.nodes = r.nodes.filter(x => x.id !== id);
     r.edges = r.edges.filter(e => e.from !== id && e.to !== id);
-    _rel.sel = null; relPersist('已删除节点'); relPaint();
+    _rel.sel = null; _rel.multi = null; relPersist('已删除节点'); relPaint();
   }
   function relAddEdge() {
     const r = relData();
@@ -9686,7 +9787,7 @@
     if (r.edges.some(e => (e.from === a && e.to === b) || (e.from === b && e.to === a))) { toast('这两点已有连线', 'err'); return; }
     const lbl = String((q('relEdgeLabelM') && q('relEdgeLabelM').value) || '').trim() || '关系';
     const tp = (q('relEdgeTypeM') && q('relEdgeTypeM').value) || '';
-    r.edges.push({ id: uid(), from: a, to: b, label: lbl, type: tp || undefined }); _rel.sel = r.edges[r.edges.length - 1].id; closeModal();
+    r.edges.push({ id: uid(), from: a, to: b, label: lbl, type: tp || undefined }); _rel.sel = r.edges[r.edges.length - 1].id; _rel.multi = null; closeModal();
     relPersist(); relPaint();
   }
   function relSaveEdge() {
@@ -9704,7 +9805,7 @@
     if (!(await appConfirm('删除连线', '删除这条连线？'))) return;
     relPushUndo();
     r.edges = r.edges.filter(e => e.id !== id);
-    _rel.sel = null; relPersist('已删除连线'); relPaint();
+    _rel.sel = null; _rel.multi = null; relPersist('已删除连线'); relPaint();
   }
 
   /* 从现有资料派生节点 */
