@@ -632,6 +632,10 @@ async function requestOnce(cfg, body, timeoutMs) {
     } catch (_) {
       try { const t = await resp.text(); if (t) msg = msg + '：' + String(t).slice(0, 300); } catch (__) { msg += '（无法读取响应体）'; }
     }
+    /* 余额不足 / 欠费（上游常见 402）：直接翻译成可操作提示，原文附后便于排查 */
+    if (resp.status === 402 || /insufficient|balance|billing|quota|欠费|余额不足/i.test(msg)) {
+      msg = 'AI 接口余额不足（账号余额或免费额度已用完）。请在「AI 配置」核对接口与 Key 对应的账号，充值或更换额度后重试（上游 ' + resp.status + '：' + msg.slice(0, 140) + '）';
+    }
     const httpErr = new Error(msg.trim());
     httpErr.status = resp.status;
     throw httpErr;

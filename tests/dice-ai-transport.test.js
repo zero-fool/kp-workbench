@@ -79,6 +79,19 @@ test('HTTP 非 2xx：chat 归类为鉴权/地址等可读错误', async () => {
   } finally { srv.close(); }
 });
 
+test('HTTP 402：chat 归类为「余额不足」提示（Insufficient Balance）', async () => {
+  const { srv, base } = await withServer((req, res) => {
+    res.statusCode = 402;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ error: { message: 'Insufficient Balance (request_id: abc-123)' } }));
+  });
+  try {
+    const r = await chat({ base, apiKey: 'k' }, [{ role: 'user', content: 'hi' }]);
+    assert.equal(r.ok, false);
+    assert.match(r.error, /余额不足/);
+  } finally { srv.close(); }
+});
+
 test('外部 signal 中止：chatRaw 抛取消错误', async () => {
   const { srv, base } = await withServer((req, res) => { setTimeout(() => res.end(okBody('late')), 50); });
   try {

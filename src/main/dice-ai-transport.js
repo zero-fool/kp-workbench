@@ -101,6 +101,7 @@ function humanError(e) {
   if (status === 429) return '请求过于频繁（限流），请稍后重试';
   const msg = String((e && e.message) || e || '');
   if (msg.indexOf('AI_TASK_CANCELLED') === 0) return '请求已取消';
+  if (status === 402 || /insufficient|balance|billing|quota|欠费|余额不足/i.test(msg)) return 'AI 接口余额不足（账号余额或免费额度已用完），请充值或更换 API Key 后重试';
   return msg || '调用失败';
 }
 

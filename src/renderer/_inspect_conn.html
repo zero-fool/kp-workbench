@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="parchment">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="styles.css">
+<style>
+  body { background:#d8d2c6; padding:24px; font-family:system-ui; }
+  h3 { margin:18px 0 6px; font-size:13px; color:#555; }
+</style>
+</head>
+<body>
+<h3>QQ 直连卡片（完整配置）</h3>
+<div id="host"></div>
+<h3>QQ 直连卡片（关闭签名服务）</h3>
+<div id="host2"></div>
+<h3>QQ 直连卡片（未配置签名，风控治理展开）</h3>
+<div id="host3"></div>
+<script src="dice-ui/conn-center.js"></script>
+<script>
+  function render(id, qd) {
+    const cfg = {
+      qqdirect: qd,
+      onebot11: { host: '127.0.0.1', port: 6700, accessToken: '' },
+      qqofficial: { appId: '', clientSecret: '' }
+    };
+    document.getElementById(id).innerHTML = DiceUIConnCenter.renderChannelWizard(cfg);
+    // 同步 app.js 的 applySignEnabled 联动
+    const cb = document.querySelector('#' + id + ' input[data-field="signEnabled"]');
+    const addr = document.querySelector('#' + id + ' input[data-field="signApiAddr"]');
+    if (cb && addr) addr.disabled = !cb.checked;
+  }
+  render('host', { uin: '123456789', signEnabled: true, signApiAddr: 'http://127.0.0.1:8080', ver: '8.9.63', platform: 'android' });
+  render('host2', { uin: '123456789', signEnabled: false, signApiAddr: 'http://127.0.0.1:8080', ver: '', platform: '' });
+  render('host3', { uin: '123456789', signEnabled: true, signApiAddr: '', ver: '', platform: '' });
+</script>
+</body>
+</html>

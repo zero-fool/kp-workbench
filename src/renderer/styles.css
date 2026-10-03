@@ -201,6 +201,8 @@ a.linkbtn:hover{color:var(--ink);border-color:var(--accent)}
 .page-title .hint{color:var(--ink-faint);font-size:12px}
 .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
 .toolbar .grow{flex:1}
+/* 工具栏下拉与按钮等高：避免 select（默认 ~31px）比按钮矮一截造成按钮位置错位 */
+.toolbar select{height:39px;padding:0 10px;flex:0 0 auto}
 input.search{min-width:220px}
 
 /* ── 参考文件格局：总览 · 今天要处理 / 战局概览 ── */
@@ -346,7 +348,7 @@ input.search{min-width:220px}
 .chatdrawer .chathead button{background:transparent;border:1px solid var(--line);color:var(--ink-soft);
   padding:2px 8px;border-radius:7px;font-size:12px}
 .chatdrawer-bar{display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--line);flex:0 0 auto}
-.chatdrawer-bar select{flex:0 0 auto;font-size:12px;padding:4px 6px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--ink-soft)}
+.chatdrawer-bar select{flex:0 0 auto;font-size:12px;height:30px;padding:0 8px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--ink-soft)}
 .chatdrawer-bar button{flex:1 1 auto;font-size:12px;padding:5px 6px;white-space:nowrap;border-radius:7px}
 .drawer-script{padding:8px 10px;border-bottom:1px solid var(--line);flex:0 0 auto}
 .drawer-script textarea{width:100%;min-height:56px;max-height:150px;line-height:1.5;font-size:12.5px;resize:vertical;box-sizing:border-box}
@@ -1600,7 +1602,7 @@ select:focus,input:focus,textarea:focus{border-color:var(--accent);box-shadow:va
 #winBar .top-actions{gap:9px}
 #winBar .top-actions button.ghost,#themeSelect,#winBar .profile-chip{height:32px}
 #winBar .top-actions button.ghost{display:inline-flex;align-items:center;gap:7px;padding:0 13px;
-  font-size:12.5px;font-weight:600;letter-spacing:.01em}
+  font-size:12.5px;font-weight:600;letter-spacing:.01em;white-space:nowrap;flex:0 0 auto}
 /* 主题下拉：去掉系统箭头，自画一枚中性箭头（深浅色主题下都能读） */
 #themeSelect{appearance:none;-webkit-appearance:none;cursor:pointer;padding:0 30px 0 13px;
   font-size:12.5px;font-weight:600;color:var(--ink-soft);
