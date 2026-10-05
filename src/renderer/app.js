@@ -752,8 +752,8 @@
   }
   function importProgressSet(p) {
     if (!p) return;
-    const PHASE = { parse: '解析模组', digest: '抽取段落提纲', merge: '合并提纲', scene: '剧本分幕' };
-    const GROUP = { parse: 'cards', digest: 'cards', merge: 'cards', scene: 'scenario' };
+    const PHASE = { parse: '解析模组', digest: '抽取段落提纲', merge: '合并提纲', clean: '提取剧本正文', scene: '剧本分幕' };
+    const GROUP = { parse: 'cards', digest: 'cards', merge: 'cards', clean: 'scenario', scene: 'scenario' };
     if (GROUP[p.phase]) _importProgGroup = GROUP[p.phase];
     const phaseText = PHASE[p.phase];
     const create = () => {
@@ -6372,6 +6372,7 @@
       <div class="script-title">剧本分幕 · 全篇共 ${scenes.length} 幕</div>
       ${chars.length ? `<div class="script-meta"><span class="script-meta-l">全篇主要登场</span>${chars.map(c => `<span class="script-person">${esc(c)}</span>`).join('')}</div>` : ''}
     </div>`;
+    head += script.extractedPath ? `<div class="hint" style="margin:6px 0 0;font-size:12px">📄 剧本正文（清洗整理版）已保存：<code>${esc(script.extractedPath)}</code></div>` : '';
     head += scriptTodoBarHtml(script, prog, st);
     let body = '';
     scenes.forEach((sc, i) => {
@@ -6706,11 +6707,12 @@
       for (const sc of scenes) for (const c of (sc.characters || [])) {
         const nm = (c.name || '').trim(); if (!nm || seen.has(nm)) continue; seen.add(nm); chars.push(nm);
       }
-      S.rawScript = { scenes, overview: { characters: chars.slice(0, 40) } };
+      S.rawScript = { scenes, overview: { characters: chars.slice(0, 40) }, extractedPath: r.extractedPath || null };
       S.rawShow = 'script';
       persist(); renderRawText();
-      if (r.failed) toast('剧本分幕完成：共 ' + scenes.length + ' 幕，但有 ' + r.failed + ' 段未能解析，结果可能不完整，可对缺失部分再分一次', 'ok');
-      else toast('剧本分幕完成：共 ' + scenes.length + ' 幕（未改动原剧情）', 'ok');
+      const saved = r.extractedPath ? '，剧本正文文件已保存：' + r.extractedPath : '';
+      if (r.failed) toast('剧本分幕完成：共 ' + scenes.length + ' 幕，但有 ' + r.failed + ' 段未能解析，结果可能不完整，可对缺失部分再分一次' + saved, 'ok');
+      else toast('剧本分幕完成：共 ' + scenes.length + ' 幕（未改动原剧情）' + saved, 'ok');
     } catch (e) {
       toast('剧本分幕失败：' + ((e && e.message) || e), 'err');
     } finally {

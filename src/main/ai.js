@@ -2065,11 +2065,45 @@ function buildContinueCtx(c, total, roll, lastPlot) {
   return s;
 }
 
-/* 返回 { scenes, failed }：failed 为未能解析的段数，供调用方提示「结果可能不完整」。 */
+/* 纯装饰行判定：不含任何中/英文字符、只由数字/标点/分隔线组成的行视为格式杂讯 */
+const DECOR_LINE_RE = /^[\s0-9\-—=_*~#•·。．.、，,；;：:！!？?【】\[\]（）()|│/\\^+]+$/;
+function decorOnly(s) {
+  return !/[\u4e00-\u9fa5A-Za-z]/.test(s) && DECOR_LINE_RE.test(s);
+}
+
+/* 剧本正文提取：把导入/粘贴的总文本清洗成可直接分幕的干净正文。
+ * 1) 剔除不可见/控制字符，行内多余空白压成单个空格，并去掉汉字邻接的多余空格（保留标点符号）；
+ * 2) 剔除纯装饰行（无文字、只含数字/符号/分隔线的行）；
+ * 3) 连续空行压缩为单个空行、去掉首尾空行。
+ * 不做内容取舍——「哪些才是剧情」由 AI 分幕时按“不改变、不删减、不添加剧情”的约束自然忽略非剧情部分。 */
+function extractScriptBody(raw) {
+  const t = String(raw || '');
+  const out = [];
+  let blank = 0;
+  for (const ln of t.split(/\r?\n/)) {
+    let line = ln
+      .replace(/^\uFEFF/, '')
+      .replace(/[\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060\uFEFF]/g, '') // 不可见字符
+      .replace(/\s+/g, ' ')                                                  // 多余空白压成单个半角空格
+      .trim();
+    line = line.replace(/([\u4e00-\u9fa5])\s+/g, '$1').replace(/\s+([\u4e00-\u9fa5])/g, '$1'); // 去掉汉字邻接空格
+    if (!line) { blank++; if (blank === 1) out.push(''); continue; }
+    blank = 0;
+    if (decorOnly(line)) continue;
+    out.push(line);
+  }
+  while (out.length && out[0] === '') out.shift();
+  while (out.length && out[out.length - 1] === '') out.pop();
+  return out.join('\n');
+}
+
+/* 返回 { scenes, failed, extracted }：failed 为未能解析的段数；extracted 为清洗后的剧本正文（供调用方落盘成文件）。
+ * 流程：先对总文本提取剧本正文（去装饰/多余空白，保留符号），再对该正文分幕。 */
 async function breakdownScenario(cfg, text, settings, opts) {
   opts = opts || {};
-  const t = String(text || '').trim();
-  if (!t) return { scenes: [], failed: 0 };
+  // 第 1 步：提取剧本正文——清洗总文本，得到干净正文；分幕基于该正文进行
+  const t = extractScriptBody(text);
+  if (!t) return { scenes: [], failed: 0, extracted: '' };
   const sys = sceneSysPrompt();
   // 按章节/段落/句子边界切分（而非定长硬切），避免把一幕从中间截断；少量重叠用于承接，重复的边界幕由结尾去重合并。
   const chunks = splitByStructure(t, SC_CHUNK, SC_OVERLAP);
@@ -2161,7 +2195,7 @@ async function breakdownScenario(cfg, text, settings, opts) {
     n.index = ++idx;
     result.push(n);
   }
-  return { scenes: result, failed };
+  return { scenes: result, failed, extracted: t };
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, usageLog, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, mergeRoll, buildContinueCtx };
+module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, extractScriptBody, usageLog, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, mergeRoll, buildContinueCtx };

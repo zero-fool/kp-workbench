@@ -603,15 +603,30 @@ function registerIpc() {
     args = args || {};
     return ai.generateContent(args.kind, args.tip, currentProfile(), ai.effectiveFields(doc), aiCfg('cards', 'AI 生成资料内容'), doc.settings);
   });
-  /* 团本分幕（剧本式）分析：尊重原剧情，把整篇团本拆成一幕幕可上演的剧本（人物/地点/剧情/线索等） */
+  /* 剧本正文提取产物落盘：写入用户数据目录 script-extract/，带时间戳命名，供用户核对与复用 */
+  function saveScriptExtract(text) {
+    const dir = path.join(app.getPath('userData'), 'script-extract');
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[-:TZ]/g, '').slice(0, 14);
+    const f = path.join(dir, '剧本正文-' + stamp + '.txt');
+    fs.writeFileSync(f, text, 'utf8');
+    return f;
+  }
+  /* 团本分幕（剧本式）分析：尊重原剧情，把整篇团本拆成一幕幕可上演的剧本（人物/地点/剧情/线索等）。
+   * 流程：先对总文本提取剧本正文（清洗去装饰/多余空白）并落盘成文件，再对该正文分幕。 */
   ipcMain.handle('ai:breakdownScenario', async (e, args) => {
     try {
       args = args || {};
       const text = String(args.text || '');
       if (!text.trim()) return { ok: false, error: '文本为空，请先在「原始文本」导入或粘贴团本内容' };
+      aiProgSend({ phase: 'clean', done: 0, total: 1, percent: 0, text: '正在提取剧本正文…', elapsedMs: 0, etaMs: null });
       const r = await ai.breakdownScenario(aiCfg('scenario', 'AI 剧本分幕'), text, doc.settings, { onProgress: aiParseProgress() });
+      let extractedPath = null;
+      if (r && r.extracted) {
+        try { extractedPath = saveScriptExtract(r.extracted); } catch (_) {}
+      }
       aiProgSend({ phase: 'done', done: 1, total: 1, percent: 100, text: '分幕完成' });
-      return { ok: true, scenes: r.scenes, failed: r.failed };
+      return { ok: true, scenes: r.scenes, failed: r.failed, extractedPath };
     } catch (err) {
       aiProgSend({ phase: 'error', text: '分幕失败', percent: 0 });
       return { ok: false, error: String((err && err.message) || err) };

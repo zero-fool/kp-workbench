@@ -1909,7 +1909,7 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     if (dst.skill.length !== 2) return '合并未对标签去重取并集';
     return true;
   });
-  check('U3-8 剧本分幕质量：结构分段 + 句子级回退 + 滚动锚点续写 + 降粒度重分 + 去重', () => {
+  check('U3-8 剧本分幕质量：结构分段 + 句子级回退 + 滚动锚点续写 + 降粒度重分 + 去重 + 剧本正文提取', () => {
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
     const ai = require(path.join(__dirname, '..', 'src', 'main', 'ai.js'));
     const structural = /const SC_CHUNK = 12000;/.test(aiSrc)
@@ -1922,7 +1922,10 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       && /function isDupScene\(a, b\)/.test(aiSrc)
       && /result\.some\(prev => isDupScene\(prev, n\)\)/.test(aiSrc)
       && /attempt <= 3 && !arr/.test(aiSrc)
-      && /return \{ scenes: result, failed \};/.test(aiSrc);
+      && /function extractScriptBody\(/.test(aiSrc)             // 分幕前先提取剧本正文（清洗总文本）
+      && /const t = extractScriptBody\(text\);/.test(aiSrc)
+      && /return \{ scenes: result, failed, extracted: t \};/.test(aiSrc)
+      && !/return \{ scenes: result, failed \};/.test(aiSrc);
     if (!structural) return '分幕优化缺失';
     // 无标题文本应在空行（段落边界）处切分，而不是按固定字数把自然段拦腰截断
     const para = '甲'.repeat(60);
@@ -1943,6 +1946,15 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     if (roll.chars.length !== 1 || roll.locs.length !== 1 || roll.titles.length !== 1) return '滚动锚点未按出现去重';
     const ctx = ai.buildContinueCtx(1, 3, roll, '上一幕结尾');
     if (!ctx.includes('前文已确立的关键人物：老王') || !ctx.includes('不要重复')) return '续写上下文未携带前文设定/防重复约束';
+    // 剧本正文提取：去装饰行、去多余空白（含全角空格/汉字间空格）、保留标点符号、压缩连续空行
+    const dirty = '\uFEFF　\n\n第一章　出发\n村民 A 说：　“风 向 变了。”\n\n\n----\n================\n村民B 应道：“是啊，该出发了。”';
+    const cleaned = ai.extractScriptBody(dirty);
+    if (cleaned.includes('----') || cleaned.includes('=====')) return '剧本正文提取未剔除纯装饰行';
+    if (!cleaned.includes('第一章出发')) return '剧本正文提取误删标题行（标题行应保留，仅去掉汉字邻接空格）';
+    if (!cleaned.includes('“风向变了。”')) return '剧本正文提取未去除汉字间多余空格或误删标点符号';
+    if (cleaned.includes('村民 A')) return '剧本正文提取未去除人物名与冒号间的多余空格';
+    if (/\n{3,}/.test(cleaned)) return '剧本正文提取未压缩连续空行';
+    if (cleaned.startsWith('\uFEFF') || cleaned.startsWith('　')) return '剧本正文提取未剔除行首不可见字符/全角空格';
     return true;
   });
   check('U3-9 进度条结束即消失 + 分幕进度可见：解析/拆分/分幕均发 done 终止信号', () => {
