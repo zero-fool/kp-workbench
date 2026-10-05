@@ -1162,6 +1162,7 @@ function looksLikeNonPersonName(name, extra) {
  * 固定字符数硬切容易把一段剧情/一个角色卡拦腰截断。这里优先在章节/标题/编号行边界处切开，
  * 找不到合适边界时再回退到固定长度 + 重叠，兼顾「不漏信息」与「不打断结构」。 */
 const SEG_HEAD_RE = /^(?:第\s*[0-9一二三四五六七八九十百零]+\s*[章节幕部篇回]|Chapter\s+\d+|CHAPTER\s+\d+|[0-9]{1,3}\s*[、.．)）]|[一二三四五六七八九十]+\s*[、.．)）]|#{1,6}\s|序章|序幕|楔子|终章|尾声|后记|附录)/;
+const SENT_END_RE = /[。！？!?；;]/;   // 无标题无空行的连续文本，退到句末标点处切，避免从句子中间截断
 const SEG_MAX = 400; // U3-4：分段数上限（入口正文 4MB 按最短切分约 350 段，留余量；避免切分本身丢内容）
 function splitByStructure(text, target, overlap) {
   const t = String(text || '');
@@ -1173,17 +1174,23 @@ function splitByStructure(text, target, overlap) {
     let j = Math.min(i + target, t.length);
     if (j < t.length) {
       const floor = i + floorStep;
-      let headCut = -1, paraCut = -1;
+      let headCut = -1, paraCut = -1, sentCut = -1;
       for (let k = j; k > floor; k--) {           // 从右往左找切点
         if (t[k] !== '\n') continue;
         const line = t.slice(k + 1, k + 48).replace(/^\s+/, '');
         if (SEG_HEAD_RE.test(line)) { headCut = k; break; }        // 优先：章节/标题行
         if (paraCut < 0 && t[k + 1] === '\n') paraCut = k;          // 兜底：空行（段落边界）
       }
-      // 有标题就在标题处切；没有标题则退到最近的段落边界，避免把一句话/一个自然段拦腰截断；
-      // 两者都找不到才回退到固定长度（j 不动）。
+      // 既无标题也无空行（连续对话/叙述）时，退到最近的句末标点后切，避免从句子中间截断
+      if (headCut <= i && paraCut <= i) {
+        for (let k = j; k > floor; k--) {
+          if (SENT_END_RE.test(t[k])) { sentCut = k; break; }
+        }
+      }
+      // 切点优先级：标题行 > 段落空行 > 句末标点；都没有才回退到固定长度（j 不动）。
       if (headCut > i) j = headCut;
       else if (paraCut > i) j = paraCut;
+      else if (sentCut > i) j = sentCut + 1;        // 标点保留给上一块，从标点后继续
     }
     out.push(t.slice(i, j));
     if (j >= t.length) break;
@@ -1973,9 +1980,13 @@ async function suggestStory(cfg, content, existing) {
  *   1) 短文本一次调用输出全部场景 JSON；
  *   2) 长文本按「章节/标题边界」分段（不再定长硬切），逐段把「已产出的幕标题 + 上一幕结尾」回传，
  *      让模型接着往下分而不是重述，最后统一去重、重编幕号，保证剧情连续且不重复；
- *   3) 单段坏 JSON 会纠偏重试，避免插入「未返回」占位幕污染整篇；确实失败的段计入 failed 由调用方提示。 */
-const SC_CHUNK = 16000;      // 单块交给 AI 的字符量（按章节/标题边界切，不再定长硬切）
+ *   3) 单段坏 JSON 会纠偏重试，避免插入「未返回」占位幕污染整篇；主块多次失败会降粒度重分，
+ *      几乎不再缺段；确实失败的段计入 failed 由调用方提示。
+ *   4) 跨段续写携带「滚动锚点」：把前文已确立的人物/地点/线索/幕标题回传后续块，中后段不重述、不矛盾。 */
+const SC_CHUNK = 12000;      // 单块交给 AI 的字符量（按章节/段落/句子边界切，不再硬切；略降块高降低 JSON 截断率）
 const SC_OVERLAP = 200;      // 相邻块少量重叠，避免切点处丢一句承接；重复的边界幕由结尾去重合并
+const SC_SUB_CHUNK = 5000;   // 主块多次解析失败时降粒度重分的字符量（子块仍失败才计 failed）
+const SC_SUB_OVERLAP = 120;  // 降粒度子块的重叠量
 function sceneSysPrompt() {
   return '你是资深 TRPG 主持人（KP）的剧本拆解助手。请把给定跑团团本正文，在【不改变、不删减、不添加剧情】的前提下，按剧情推进的自然节点拆成一幕幕可上演的剧本。\n'
     + '严格输出一个 JSON 对象：{"scenes":[{"title":"这一幕标题","location":["地点1",...],"time":"大概时间/节点","characters":[{"name":"出场人物/势力","role":"在此幕的身份(可空)"}...],"plot":"这一幕的剧情经过","clues":["关键线索/伏笔",...],"props":["道具/机关/魔物",...],"note":"承接上幕/进入下幕的转折提示或主持注意点(可空)"}]}。\n'
@@ -1984,7 +1995,8 @@ function sceneSysPrompt() {
     + '2) title 要具体、彼此可区分（如「废弃教堂·初见执事」）；禁止出现多个都叫「探索」「战斗」「对话」的幕。\n'
     + '3) plot 按原文顺序叙述，保留关键动作、玩家决定与台词摘要，200~400 字；不得加入原文没有的剧情。\n'
     + '4) location 只列原文本明确提及的场地；characters 只写确实在这一幕出现或直接相关的角色；没有的内容给空数组。\n'
-    + '5) 只输出 JSON，不要输出任何解释文字或 Markdown 代码块。';
+    + '5) 只输出 JSON，不要输出任何解释文字或 Markdown 代码块。\n'
+    + '6) 本段通常拆 3~8 幕：只输出本段正文对应的幕，内容超出本段时不要硬塞；若「续写要求」给出前文已分好的幕与设定，不要重复它们，人物/地点/线索的名称与事实必须与其保持一致，不得改名、遗漏或自相矛盾。';
 }
 function normalizeScene(it, idx) {
   const s = (it && typeof it === 'object') ? it : {};
@@ -2020,48 +2032,74 @@ function isDupScene(a, b) {
   return same >= n * 0.6;
 }
 
+/* 从一批新幕中抽取「跨段一致性锚点」：人物/地点/线索/标题，按出现顺序去重后回传给后续块 */
+function mergeRoll(roll, arr) {
+  const push = (box, v, cap) => {
+    const s = String(v || '').trim();
+    if (!s || box.indexOf(s) >= 0 || box.length >= cap) return;
+    box.push(s);
+  };
+  for (const s of arr) {
+    if (!s || typeof s !== 'object') continue;
+    for (const c of Array.isArray(s.characters) ? s.characters : []) {
+      const n = (c && typeof c === 'object') ? (c.name || '') : c;
+      push(roll.chars, n, 30);
+    }
+    for (const l of Array.isArray(s.location) ? s.location : []) push(roll.locs, l, 20);
+    for (const k of Array.isArray(s.clues) ? s.clues : []) push(roll.clues, k, 20);
+    push(roll.titles, s.title, 24);
+  }
+}
+/* 跨段续写上下文：把「已分幕标题 + 前文人物/地点/线索 + 上一幕结尾」回传，
+ * 让中后段模型沿既有设定续分，不重述已分幕、不改名、不自相矛盾。 */
+function buildContinueCtx(c, total, roll, lastPlot) {
+  if (total <= 1) return '';
+  let s = '\n【续写要求】这是全篇第 ' + (c + 1) + ' / ' + total + ' 部分。\n';
+  if (roll.titles.length) s += '已分好的幕（不要重复，只列出其后新出现的幕）：\n- ' + roll.titles.join('\n- ') + '\n';
+  else s += '这是全篇开头，请从这里开始分幕。\n';
+  if (roll.chars.length) s += '前文已确立的关键人物：' + roll.chars.join('、') + '\n';
+  if (roll.locs.length) s += '前文已确立的地点：' + roll.locs.join('、') + '\n';
+  if (roll.clues.length) s += '前文已确立的线索/伏笔：' + roll.clues.join('、') + '\n';
+  if (lastPlot) s += '上一幕结尾：' + lastPlot + '\n';
+  s += '本块分幕须与前文一致：人物/地点/线索沿用上述名称，不得改名、遗漏或自相矛盾。\n';
+  return s;
+}
+
 /* 返回 { scenes, failed }：failed 为未能解析的段数，供调用方提示「结果可能不完整」。 */
 async function breakdownScenario(cfg, text, settings, opts) {
   opts = opts || {};
   const t = String(text || '').trim();
   if (!t) return { scenes: [], failed: 0 };
   const sys = sceneSysPrompt();
-  // 按章节/标题边界切分（而非定长硬切），避免把一幕从中间截断；少量重叠用于承接，重复的边界幕由结尾去重合并。
+  // 按章节/段落/句子边界切分（而非定长硬切），避免把一幕从中间截断；少量重叠用于承接，重复的边界幕由结尾去重合并。
   const chunks = splitByStructure(t, SC_CHUNK, SC_OVERLAP);
   const onProg = typeof opts.onProgress === 'function' ? opts.onProgress : null;
   const t0 = Date.now();
-  const emit = (done) => {
+  const emit = (done, idx) => {
     if (!onProg) return;
     const total = chunks.length || 1;
     const elapsed = Date.now() - t0;
+    const preview = (chunks.length > 1 && typeof idx === 'number' && chunks[idx])
+      ? String(chunks[idx]).replace(/[\s]+/g, ' ').trim().slice(0, 40) : '';
     try {
       onProg({
         phase: 'scene', done, total,
         percent: Math.min(100, Math.round(done * 100 / total)),
-        text: '已完成 ' + done + ' / ' + total + ' 段…',
+        text: chunks.length > 1
+          ? ('已处理 ' + done + ' / ' + total + ' 段' + (preview ? ' · 正在分第 ' + (idx + 1) + ' 段「' + preview + '…」' : ''))
+          : '正在拆解剧本…',
         elapsedMs: elapsed,
         etaMs: done > 0 ? Math.round(elapsed / done * (total - done)) : null
       });
     } catch (_) {}
   };
-  emit(0);
+  emit(0, 0);
   const scenes = [];
   let failed = 0;
-  for (let c = 0; c < chunks.length; c++) {
-    // 续写上下文：把「已产出的幕标题 + 上一幕结尾」回传给模型，让它接着往下分，
-    // 而不是从本段开头重新分一遍（旧实现没有这层上下文，段与段之间反复重述同一场戏）。
-    const titles = scenes.map(s => sanitizeStr(s && s.title, 60)).filter(Boolean);
-    const lastPlot = scenes.length ? sanitizeStr(scenes[scenes.length - 1] && scenes[scenes.length - 1].plot, 300) : '';
-    const ctx = chunks.length > 1
-      ? ('\n【续写要求】这是全篇第 ' + (c + 1) + ' / ' + chunks.length + ' 部分。\n'
-        + (titles.length
-          ? ('以下幕已分好，不要重复，只列出其后新出现的幕：\n- ' + titles.slice(-12).join('\n- ') + '\n'
-            + (lastPlot ? ('上一幕结尾：' + lastPlot + '\n') : ''))
-          : '这是全篇开头，请从这里开始分幕。\n'))
-      : '';
-    const user = '【团本正文' + (chunks.length === 1 ? '' : ' · 第 ' + (c + 1) + ' / ' + chunks.length + ' 部分') + '】\n' + chunks[c] + ctx;
+  const roll = { chars: [], locs: [], clues: [], titles: [] };
+  /* 对一段正文调用 AI 产出幕；返回 null 表示多次尝试后仍失败。用户取消立即上抛。 */
+  const tryChunk = async (user) => {
     let arr = null;
-    // 单段最多重试 3 次：坏 JSON 时纠偏重发，避免直接插入「未返回」占位幕污染整篇分幕。
     for (let attempt = 1; attempt <= 3 && !arr; attempt++) {
       try {
         const remind = attempt > 1 ? '\n【要求纠正】你上一次没有返回可解析的 JSON。请只输出一个 JSON 对象（含 scenes 数组），紧凑完整，不要解释文字或代码块。' : '';
@@ -2072,12 +2110,39 @@ async function breakdownScenario(cfg, text, settings, opts) {
         arr = got;
       } catch (e) {
         if (String((e && e.message) || e).indexOf('AI_TASK_CANCELLED') === 0) throw e; // 用户取消：立即上抛
-        if (attempt >= 3) { failed++; break; }
+        if (attempt >= 3) break;
         await new Promise(r => setTimeout(r, 500 * attempt));
       }
     }
-    if (arr) for (const s of arr) scenes.push(s);
-    emit(c + 1);
+    return arr;
+  };
+  for (let c = 0; c < chunks.length; c++) {
+    const lastPlot = scenes.length ? sanitizeStr(scenes[scenes.length - 1] && scenes[scenes.length - 1].plot, 300) : '';
+    const ctx = buildContinueCtx(c, chunks.length, roll, lastPlot);
+    const user = '【团本正文' + (chunks.length === 1 ? '' : ' · 第 ' + (c + 1) + ' / ' + chunks.length + ' 部分') + '】\n' + chunks[c] + ctx;
+    let arr = await tryChunk(user);
+    // 主块多次失败 → 降粒度切成子块逐个重试，几乎不再整段缺失；子块也失败才计 failed
+    if (!arr && chunks[c].length > SC_SUB_CHUNK) {
+      const subs = splitByStructure(chunks[c], SC_SUB_CHUNK, SC_SUB_OVERLAP);
+      const subScenes = [];
+      let subFailed = 0;
+      for (let sIdx = 0; sIdx < subs.length && subFailed < 2; sIdx++) {
+        const prev = subScenes.length ? sanitizeStr(subScenes[subScenes.length - 1] && subScenes[subScenes.length - 1].plot, 300) : lastPlot;
+        const subUser = '【团本正文 · 第 ' + (c + 1) + ' / ' + chunks.length + ' 部分之 ' + (sIdx + 1) + '】\n' + subs[sIdx]
+          + buildContinueCtx(c, chunks.length, roll, prev);
+        const subArr = await tryChunk(subUser);
+        if (subArr) for (const s of subArr) subScenes.push(s);
+        else subFailed++;
+      }
+      if (subScenes.length) arr = subScenes;
+    }
+    if (arr) {
+      for (const s of arr) scenes.push(s);
+      mergeRoll(roll, arr);
+    } else {
+      failed++;
+    }
+    emit(c + 1, c + 1);
   }
   if (!scenes.length) {
     throw new Error('AI 分幕未能返回可用结果' + (failed ? '（' + failed + ' 段解析失败）' : '') + '，请重试或缩短文本后再试');
@@ -2099,4 +2164,4 @@ async function breakdownScenario(cfg, text, settings, opts) {
   return { scenes: result, failed };
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, usageLog, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity };
+module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, usageLog, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, mergeRoll, buildContinueCtx };

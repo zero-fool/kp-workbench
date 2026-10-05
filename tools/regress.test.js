@@ -1909,13 +1909,16 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     if (dst.skill.length !== 2) return '合并未对标签去重取并集';
     return true;
   });
-  check('U3-8 剧本分幕质量：按章节结构分段 + 续写上下文 + 去重 + 坏 JSON 重试 + 部分失败可感知', () => {
+  check('U3-8 剧本分幕质量：结构分段 + 句子级回退 + 滚动锚点续写 + 降粒度重分 + 去重', () => {
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
     const ai = require(path.join(__dirname, '..', 'src', 'main', 'ai.js'));
-    const structural = /const SC_CHUNK = 16000;/.test(aiSrc)
+    const structural = /const SC_CHUNK = 12000;/.test(aiSrc)
       && /const chunks = splitByStructure\(t, SC_CHUNK, SC_OVERLAP\);/.test(aiSrc)
       && !/chunkTextByLen\(/.test(aiSrc)                       // 旧定长硬切已移除
       && /【续写要求】/.test(aiSrc)
+      && /function mergeRoll\(/.test(aiSrc)                     // 跨段滚动锚点（人物/地点/线索/标题回传）
+      && /function buildContinueCtx\(/.test(aiSrc)
+      && /const SC_SUB_CHUNK = 5000;/.test(aiSrc)               // 主块失败后降粒度重分
       && /function isDupScene\(a, b\)/.test(aiSrc)
       && /result\.some\(prev => isDupScene\(prev, n\)\)/.test(aiSrc)
       && /attempt <= 3 && !arr/.test(aiSrc)
@@ -1926,7 +1929,21 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     const doc = [para, para, para, para, para].join('\n\n');
     const segs = ai.splitByStructure(doc, 100, 0);
     const intact = segs.length > 1 && segs.every(s => s.split('\n\n').filter(x => x.trim()).every(x => x.length === 60));
-    return intact ? true : '分段未按段落边界切分（自然段被截断）';
+    if (!intact) return '分段未按段落边界切分（自然段被截断）';
+    // 无标题也无空行的连续文本，应退到句末标点处切分，而不是从句子中间截断
+    const cont = '这是第一句话。这是第二句话。这是第三句话。'.repeat(30);
+    const csegs = ai.splitByStructure(cont, 80, 0);
+    if (csegs.length < 2) return '连续文本未被切分';
+    const sentOk = csegs.slice(0, -1).every(s => /[。！？!?；;]$/.test(String(s).trim()));
+    if (!sentOk) return '连续文本未在句末标点处切分（句子被拦腰截断）';
+    // 跨段滚动锚点：人物/地点/线索/标题按出现去重，续写上下文携带前文设定且不重复已分幕
+    const roll = { chars: [], locs: [], clues: [], titles: [] };
+    ai.mergeRoll(roll, [{ title: '废弃教堂·初见', characters: [{ name: '老王', role: '执事' }], location: ['废弃教堂'], clues: ['钥匙在执事身上'] }]);
+    ai.mergeRoll(roll, [{ title: '废弃教堂·初见', characters: ['老王'], location: ['废弃教堂'], clues: ['钥匙在执事身上'] }]);
+    if (roll.chars.length !== 1 || roll.locs.length !== 1 || roll.titles.length !== 1) return '滚动锚点未按出现去重';
+    const ctx = ai.buildContinueCtx(1, 3, roll, '上一幕结尾');
+    if (!ctx.includes('前文已确立的关键人物：老王') || !ctx.includes('不要重复')) return '续写上下文未携带前文设定/防重复约束';
+    return true;
   });
   check('U3-9 进度条结束即消失 + 分幕进度可见：解析/拆分/分幕均发 done 终止信号', () => {
     const okDone = /text: '解析完成'/.test(mainSrc) && /text: '拆分完成'/.test(mainSrc) && /text: '分幕完成'/.test(mainSrc);
