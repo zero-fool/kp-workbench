@@ -932,6 +932,9 @@
   async function aiOpenUsagePanel() {
     let data = null;
     try { data = (window.api && window.api.aiUsage) ? await window.api.aiUsage() : null; } catch (_) { data = null; }
+    /* B-3 服务商健康度：按模型汇总最近窗口请求数/成功率/平均延迟/最近状态 */
+    let health = null;
+    try { if (window.api && window.api.healthStats) { const hr = await window.api.healthStats(1); health = (hr && hr.ok) ? hr.health : null; } } catch (_) { health = null; }
     const w = (S.settings && S.settings.aiUsageWindow) || 3600e3;
     /* U2-5：首次打开时按当前配置的模型自动猜一个价格预设，省得用户手填 */
     const budget = aiBudgetCfg();
@@ -987,6 +990,19 @@
           <button onclick="WB.aiBudgetSave()">保存</button>
         </div>
       </details>
+      ${health && health.list && health.list.length ? `<details class="ai-budget-card" style="margin-top:8px">
+        <summary>📈 AI 服务健康度（近 1 天，按模型）</summary>
+        <div class="note" style="margin:8px 0">请求数越多越可信；成功率低于 80% 或最近状态为异常时，建议检查「AI 配置」或切换模型。</div>
+        <table class="tbl" style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:5px 8px">模型</th><th style="text-align:left;padding:5px 8px">请求</th><th style="text-align:left;padding:5px 8px">成功率</th><th style="text-align:left;padding:5px 8px">平均耗时</th><th style="text-align:left;padding:5px 8px">最近状态</th></tr></thead><tbody>
+          ${health.list.map(h => `<tr>
+            <td style="padding:5px 8px">${esc(h.model)}</td>
+            <td style="padding:5px 8px">${h.calls}</td>
+            <td style="padding:5px 8px">${h.success}%</td>
+            <td style="padding:5px 8px">${fmtClock(h.avgMs)}</td>
+            <td style="padding:5px 8px">${h.lastStatus === 'ok' ? '<span style="color:var(--ok)">正常</span>' : '<span style="color:var(--danger)">异常</span>'}</td>
+          </tr>`).join('')}
+        </tbody></table>
+      </details>` : ''}
       <div class="hint" style="margin-bottom:6px">最近明细（时间倒序，最多 500 条）：</div>
       <div style="max-height:44vh;overflow:auto;border:1px solid var(--line);border-radius:10px">
         <table class="tbl" style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:5px 8px">时间</th><th style="text-align:left;padding:5px 8px">任务</th><th style="text-align:left;padding:5px 8px">耗时</th><th style="text-align:left;padding:5px 8px">token(入/出/总)</th><th style="text-align:left;padding:5px 8px">状态</th></tr></thead><tbody>${listRows}</tbody></table>
@@ -6376,6 +6392,12 @@
     if (script.sceneDir && Array.isArray(script.sceneFiles) && script.sceneFiles.length) {
       head += `<div class="hint" style="margin:6px 0 0;font-size:12px">📁 每幕要点已分别保存为 txt（${script.sceneFiles.length} 个文件）：<code>${esc(script.sceneDir)}</code> <button class="ghost small" onclick="WB.openScriptFolder()" title="在系统文件管理器中打开该文件夹">打开文件夹</button></div>`;
     }
+    if (Array.isArray(script.failedIdx) && script.failedIdx.length) {
+      head += `<div class="hint" style="margin:6px 0 0;font-size:12px">⚠️ 有 ${script.failedIdx.length} 段未成功解析，结果可能不完整。 <button class="ghost small" onclick="WB.scriptRerun()" title="只让 AI 重跑未解析的段，其余幕直接沿用、不重复消耗">补跑缺失段</button></div>`;
+    }
+    if (Array.isArray(script.versions) && script.versions.length) {
+      head += `<div class="hint" style="margin:6px 0 0;font-size:12px">📚 已归档 ${script.versions.length} 个历史版本 <button class="ghost small" onclick="WB.scriptVersions()" title="与当前分幕并排对比，随时回看旧稿">对比版本</button></div>`;
+    }
     head += scriptTodoBarHtml(script, prog, st);
     let body = '';
     scenes.forEach((sc, i) => {
@@ -6408,6 +6430,7 @@
           ${clueSt.length ? `<span class="scene-clue-sum${clueDone === clueSt.length ? ' all' : ''}">伏笔 ${clueDone}/${clueSt.length}</span>` : ''}
           <button class="scene-st st-${curSt}" onclick="WB.scriptStatusCycle(${i})" title="点击循环切换：未开始 → 进行中 → 已完成 → 略过">${scriptStLabel(curSt)}</button>
           ${isCur ? '' : `<button class="ghost small" onclick="WB.scriptGoto(${i})" title="把这一幕设为「进行中」（原进行中的幕自动收尾为已完成）">设为当前</button>`}
+          <button class="ghost small" onclick="WB.sceneRegen(${i})" title="让 AI 只重写这一幕（其余幕不动），弹出新旧对比，确认后再采纳">⟳ 重写</button>
         </div>
         <div class="scene-cols">
           <div class="scene-col"><div class="scene-col-l">📍 地点</div><div>${loc}${time}</div></div>
@@ -6710,13 +6733,27 @@
       for (const sc of scenes) for (const c of (sc.characters || [])) {
         const nm = (c.name || '').trim(); if (!nm || seen.has(nm)) continue; seen.add(nm); chars.push(nm);
       }
-      S.rawScript = { scenes, overview: { characters: chars.slice(0, 40) }, extractedPath: r.extractedPath || null, sceneDir: r.sceneDir || null, sceneFiles: r.sceneFiles || [] };
+      // A-5 版本化：旧分幕保留进 versions，供「对比版本」回看/回滚；单幕重写采纳时同样归档
+      const versions = [];
+      const old = S.rawScript;
+      if (old && Array.isArray(old.scenes) && old.scenes.length) {
+        versions.push({ at: old.vAt || Date.now(), scenes: old.scenes, overview: old.overview || {}, note: '重新分幕前' });
+      }
+      if (versions.length > 20) versions.splice(0, versions.length - 20);
+      S.rawScript = {
+        scenes, overview: { characters: chars.slice(0, 40) },
+        extractedPath: r.extractedPath || null, sceneDir: r.sceneDir || null, sceneFiles: r.sceneFiles || [],
+        failedIdx: r.failedIdx || [], chunkScenes: r.chunkScenes || [],
+        versions, vAt: Date.now()
+      };
       S.rawShow = 'script';
       persist(); renderRawText();
       const saved = r.extractedPath ? '，剧本正文文件已保存：' + r.extractedPath : '';
       const scn = (r.sceneFiles && r.sceneFiles.length) ? '，每幕要点已分别保存为 txt（' + r.sceneFiles.length + ' 个文件）' : '';
-      if (r.failed) toast('剧本分幕完成：共 ' + scenes.length + ' 幕，但有 ' + r.failed + ' 段未能解析，结果可能不完整，可对缺失部分再分一次' + saved + scn, 'ok');
-      else toast('剧本分幕完成：共 ' + scenes.length + ' 幕（未改动原剧情）' + saved + scn, 'ok');
+      // B-1 单次任务成本提示：用量 + 耗时 + 估算费用
+      const costTxt = scriptCostTxt(r.usage);
+      if (r.failed) toast('剧本分幕完成：共 ' + scenes.length + ' 幕，但有 ' + r.failed + ' 段未能解析，结果可能不完整，可点「补跑缺失段」再分一次' + saved + scn + costTxt, 'ok');
+      else toast('剧本分幕完成：共 ' + scenes.length + ' 幕（未改动原剧情）' + saved + scn + costTxt, 'ok');
     } catch (e) {
       toast('剧本分幕失败：' + ((e && e.message) || e), 'err');
     } finally {
@@ -6861,6 +6898,165 @@
     const d = S.rawScript && S.rawScript.sceneDir;
     if (!d) { toast('还没有分幕要点文件，先点「🎬 剧本分幕」生成', 'err'); return; }
     window.api.openFolder(d).then(r => { if (r && r.ok === false) toast('打开文件夹失败：' + (r.error || ''), 'err'); }).catch(() => {});
+  }
+
+  /* B-1 单次任务成本提示文本：按本次 usage（调用数/耗时/token）估算费用，无调用返回空串 */
+  function scriptCostTxt(usage) {
+    if (!usage || !(Number(usage.calls) > 0)) return '';
+    const cost = aiCostOf(usage, aiBudgetCfg());
+    return '，耗时 ' + fmtClock(Number(usage.msSum) || 0) + '，估算费用 ' + aiMoney(cost);
+  }
+  /* 采纳/落盘统一收尾：替换分幕结果 → 重新落盘每幕要点 txt → 持久化 → 就地重绘 */
+  async function scriptApplyScenes(scenes, extra) {
+    S.rawScript = Object.assign({}, S.rawScript || {}, { scenes }, extra || {});
+    if (window.api && window.api.saveSceneFiles) {
+      try {
+        const sv = await window.api.saveSceneFiles(scenes);
+        if (sv && sv.ok) { S.rawScript.sceneDir = sv.dir; S.rawScript.sceneFiles = sv.files; }
+      } catch (_) {}
+    }
+    persist();
+    if (S.view === 'rawtext') { S.rawShow = 'script'; rawRedrawOut(); }
+    if (S.view === 'gm') renderGM();
+  }
+  /* A-4 补跑缺失段：只让 AI 重跑未解析的段（其余幕直接复用既有结果，不重复消耗 token）。
+   * 补跑源必须是首次分幕用的同一份「清洗后剧本正文」，否则分段边界错位、既有幕无法复用。 */
+  async function scriptRerun() {
+    const script = S.rawScript;
+    const failedIdx = (script && Array.isArray(script.failedIdx)) ? script.failedIdx : [];
+    if (!failedIdx.length) { toast('没有需要补跑的缺失段', 'ok'); return; }
+    let src = S.rawText || '';
+    if (script.extractedPath && window.api.getFullText) {
+      try {
+        const full = await window.api.getFullText(script.extractedPath);
+        if (full && full.ok && typeof full.text === 'string' && full.text.trim()) src = full.text;
+      } catch (_) {}
+    }
+    if (!src || !src.trim()) { toast('缺少剧本正文，请重新分幕', 'err'); return; }
+    const btn = q('rawScriptBtn'); if (btn) btn.disabled = true;
+    toast('正在补跑 ' + failedIdx.length + ' 段缺失内容（其余幕直接沿用，不重复消耗）…');
+    try {
+      const r = await window.api.breakdownScenario({ text: src, onlyChunks: failedIdx, prevChunkScenes: script.chunkScenes || [] });
+      if (!r || !r.ok) { toast((r && r.error) || '补跑失败', 'err'); return; }
+      const scenes = (r.scenes || []).filter(s => s && s.title);
+      if (!scenes.length) { toast('补跑未返回结果，请重试', 'err'); return; }
+      await scriptApplyScenes(scenes, { failedIdx: r.failedIdx || [], chunkScenes: r.chunkScenes || [] });
+      const cost = scriptCostTxt(r.usage);
+      if (r.failed) toast('补跑完成：现有 ' + scenes.length + ' 幕，仍有 ' + r.failed + ' 段未能解析，可再次补跑' + cost, 'ok');
+      else toast('补跑完成：缺失段已补上，共 ' + scenes.length + ' 幕（未改动原剧情）' + cost, 'ok');
+    } catch (e) {
+      toast('补跑失败：' + ((e && e.message) || e), 'err');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+  /* A-6 单幕重生成：让 AI 只重写指定一幕（其余幕不动），成功后弹新旧对比，由用户决定采纳/放弃 */
+  async function sceneRegen(idx) {
+    const script = S.rawScript;
+    const scenes = (script && Array.isArray(script.scenes)) ? script.scenes : [];
+    if (!scenes[idx]) { toast('这一幕不存在', 'err'); return; }
+    let src = S.rawText || '';
+    if (script.extractedPath && window.api.getFullText) {
+      try {
+        const full = await window.api.getFullText(script.extractedPath);
+        if (full && full.ok && typeof full.text === 'string' && full.text.trim()) src = full.text;
+      } catch (_) {}
+    }
+    toast('AI 正在重写第 ' + (idx + 1) + ' 幕（其余幕不动）…');
+    try {
+      const r = await window.api.regenerateScene({ text: src, scenes, index: idx });
+      if (!r || !r.ok) { toast((r && r.error) || '重写失败', 'err'); return; }
+      if (!r.scene) { toast('AI 未返回新幕内容', 'err'); return; }
+      sceneCompareModal(idx, scenes[idx], r.scene, r.usage);
+    } catch (e) {
+      toast('重写失败：' + ((e && e.message) || e), 'err');
+    }
+  }
+  /* 新旧对比弹窗：并排展示旧幕/新幕；「采纳新稿」走 sceneAccept，「放弃」直接关闭 */
+  let _sceneDraft = null;
+  function sceneCompareModal(idx, oldSc, newSc, usage) {
+    const mask = q('modalMask'); const box = q('modalBox'); if (!mask || !box) return;
+    _sceneDraft = { idx, newSc };
+    const render = (sc, tag) => `
+      <div class="sc-cmp">
+        <div class="sc-cmp-h">${esc(tag)}</div>
+        <div class="sc-cmp-t">${esc(sc.title || '')}</div>
+        ${(Array.isArray(sc.location) && sc.location.length) ? `<div>📍 ${esc(sc.location.join('、'))}</div>` : ''}
+        ${sc.time ? `<div>🕐 ${esc(sc.time)}</div>` : ''}
+        <div>👥 ${esc((Array.isArray(sc.characters) ? sc.characters : []).map(c => (c && typeof c === 'object') ? (c.name || '') : c).join('、') || '—')}</div>
+        <div class="sc-cmp-plot">${renderInline(sc.plot || '')}</div>
+        ${(Array.isArray(sc.clues) && sc.clues.length) ? `<div>🔑 ${esc(sc.clues.join('、'))}</div>` : ''}
+        ${sc.note ? `<div class="hint">⟲ ${esc(sc.note)}</div>` : ''}
+      </div>`;
+    box.innerHTML = `<h3>第 ${idx + 1} 幕 · 重写对比</h3>
+      <div class="note" style="margin-bottom:8px">左为当前稿，右为 AI 重写稿。采纳后旧稿会自动存入历史版本，可随时回看。${scriptCostTxt(usage)}</div>
+      <div class="sc-cmp-grid">${render(oldSc, '当前稿')}${render(newSc, 'AI 重写稿')}</div>
+      <div class="foot">
+        <button class="ghost" onclick="WB.closeModal()">放弃</button>
+        <span class="grow"></span>
+        <button onclick="WB.sceneAccept()">采纳新稿</button>
+      </div>`;
+    mask.hidden = false;
+  }
+  /* 采纳重写稿：替换该幕 → 归档旧幕到历史版本 → 落盘/持久化/重绘 */
+  async function sceneAccept() {
+    const d = _sceneDraft; _sceneDraft = null;
+    if (!d || !d.newSc) return;
+    const script = S.rawScript;
+    const scenes = (script && Array.isArray(script.scenes)) ? script.scenes : [];
+    if (!scenes[d.idx]) return;
+    const oldSc = scenes[d.idx];
+    scenes[d.idx] = Object.assign({}, d.newSc, { index: d.idx + 1 });
+    const versions = Array.isArray(script.versions) ? script.versions.slice() : [];
+    versions.push({ at: Date.now(), scenes: scenes.map(s => Object.assign({}, s)), note: '第 ' + (d.idx + 1) + ' 幕重写前' });
+    if (versions.length > 20) versions.splice(0, versions.length - 20);
+    await scriptApplyScenes(scenes, { versions });
+    closeModal();
+    toast('已采纳第 ' + (d.idx + 1) + ' 幕新稿（旧稿已存入历史版本，每幕要点 txt 已刷新）', 'ok');
+  }
+  /* A-5 版本历史：列出归档版本，点「对比当前稿」逐幕并排比较 */
+  function scriptVersions() {
+    const script = S.rawScript;
+    const versions = (script && Array.isArray(script.versions)) ? script.versions : [];
+    if (!versions.length) { toast('还没有历史版本', 'ok'); return; }
+    const mask = q('modalMask'); const box = q('modalBox'); if (!mask || !box) return;
+    const rows = versions.concat().reverse().map((v, i) => {
+      const no = versions.length - i;
+      const sc = (v.scenes || []).filter(s => s && s.title);
+      return `<div class="sc-ver">
+        <div class="sc-ver-h">版本 ${no}<span class="hint"> · ${fmtClockAt(v.at || 0)}</span>${v.note ? ' · ' + esc(v.note) : ''}</div>
+        <div class="hint">共 ${sc.length} 幕 · 含「${esc((sc[0] && sc[0].title) || '—')}」${sc.length > 1 ? ' 等' : ''}</div>
+        <button class="ghost small" onclick="WB.sceneCompareVersion(${versions.length - no})">对比当前稿</button>
+      </div>`;
+    }).join('');
+    box.innerHTML = `<h3>📚 剧本版本历史</h3>
+      <div class="note" style="margin-bottom:8px">重新分幕、补跑或采纳单幕重写时，旧稿都会归档到这里，可与当前稿对比查看。</div>
+      ${rows || '<div class="empty">暂无历史版本</div>'}
+      <div class="foot"><button class="ghost" onclick="WB.closeModal()">关闭</button></div>`;
+    mask.hidden = false;
+  }
+  function sceneCompareVersion(vi) {
+    const script = S.rawScript;
+    const scenes = (script && Array.isArray(script.scenes)) ? script.scenes : [];
+    const versions = (script && Array.isArray(script.versions)) ? script.versions : [];
+    const v = versions[vi];
+    if (!v) return;
+    const vs = (v.scenes || []).filter(s => s && s.title);
+    const n = Math.max(vs.length, scenes.length);
+    let rows = '';
+    for (let i = 0; i < n; i++) {
+      const a = vs[i] || {}, b = scenes[i] || {};
+      rows += `<tr>
+        <td style="padding:6px 8px;white-space:nowrap">第 ${i + 1} 幕</td>
+        <td style="padding:6px 8px;vertical-align:top">${esc(a.title || '—')}${a.plot ? `<div class="hint">${esc(String(a.plot).replace(/\s+/g, ' ').slice(0, 90))}</div>` : ''}</td>
+        <td style="padding:6px 8px;vertical-align:top">${esc(b.title || '—')}${b.plot ? `<div class="hint">${esc(String(b.plot).replace(/\s+/g, ' ').slice(0, 90))}</div>` : ''}</td>
+      </tr>`;
+    }
+    const box = q('modalBox');
+    box.innerHTML = `<h3>📚 版本 ${vi + 1} vs 当前稿</h3>
+      <div class="note" style="margin-bottom:8px">逐幕并排：左侧为该历史版本，右侧为当前稿。</div>
+      <div style="max-height:60vh;overflow:auto"><table class="tbl" style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:5px 8px">幕</th><th style="text-align:left;padding:5px 8px">历史版本</th><th style="text-align:left;padding:5px 8px">当前稿</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="foot"><button class="ghost" onclick="WB.closeModal()">关闭</button></div>`;
   }
 
   /* ========== 地图 · 列表 ========== */
@@ -8999,6 +9195,7 @@
     relToggleAll, relApplyOps,
     rawInput, rawClear, rawSuggest, rawExport, removePendFile, clearPendFiles,
     rawScriptBreak, rawShowTxt, rawShowSug, rawShowScript, rawExportScript, openScriptFolder,
+    scriptRerun, sceneRegen, sceneAccept, scriptVersions, sceneCompareVersion,
     scriptStatusCycle, scriptGoto, scriptToggleClue, scriptNoteSet, scriptReset, scriptChecklist, scriptJump,
     gmEnter, gmExit, toggleGmMode, gmSceneGo, gmRoll,
     plotSummary, commitPlotPoints, storySuggest, dismissChatHint,

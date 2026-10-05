@@ -643,16 +643,22 @@ function registerIpc() {
   }
   /* 团本分幕（剧本式）分析：尊重原剧情，把整篇团本拆成一幕幕可上演的剧本（人物/地点/剧情/线索等）。
    * 流程：先对总文本提取剧本正文（清洗去装饰/多余空白）并落盘成文件；再对该正文分幕，
-   * 每一幕的要点再单独落盘成 txt（sceneFiles/sceneDir 供界面展示与打开文件夹）。 */
+   * 每一幕的要点再单独落盘成 txt（sceneFiles/sceneDir 供界面展示与打开文件夹）。
+   * A-4 补跑：透传 onlyChunks（只重跑这些段）+ prevChunkScenes（未失败段直接复用不耗 token）；
+   * 返回 failedIdx/chunkScenes/usage 供界面「补跑缺失段」与 B-1 单次成本提示使用。 */
   ipcMain.handle('ai:breakdownScenario', async (e, args) => {
     try {
       args = args || {};
       const text = String(args.text || '');
       if (!text.trim()) return { ok: false, error: '文本为空，请先在「原始文本」导入或粘贴团本内容' };
       aiProgSend({ phase: 'clean', done: 0, total: 1, percent: 0, text: '正在提取剧本正文…', elapsedMs: 0, etaMs: null });
-      const r = await ai.breakdownScenario(aiCfg('scenario', 'AI 剧本分幕'), text, doc.settings, { onProgress: aiParseProgress() });
+      const opts = { onProgress: aiParseProgress() };
+      if (args.taskMark) opts.taskMark = String(args.taskMark);
+      if (Array.isArray(args.onlyChunks)) opts.onlyChunks = args.onlyChunks;
+      if (Array.isArray(args.prevChunkScenes)) opts.prevChunkScenes = args.prevChunkScenes;
+      const r = await ai.breakdownScenario(aiCfg('scenario', 'AI 剧本分幕'), text, doc.settings, opts);
       let extractedPath = null;
-      if (r && r.extracted) {
+      if (r && r.extracted && !args.onlyChunks) {   // 补跑复用既有正文文件，不再重复写盘
         try { extractedPath = saveScriptExtract(r.extracted); } catch (_) {}
       }
       let sceneDir = null, sceneFiles = [];
@@ -660,9 +666,49 @@ function registerIpc() {
         try { const sv = saveSceneFiles(r.scenes); sceneDir = sv.dir; sceneFiles = sv.files; } catch (_) {}
       }
       aiProgSend({ phase: 'done', done: 1, total: 1, percent: 100, text: '分幕完成' });
-      return { ok: true, scenes: r.scenes, failed: r.failed, extractedPath, sceneDir, sceneFiles };
+      return {
+        ok: true, scenes: r.scenes, failed: r.failed,
+        failedIdx: Array.isArray(r.failedIdx) ? r.failedIdx : [],
+        chunkScenes: Array.isArray(r.chunkScenes) ? r.chunkScenes : [],
+        usage: r.usage || { calls: 0, errs: 0, msSum: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        extractedPath, sceneDir, sceneFiles
+      };
     } catch (err) {
       aiProgSend({ phase: 'error', text: '分幕失败', percent: 0 });
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  /* A-6 单幕重生成：只重写指定的一幕（版本化对比 + 按幕调用），其余幕不动。
+   * 透传 taskMark 便于 B-1 按次结算用量；返回新幕与本次用量。 */
+  ipcMain.handle('ai:regenerateScene', async (e, args) => {
+    try {
+      args = args || {};
+      const text = String(args.text || '');
+      const scenes = Array.isArray(args.scenes) ? args.scenes : [];
+      const index = Number(args.index);
+      if (!scenes[index]) return { ok: false, error: '要重写的幕不存在，请重试' };
+      const opts = {};
+      if (args.taskMark) opts.taskMark = String(args.taskMark);
+      const r = await ai.regenerateScene(aiCfg('scenario', 'AI 剧本分幕'), text, scenes, index, opts);
+      return { ok: true, scene: r.scene, usage: r.usage };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  /* B-3 服务商健康度：按模型汇总最近窗口内请求数/成功率/平均延迟/最近状态 */
+  ipcMain.handle('ai:healthStats', async (e, days) => {
+    try {
+      return { ok: true, health: ai.healthStats(Number(days) > 0 ? Number(days) : 7) };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
+  /* 重新落盘每幕要点 txt（单幕重生成/补跑采纳后刷新导出文件） */
+  ipcMain.handle('ai:saveSceneFiles', async (e, scenes) => {
+    try {
+      const sv = saveSceneFiles(Array.isArray(scenes) ? scenes : []);
+      return { ok: true, dir: sv.dir, files: sv.files };
+    } catch (err) {
       return { ok: false, error: String((err && err.message) || err) };
     }
   });

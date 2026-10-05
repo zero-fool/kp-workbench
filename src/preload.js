@@ -43,6 +43,7 @@ const AI_LABELS = {
   aiTest: 'AI 连通性测试',
   aiAudit: 'AI 数据审查',
   relationsSuggest: 'AI 补全关系',
+  regenerateScene: 'AI 单幕重写',
   splitImport: 'AI 拆分导入资料',
   analyzeImport: 'AI 分析导入资料'
 };
@@ -52,6 +53,7 @@ const AI_GROUPS = {
   aiChat: 'chat', aiSuggestText: 'chat', plotSummary: 'chat', suggestStory: 'chat', aiAudit: 'chat', relationsSuggest: 'chat',
   aiParse: 'cards', aiGenContent: 'cards', aiGenEntity: 'cards', aiGenCards: 'cards', aiPolish: 'cards', aiPolishBatch: 'cards', aiWriteScript: 'cards', splitImport: 'cards', analyzeImport: 'cards',
   breakdownScenario: 'scenario',
+  regenerateScene: 'scenario',
   aiGenBoard: 'map',
   aiGenTemplateForRules: 'tpl',
   aiTest: 'sys'
@@ -180,6 +182,7 @@ contextBridge.exposeInMainWorld('api', {
   aiParse: (...a) => aiGuard('aiParse', () => ipcRenderer.invoke('ai:parse', ...a))(),
   aiSuggestText: (...a) => aiGuard('aiSuggestText', () => ipcRenderer.invoke('ai:suggestText', ...a))(),
   breakdownScenario: (...a) => aiGuard('breakdownScenario', () => ipcRenderer.invoke('ai:breakdownScenario', ...a))(),
+  regenerateScene: (...a) => aiGuard('regenerateScene', () => ipcRenderer.invoke('ai:regenerateScene', ...a))(),
   plotSummary: (...a) => aiGuard('plotSummary', () => ipcRenderer.invoke('ai:plotSummary', ...a))(),
   suggestStory: (...a) => aiGuard('suggestStory', () => ipcRenderer.invoke('ai:suggestStory', ...a))(),
   aiGenContent: (...a) => aiGuard('aiGenContent', () => ipcRenderer.invoke('ai:genContent', ...a))(),
@@ -208,6 +211,9 @@ contextBridge.exposeInMainWorld('api', {
   /* 用量面板：读取/重置本轮 AI 用量统计（token + 耗时） */
   aiUsage: () => ipcRenderer.invoke('ai:usage'),
   aiUsageReset: (bucketMs) => ipcRenderer.invoke('ai:usageReset', bucketMs),
+  /* B-3 服务商健康度 + A-6 单幕重写后刷新每幕要点 txt */
+  healthStats: (days) => ipcRenderer.invoke('ai:healthStats', days),
+  saveSceneFiles: (scenes) => ipcRenderer.invoke('ai:saveSceneFiles', scenes),
   /* 注：骰娘 AI 开关不设独立 IPC——渲染层直接读写本地存档的 settings.dice.aiSwitches，
    * 与工作台 AI 的凭证/开关彻底分离，互不影响。 */
   /* 取消完成事件：渲染层据此提示「该任务已取消」，避免误以为仍在执行 */

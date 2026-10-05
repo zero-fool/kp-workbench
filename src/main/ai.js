@@ -480,6 +480,48 @@ function usageLog() {
     entries: _usageLog.map(x => Object.assign({}, x))
   };
 }
+/* B-1 单次任务用量结算：按 taskMark 过滤本次任务（分幕/补跑/单幕重生成/对比）的全部上游请求，
+ * 汇总调用数 / 耗时 / token，供界面即时提示「本次耗时与预估费用」。 */
+function usageByMark(mark) {
+  const key = String(mark || '');
+  let prompt = 0, completion = 0, total = 0, calls = 0, msSum = 0, errs = 0;
+  for (const x of _usageLog) {
+    if (key && x.mark !== key) continue;
+    calls++; msSum += x.ms || 0;
+    if (x.error || x.cancelled) errs++;
+    prompt += x.promptTokens || 0; completion += x.completionTokens || 0; total += x.totalTokens || 0;
+  }
+  return { mark: key, calls, errs, msSum, promptTokens: prompt, completionTokens: completion, totalTokens: total };
+}
+/* B-3 服务商健康度：按模型汇总最近窗口内的请求数 / 成功率 / 平均延迟 / 最近一次状态。
+ * 数据直接取自用量环形日志（每次请求都带 model / ms / error / status），供「AI 配置/用量」页展示。 */
+function healthStats(days) {
+  const cut = Date.now() - (Number(days) > 0 ? Number(days) : 1) * 86400e3;
+  const by = new Map();
+  for (const x of _usageLog) {
+    if (x.at < cut) continue;
+    const m = x.model || '未知';
+    let h = by.get(m);
+    if (!h) { h = { model: m, calls: 0, errs: 0, msSum: 0, lastOk: null, lastErr: null, statusCount: {} }; by.set(m, h); }
+    h.calls++; h.msSum += x.ms || 0;
+    if (x.error || x.cancelled) { h.errs++; h.lastErr = x.at; } else { h.lastOk = x.at; }
+    const st = x.status ? String(x.status) : 'ok';
+    h.statusCount[st] = (h.statusCount[st] || 0) + 1;
+  }
+  const list = [];
+  for (const h of by.values()) {
+    list.push({
+      model: h.model, calls: h.calls, errs: h.errs,
+      success: h.calls ? Math.round((h.calls - h.errs) / h.calls * 100) : 100,
+      avgMs: h.calls ? Math.round(h.msSum / h.calls) : 0,
+      lastAt: Math.max(h.lastOk || 0, h.lastErr || 0),
+      lastStatus: h.lastErr ? 'error' : 'ok',
+      statusCount: h.statusCount
+    });
+  }
+  list.sort((a, b) => b.calls - a.calls);
+  return { since: cut, list };
+}
 /* U3-5：预算熔断——按当前统计时段累计的 token 估算花费，达到用户设定上限即拒绝新的上游请求，
  * 避免「无感超支」。仅当 budget 传入了 >0 的 limit 时生效；不参与重试（status 402 不在可重试集合）。 */
 function usageCost(budget) {
@@ -612,17 +654,17 @@ async function requestOnce(cfg, body, timeoutMs) {
     const msNow = Date.now() - t0;
     if (e && e.name === 'AbortError') {
       if (controller._userCancel) { // 用户主动取消（cancelGroup 打标），才是「取消」
-        recordUsage({ label, ms: msNow, cancelled: true, group: cfg.group });
+        recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: msNow, cancelled: true, group: cfg.group });
         throw new Error('AI_TASK_CANCELLED 该任务已被取消');
       }
       throw new Error('AI 请求超时（超过 ' + Math.round(ms / 1000) + ' 秒）：连接/发送阶段无响应，请检查网络或调大「AI 配置」中的超时时间');
     }
-    recordUsage({ label, ms: msNow, error: true, group: cfg.group });
+    recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: msNow, error: true, group: cfg.group });
     throw new Error('AI 请求发送失败（上游原因）：' + ((e && e.message) || e));
   }
   if (!resp.ok) {
     clearTimeout(timer); release();
-    recordUsage({ label, ms: Date.now() - t0, error: true, status: resp.status, group: cfg.group });
+    recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: Date.now() - t0, error: true, status: resp.status, group: cfg.group });
     // 优先透传上游返回的具体错误信息，读不到再退化为状态码摘要
     let msg = 'AI 上游返回 ' + resp.status + ' ' + (resp.statusText || '');
     try {
@@ -661,6 +703,7 @@ async function requestOnce(cfg, body, timeoutMs) {
   recordUsage({
     label,
     model: cfg.model,
+    mark: cfg.mark,
     ms: Date.now() - t0,
     group: cfg.group,
     promptTokens: typeof u.prompt_tokens === 'number' ? u.prompt_tokens : undefined,
@@ -2097,16 +2140,24 @@ function extractScriptBody(raw) {
   return out.join('\n');
 }
 
-/* 返回 { scenes, failed, extracted }：failed 为未能解析的段数；extracted 为清洗后的剧本正文（供调用方落盘成文件）。
+/* 返回 { scenes, failed, failedIdx, chunkScenes, extracted, usage }：
+ * failed 为本次仍未能解析的段数；failedIdx 为失败段下标（供「补跑缺失段」只重跑这些段）；
+ * chunkScenes 为按段分组的未去重场景（成功段为数组、失败段为 null；补跑时回传可复用）；
+ * extracted 为清洗后的剧本正文；usage 为本次任务按 taskMark 结算的用量（耗时/token）。
  * 流程：先对总文本提取剧本正文（去装饰/多余空白，保留符号），再对该正文分幕。 */
 async function breakdownScenario(cfg, text, settings, opts) {
   opts = opts || {};
+  const mark = (opts && opts.taskMark) || ('b' + Date.now() + Math.floor(Math.random() * 1000));
+  const cfg2 = Object.assign({}, cfg, { mark });   // 本次任务统一打标，供 usageByMark 结算（B-1 单次成本）
   // 第 1 步：提取剧本正文——清洗总文本，得到干净正文；分幕基于该正文进行
   const t = extractScriptBody(text);
-  if (!t) return { scenes: [], failed: 0, extracted: '' };
+  if (!t) return { scenes: [], failed: 0, failedIdx: [], chunkScenes: [], extracted: '', usage: usageByMark(mark) };
   const sys = sceneSysPrompt();
   // 按章节/段落/句子边界切分（而非定长硬切），避免把一幕从中间截断；少量重叠用于承接，重复的边界幕由结尾去重合并。
   const chunks = splitByStructure(t, SC_CHUNK, SC_OVERLAP);
+  // A-4 补跑：onlyChunks = 需要重跑的下标集，prevChunkScenes = 既有各段场景（未失败段直接复用，不耗 token）
+  const only = (opts && Array.isArray(opts.onlyChunks)) ? new Set(opts.onlyChunks) : null;
+  const prev = (opts && Array.isArray(opts.prevChunkScenes)) ? opts.prevChunkScenes : null;
   const onProg = typeof opts.onProgress === 'function' ? opts.onProgress : null;
   const t0 = Date.now();
   const emit = (done, idx) => {
@@ -2130,14 +2181,18 @@ async function breakdownScenario(cfg, text, settings, opts) {
   emit(0, 0);
   const scenes = [];
   let failed = 0;
+  const failedIdx = [];
+  const chunkScenes = [];
   const roll = { chars: [], locs: [], clues: [], titles: [] };
+  // 补跑模式：先用既有成功段回填一致性锚点（人物/地点/线索/标题），再仅对失败段发起 AI
+  if (only && prev) for (const g of prev) if (Array.isArray(g)) mergeRoll(roll, g);
   /* 对一段正文调用 AI 产出幕；返回 null 表示多次尝试后仍失败。用户取消立即上抛。 */
   const tryChunk = async (user) => {
     let arr = null;
     for (let attempt = 1; attempt <= 3 && !arr; attempt++) {
       try {
         const remind = attempt > 1 ? '\n【要求纠正】你上一次没有返回可解析的 JSON。请只输出一个 JSON 对象（含 scenes 数组），紧凑完整，不要解释文字或代码块。' : '';
-        const raw = await rawJsonReply(cfg, sys, user + remind, 6000);
+        const raw = await rawJsonReply(cfg2, sys, user + remind, 6000);
         const obj = extractJsonObject(raw);
         const got = (obj && Array.isArray(obj.scenes)) ? obj.scenes : (Array.isArray(obj) ? obj : []);
         if (!got.length) throw new Error('未返回 scenes 数组');
@@ -2151,6 +2206,13 @@ async function breakdownScenario(cfg, text, settings, opts) {
     return arr;
   };
   for (let c = 0; c < chunks.length; c++) {
+    // A-4 补跑：非目标段直接沿用既有结果，不再消耗 token（保持同段切分，幕号不重排）
+    if (only && prev && !only.has(c) && Array.isArray(prev[c])) {
+      for (const s of prev[c]) scenes.push(s);
+      chunkScenes[c] = prev[c];
+      emit(c + 1, c + 1);
+      continue;
+    }
     const lastPlot = scenes.length ? sanitizeStr(scenes[scenes.length - 1] && scenes[scenes.length - 1].plot, 300) : '';
     const ctx = buildContinueCtx(c, chunks.length, roll, lastPlot);
     const user = '【团本正文' + (chunks.length === 1 ? '' : ' · 第 ' + (c + 1) + ' / ' + chunks.length + ' 部分') + '】\n' + chunks[c] + ctx;
@@ -2161,9 +2223,9 @@ async function breakdownScenario(cfg, text, settings, opts) {
       const subScenes = [];
       let subFailed = 0;
       for (let sIdx = 0; sIdx < subs.length && subFailed < 2; sIdx++) {
-        const prev = subScenes.length ? sanitizeStr(subScenes[subScenes.length - 1] && subScenes[subScenes.length - 1].plot, 300) : lastPlot;
+        const prevPlot = subScenes.length ? sanitizeStr(subScenes[subScenes.length - 1] && subScenes[subScenes.length - 1].plot, 300) : lastPlot;
         const subUser = '【团本正文 · 第 ' + (c + 1) + ' / ' + chunks.length + ' 部分之 ' + (sIdx + 1) + '】\n' + subs[sIdx]
-          + buildContinueCtx(c, chunks.length, roll, prev);
+          + buildContinueCtx(c, chunks.length, roll, prevPlot);
         const subArr = await tryChunk(subUser);
         if (subArr) for (const s of subArr) subScenes.push(s);
         else subFailed++;
@@ -2171,10 +2233,14 @@ async function breakdownScenario(cfg, text, settings, opts) {
       if (subScenes.length) arr = subScenes;
     }
     if (arr) {
-      for (const s of arr) scenes.push(s);
-      mergeRoll(roll, arr);
+      const slice = arr.slice();
+      for (const s of slice) scenes.push(s);
+      chunkScenes[c] = slice;
+      mergeRoll(roll, slice);
     } else {
       failed++;
+      failedIdx.push(c);
+      chunkScenes[c] = null;
     }
     emit(c + 1, c + 1);
   }
@@ -2191,11 +2257,66 @@ async function breakdownScenario(cfg, text, settings, opts) {
       || sanitizeStr(raw.title || '', 80).trim();
     if (!hasContent) continue; // 真正无标题且无剧情的坏场景直接剔除
     const n = normalizeScene(s, idx + 1); // 用真实后续幕号做兜底标题（「第 N 幕」）而非固定第 0 幕
-    if (result.some(prev => isDupScene(prev, n))) continue; // 跳过跨段重复的同一幕
+    if (result.some(prevSc => isDupScene(prevSc, n))) continue; // 跳过跨段重复的同一幕
     n.index = ++idx;
     result.push(n);
   }
-  return { scenes: result, failed, extracted: t };
+  return { scenes: result, failed, failedIdx, chunkScenes, extracted: t, usage: usageByMark(mark) };
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, extractScriptBody, usageLog, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, mergeRoll, buildContinueCtx };
+/* A-6 单幕重生成：只让 AI 重写指定的一幕，其余幕不动（版本化对比 + 按幕调用）。
+ * 入参：text=剧本正文（清洗整理版）、scenes=现有全部分幕、index=要重写的幕下标。
+ * 返回 { ok, scene, usage }：scene 为 normalizeScene 后的新幕（index 保持原位），
+ * usage 为本次按 taskMark 结算的用量（供 B-1 单次成本提示）。 */
+async function regenerateScene(cfg, text, scenes, index, opts) {
+  opts = opts || {};
+  const mark = (opts && opts.taskMark) || ('r' + Date.now() + Math.floor(Math.random() * 1000));
+  const cfg2 = Object.assign({}, cfg, { mark });
+  const list = Array.isArray(scenes) ? scenes : [];
+  const idx = Number(index) || 0;
+  if (!list[idx] || typeof list[idx] !== 'object') throw new Error('要重写的幕不存在');
+  const cur = list[idx] || {};
+  const prev = list.slice(Math.max(0, idx - (Number(opts.prevCount) > 0 ? opts.prevCount : 2)), idx);
+  const next = list.slice(idx + 1, idx + 1 + (Number(opts.nextCount) > 0 ? opts.nextCount : 2));
+  const sys = '你是资深 TRPG 主持人（KP）的剧本拆解助手。现在要把「剧本分幕」中指定的那一幕重写一遍，'
+    + '严格保持与前后幕的情节、人物、地点、线索一致；只允许优化/细化这一幕的要点，不得改动、合并或删除其他幕，不得加入与原文冲突的剧情。\n'
+    + '严格输出一个 JSON 对象：{"scenes":[{"title":"这一幕标题","location":["地点1",...],"time":"大概时间/节点","characters":[{"name":"出场人物/势力","role":"在此幕的身份(可空)"}...],"plot":"这一幕的剧情经过","clues":["关键线索/伏笔",...],"props":["道具/机关/魔物",...],"note":"承接上幕/进入下幕的转折提示(可空)"}]}。\n'
+    + '只输出 JSON，不要输出任何解释文字或 Markdown 代码块。';
+  const lines = [];
+  lines.push('【剧本正文（节选，供核对剧情）】');
+  lines.push(String(text || '').slice(0, 3000));
+  if (prev.length) {
+    lines.push('');
+    lines.push('【前文已确立（第 ' + (idx - prev.length + 1) + ' 幕起，不得改写）】');
+    prev.forEach((s, k) => {
+      const no = idx - prev.length + k + 1;
+      lines.push('- 第 ' + no + ' 幕「' + (s.title || '') + '」：' + String(s.plot || '').replace(/\s+/g, ' ').slice(0, 160));
+    });
+  }
+  lines.push('');
+  lines.push('【当前这一幕（第 ' + (idx + 1) + ' 幕，请重写）】');
+  lines.push('- 标题：' + (cur.title || ''));
+  lines.push('- 地点：' + ((Array.isArray(cur.location) ? cur.location : []).join('、') || '未明示'));
+  lines.push('- 出场人物：' + ((Array.isArray(cur.characters) ? cur.characters : []).map(c => (c && typeof c === 'object') ? (c.name || '') : c).join('、') || '未明示'));
+  lines.push('- 剧情经过：' + String(cur.plot || ''));
+  lines.push('- 线索/伏笔：' + ((Array.isArray(cur.clues) ? cur.clues : []).join('、') || '无'));
+  if (next.length) {
+    lines.push('');
+    lines.push('【后续幕（不可剧透改变，只保证衔接）】');
+    next.forEach((s, k) => {
+      const no = idx + k + 2;
+      lines.push('- 第 ' + no + ' 幕「' + (s.title || '') + '」：' + String(s.plot || '').replace(/\s+/g, ' ').slice(0, 160));
+    });
+  }
+  lines.push('');
+  lines.push('【要求】重写后这一幕的人物/地点/线索必须与前文已确立的一致；剧情可细化但不能与前后幕矛盾、跳过关键事件或加入原文没有的剧情。');
+  const user = lines.join('\n');
+  const raw = await rawJsonReply(cfg2, sys, user, 6000);
+  const obj = extractJsonObject(raw);
+  const got = (obj && Array.isArray(obj.scenes)) ? obj.scenes : (Array.isArray(obj) ? obj : []);
+  if (!got.length) throw new Error('未返回可解析的重写结果');
+  const n = normalizeScene(got[0], idx + 1);
+  return { ok: true, scene: n, usage: usageByMark(mark) };
+}
+
+module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, regenerateScene, extractScriptBody, usageLog, usageByMark, healthStats, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, mergeRoll, buildContinueCtx };

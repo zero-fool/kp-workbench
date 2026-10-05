@@ -1920,11 +1920,11 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       && /function buildContinueCtx\(/.test(aiSrc)
       && /const SC_SUB_CHUNK = 5000;/.test(aiSrc)               // 主块失败后降粒度重分
       && /function isDupScene\(a, b\)/.test(aiSrc)
-      && /result\.some\(prev => isDupScene\(prev, n\)\)/.test(aiSrc)
+      && /result\.some\(prev\w* => isDupScene\(prev\w*, n\)\)/.test(aiSrc)
       && /attempt <= 3 && !arr/.test(aiSrc)
       && /function extractScriptBody\(/.test(aiSrc)             // 分幕前先提取剧本正文（清洗总文本）
       && /const t = extractScriptBody\(text\);/.test(aiSrc)
-      && /return \{ scenes: result, failed, extracted: t \};/.test(aiSrc)
+      && /return \{ scenes: result, failed, failedIdx, chunkScenes, extracted: t, usage: usageByMark\(mark\) \};/.test(aiSrc)
       && !/return \{ scenes: result, failed \};/.test(aiSrc);
     if (!structural) return '分幕优化缺失';
     // 无标题文本应在空行（段落边界）处切分，而不是按固定字数把自然段拦腰截断
@@ -1962,7 +1962,7 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       && /'分幕要点-' \+ stamp/.test(mainSrc)
       && /'第' \+ String\(idx\)\.padStart\(2, '0'\)/.test(mainSrc)
       && /sceneDir = sv\.dir; sceneFiles = sv\.files/.test(mainSrc)
-      && /sceneDir, sceneFiles \}/.test(mainSrc)
+      && /extractedPath, sceneDir, sceneFiles/.test(mainSrc)
       && /'store:openPath'/.test(mainSrc);
     const preSrc = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'preload.js'), 'utf8');
     const okPreload = /openFolder: \(p\) => ipcRenderer\.invoke\('store:openPath', p\)/.test(preSrc);
