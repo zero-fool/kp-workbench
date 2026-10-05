@@ -612,8 +612,38 @@ function registerIpc() {
     fs.writeFileSync(f, text, 'utf8');
     return f;
   }
+  /* 分幕要点逐幕落盘：把拆分整理后的每一幕写成独立 txt（含该幕全部要点），
+   * 便于逐幕调用与整体导出。返回 { dir, files }。 */
+  function saveSceneFiles(scenes) {
+    const arr = Array.isArray(scenes) ? scenes : [];
+    const stamp = new Date().toISOString().replace(/[-:TZ]/g, '').slice(0, 14);
+    const dir = path.join(app.getPath('userData'), 'script-extract', '分幕要点-' + stamp);
+    fs.mkdirSync(dir, { recursive: true });
+    const files = [];
+    arr.forEach((s, i) => {
+      if (!s || typeof s !== 'object') return;
+      const idx = s.index || i + 1;
+      const safeTitle = String(s.title || '第 ' + idx + ' 幕').replace(/[\\/:*?"<>|\n\r\t\u3000]/g, '').trim().slice(0, 40) || ('第 ' + idx + ' 幕');
+      const L = [];
+      L.push('第 ' + idx + ' 幕 · ' + (s.title || ''));
+      L.push('');
+      if (Array.isArray(s.location) && s.location.length) L.push('地点：' + s.location.join(' / '));
+      if (s.time) L.push('时间：' + s.time);
+      if (Array.isArray(s.characters) && s.characters.length) {
+        L.push('出场人物：' + s.characters.map(c => (typeof c === 'string' ? c : ((c && c.name) || '')) + ((c && c.role) ? '(' + c.role + ')' : '')).filter(Boolean).join('、'));
+      }
+      if (s.plot) L.push('剧情经过：' + String(s.plot).replace(/\n+/g, ' '));
+      if (Array.isArray(s.clues) && s.clues.length) L.push('关键线索/伏笔：' + s.clues.join('、'));
+      if (Array.isArray(s.props) && s.props.length) L.push('道具/机关/魔物：' + s.props.join('、'));
+      if (s.note) L.push('衔接提示：' + String(s.note).replace(/\n+/g, ' '));
+      const f = path.join(dir, '第' + String(idx).padStart(2, '0') + '幕-' + safeTitle + '.txt');
+      try { fs.writeFileSync(f, L.join('\n') + '\n', 'utf8'); files.push(f); } catch (_) {}
+    });
+    return { dir, files };
+  }
   /* 团本分幕（剧本式）分析：尊重原剧情，把整篇团本拆成一幕幕可上演的剧本（人物/地点/剧情/线索等）。
-   * 流程：先对总文本提取剧本正文（清洗去装饰/多余空白）并落盘成文件，再对该正文分幕。 */
+   * 流程：先对总文本提取剧本正文（清洗去装饰/多余空白）并落盘成文件；再对该正文分幕，
+   * 每一幕的要点再单独落盘成 txt（sceneFiles/sceneDir 供界面展示与打开文件夹）。 */
   ipcMain.handle('ai:breakdownScenario', async (e, args) => {
     try {
       args = args || {};
@@ -625,8 +655,12 @@ function registerIpc() {
       if (r && r.extracted) {
         try { extractedPath = saveScriptExtract(r.extracted); } catch (_) {}
       }
+      let sceneDir = null, sceneFiles = [];
+      if (r && Array.isArray(r.scenes) && r.scenes.length) {
+        try { const sv = saveSceneFiles(r.scenes); sceneDir = sv.dir; sceneFiles = sv.files; } catch (_) {}
+      }
       aiProgSend({ phase: 'done', done: 1, total: 1, percent: 100, text: '分幕完成' });
-      return { ok: true, scenes: r.scenes, failed: r.failed, extractedPath };
+      return { ok: true, scenes: r.scenes, failed: r.failed, extractedPath, sceneDir, sceneFiles };
     } catch (err) {
       aiProgSend({ phase: 'error', text: '分幕失败', percent: 0 });
       return { ok: false, error: String((err && err.message) || err) };
@@ -1280,6 +1314,7 @@ function registerIpc() {
     return { ok: true };
   });
   ipcMain.handle('runlog:open', () => { try { shell.openPath(path.join(dataDir, 'runlog')); return { ok: true }; } catch (e) { return { ok: false, error: String(e && e.message || e) }; } });
+  ipcMain.handle('store:openPath', (e, p) => { try { if (p) shell.openPath(String(p)); return { ok: true }; } catch (err) { return { ok: false, error: String(err && err.message || err) }; } });
   ipcMain.handle('runlog:export', async () => {
     const days = runlog.listDays();
     if (!days.length) return { ok: false, error: '没有可导出的日志。' };

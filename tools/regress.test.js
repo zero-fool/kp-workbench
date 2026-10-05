@@ -1957,6 +1957,20 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     if (cleaned.startsWith('\uFEFF') || cleaned.startsWith('　')) return '剧本正文提取未剔除行首不可见字符/全角空格';
     return true;
   });
+  check('U3-10 分幕要点逐幕落盘 txt：saveSceneFiles 每幕一文件 + sceneDir/sceneFiles 回传 + 打开文件夹入口', () => {
+    const okMain = /function saveSceneFiles\(scenes\)/.test(mainSrc)
+      && /'分幕要点-' \+ stamp/.test(mainSrc)
+      && /'第' \+ String\(idx\)\.padStart\(2, '0'\)/.test(mainSrc)
+      && /sceneDir = sv\.dir; sceneFiles = sv\.files/.test(mainSrc)
+      && /sceneDir, sceneFiles \}/.test(mainSrc)
+      && /'store:openPath'/.test(mainSrc);
+    const preSrc = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'preload.js'), 'utf8');
+    const okPreload = /openFolder: \(p\) => ipcRenderer\.invoke\('store:openPath', p\)/.test(preSrc);
+    const okUi = /openScriptFolder\(\)/.test(src)
+      && /每幕要点已分别保存为 txt/.test(src)
+      && /rawExportScript, openScriptFolder,/.test(src);
+    return (okMain && okPreload && okUi) ? true : '分幕要点逐幕 txt 落盘缺失';
+  });
   check('U3-9 进度条结束即消失 + 分幕进度可见：解析/拆分/分幕均发 done 终止信号', () => {
     const okDone = /text: '解析完成'/.test(mainSrc) && /text: '拆分完成'/.test(mainSrc) && /text: '分幕完成'/.test(mainSrc);
     const okScene = /phase: 'scene'/.test(aiSrc2) && /scene: '剧本分幕'/.test(src);

@@ -228,6 +228,7 @@ contextBridge.exposeInMainWorld('api', {
   writeNewFile: (content) => ipcRenderer.invoke('store:writeNewFile', content),
   saveUpload: (name, content) => ipcRenderer.invoke('store:saveUpload', name, content),
   saveText: (filename, content) => ipcRenderer.invoke('store:saveText', filename, content),
+  openFolder: (p) => ipcRenderer.invoke('store:openPath', p),
   getFullText: (textPath) => ipcRenderer.invoke('file:getFullText', textPath),
   saveMarkdown: (filename, content) => ipcRenderer.invoke('store:saveMarkdown', filename, content),
   saveImage: (filename, dataUrl) => ipcRenderer.invoke('store:saveImage', filename, dataUrl),

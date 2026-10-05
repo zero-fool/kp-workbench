@@ -6373,6 +6373,9 @@
       ${chars.length ? `<div class="script-meta"><span class="script-meta-l">全篇主要登场</span>${chars.map(c => `<span class="script-person">${esc(c)}</span>`).join('')}</div>` : ''}
     </div>`;
     head += script.extractedPath ? `<div class="hint" style="margin:6px 0 0;font-size:12px">📄 剧本正文（清洗整理版）已保存：<code>${esc(script.extractedPath)}</code></div>` : '';
+    if (script.sceneDir && Array.isArray(script.sceneFiles) && script.sceneFiles.length) {
+      head += `<div class="hint" style="margin:6px 0 0;font-size:12px">📁 每幕要点已分别保存为 txt（${script.sceneFiles.length} 个文件）：<code>${esc(script.sceneDir)}</code> <button class="ghost small" onclick="WB.openScriptFolder()" title="在系统文件管理器中打开该文件夹">打开文件夹</button></div>`;
+    }
     head += scriptTodoBarHtml(script, prog, st);
     let body = '';
     scenes.forEach((sc, i) => {
@@ -6707,12 +6710,13 @@
       for (const sc of scenes) for (const c of (sc.characters || [])) {
         const nm = (c.name || '').trim(); if (!nm || seen.has(nm)) continue; seen.add(nm); chars.push(nm);
       }
-      S.rawScript = { scenes, overview: { characters: chars.slice(0, 40) }, extractedPath: r.extractedPath || null };
+      S.rawScript = { scenes, overview: { characters: chars.slice(0, 40) }, extractedPath: r.extractedPath || null, sceneDir: r.sceneDir || null, sceneFiles: r.sceneFiles || [] };
       S.rawShow = 'script';
       persist(); renderRawText();
       const saved = r.extractedPath ? '，剧本正文文件已保存：' + r.extractedPath : '';
-      if (r.failed) toast('剧本分幕完成：共 ' + scenes.length + ' 幕，但有 ' + r.failed + ' 段未能解析，结果可能不完整，可对缺失部分再分一次' + saved, 'ok');
-      else toast('剧本分幕完成：共 ' + scenes.length + ' 幕（未改动原剧情）' + saved, 'ok');
+      const scn = (r.sceneFiles && r.sceneFiles.length) ? '，每幕要点已分别保存为 txt（' + r.sceneFiles.length + ' 个文件）' : '';
+      if (r.failed) toast('剧本分幕完成：共 ' + scenes.length + ' 幕，但有 ' + r.failed + ' 段未能解析，结果可能不完整，可对缺失部分再分一次' + saved + scn, 'ok');
+      else toast('剧本分幕完成：共 ' + scenes.length + ' 幕（未改动原剧情）' + saved + scn, 'ok');
     } catch (e) {
       toast('剧本分幕失败：' + ((e && e.message) || e), 'err');
     } finally {
@@ -6850,6 +6854,13 @@
       if (!r.ok) { toast(r.error || '导出失败', 'err'); return; }
       toast('已导出剧本分幕：' + r.path, 'ok');
     } catch (e) { toast('导出失败：' + ((e && e.message) || e), 'err'); }
+  }
+
+  /* 打开分幕要点 txt 所在文件夹（便于逐幕调用与整体导出） */
+  function openScriptFolder() {
+    const d = S.rawScript && S.rawScript.sceneDir;
+    if (!d) { toast('还没有分幕要点文件，先点「🎬 剧本分幕」生成', 'err'); return; }
+    window.api.openFolder(d).then(r => { if (r && r.ok === false) toast('打开文件夹失败：' + (r.error || ''), 'err'); }).catch(() => {});
   }
 
   /* ========== 地图 · 列表 ========== */
@@ -8987,7 +8998,7 @@
     relToggleList, relListPick, relFilter, relZoomIn, relZoomOut, relFit, relCenter, relClearMulti, toggleDrawerScript, setImportTpl,
     relToggleAll, relApplyOps,
     rawInput, rawClear, rawSuggest, rawExport, removePendFile, clearPendFiles,
-    rawScriptBreak, rawShowTxt, rawShowSug, rawShowScript, rawExportScript,
+    rawScriptBreak, rawShowTxt, rawShowSug, rawShowScript, rawExportScript, openScriptFolder,
     scriptStatusCycle, scriptGoto, scriptToggleClue, scriptNoteSet, scriptReset, scriptChecklist, scriptJump,
     gmEnter, gmExit, toggleGmMode, gmSceneGo, gmRoll,
     plotSummary, commitPlotPoints, storySuggest, dismissChatHint,
