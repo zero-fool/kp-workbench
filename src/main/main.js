@@ -656,6 +656,7 @@ function registerIpc() {
       if (args.taskMark) opts.taskMark = String(args.taskMark);
       if (Array.isArray(args.onlyChunks)) opts.onlyChunks = args.onlyChunks;
       if (Array.isArray(args.prevChunkScenes)) opts.prevChunkScenes = args.prevChunkScenes;
+      if (args.concurrency) opts.concurrency = Number(args.concurrency); // U3-10：分幕并发度（1~4）
       const r = await ai.breakdownScenario(aiCfg('scenario', 'AI 剧本分幕'), text, doc.settings, opts);
       let extractedPath = null;
       if (r && r.extracted && !args.onlyChunks) {   // 补跑复用既有正文文件，不再重复写盘

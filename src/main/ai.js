@@ -2267,13 +2267,14 @@ async function breakdownScenario(cfg, text, settings, opts) {
     }
     return arr;
   };
-  for (let c = 0; c < chunks.length; c++) {
+  /* U3-10：受控并行分块（默认并发 3，取代逐块串行，长文本总耗时约降至 1/3）。
+   * 采用「波次」并行：同一波内的块并行请求，波间按块序归并并滚动更新锚点，
+   * 既保住跨段续写一致性（后一波能看到前一波全部结果），又稳定输出幕序（不因并发完成先后乱序）。 */
+  const SC_CONC = Math.max(1, Math.min(4, Number(opts && opts.concurrency) || 3));
+  const workChunk = async (c) => {
     // A-4 补跑：非目标段直接沿用既有结果，不再消耗 token（保持同段切分，幕号不重排）
     if (only && prev && !only.has(c) && Array.isArray(prev[c])) {
-      for (const s of prev[c]) scenes.push(s);
-      chunkScenes[c] = prev[c];
-      emit(c + 1, c + 1);
-      continue;
+      return { c, arr: prev[c], reused: true };
     }
     const lastPlot = scenes.length ? sanitizeStr(scenes[scenes.length - 1] && scenes[scenes.length - 1].plot, 300) : '';
     const ctx = buildContinueCtx(c, chunks.length, roll, lastPlot);
@@ -2294,17 +2295,26 @@ async function breakdownScenario(cfg, text, settings, opts) {
       }
       if (subScenes.length) arr = subScenes;
     }
-    if (arr) {
-      const slice = arr.slice();
-      for (const s of slice) scenes.push(s);
-      chunkScenes[c] = slice;
-      mergeRoll(roll, slice);
-    } else {
-      failed++;
-      failedIdx.push(c);
-      chunkScenes[c] = null;
+    return { c, arr: arr ? arr.slice() : null, reused: false };
+  };
+  let done = 0;
+  for (let start = 0; start < chunks.length; start += SC_CONC) {
+    const end = Math.min(chunks.length, start + SC_CONC);
+    const results = await Promise.all(Array.from({ length: end - start }, (_, k) => workChunk(start + k)));
+    // 波内按块序归并：保证幕序稳定，且后一波能看到前一波全部结果（滚动锚点一致）
+    for (const r of results) {
+      if (r && r.arr && r.arr.length) {
+        for (const s of r.arr) scenes.push(s);
+        chunkScenes[r.c] = r.arr;
+        if (!r.reused) mergeRoll(roll, r.arr);
+      } else {
+        failed++;
+        failedIdx.push(r.c);
+        chunkScenes[r.c] = null;
+      }
     }
-    emit(c + 1, c + 1);
+    done = end;
+    emit(done, end - 1);
   }
   if (!scenes.length) {
     throw new Error('AI 分幕未能返回可用结果' + (failed ? '（' + failed + ' 段解析失败）' : '') + '，请重试或缩短文本后再试');

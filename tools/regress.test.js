@@ -2000,6 +2000,15 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       && /rawExportScript, openScriptFolder,/.test(src);
     return (okMain && okPreload && okUi) ? true : '分幕要点逐幕 txt 落盘缺失';
   });
+  check('U3-11 分幕提速：波次并发分块（默认并发 3）+ 主进程透传并发度 + 幕序稳定', () => {
+    const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    const okConc = /const SC_CONC = Math\.max\(1, Math\.min\(4, Number\(opts && opts\.concurrency\) \|\| 3\)\);/.test(aiSrc)
+      && /for \(let start = 0; start < chunks\.length; start \+= SC_CONC\)/.test(aiSrc)
+      && /Promise\.all\(Array\.from\(\{ length: end - start \}, \(_, k\) => workChunk\(start \+ k\)\)\)/.test(aiSrc)
+      && /if \(!r\.reused\) mergeRoll\(roll, r\.arr\)/.test(aiSrc);
+    const okPass = /if \(args\.concurrency\) opts\.concurrency = Number\(args\.concurrency\)/.test(mainSrc);
+    return (okConc && okPass) ? true : '分幕波次并发缺失';
+  });
   check('U3-9 进度条结束即消失 + 分幕进度可见：解析/拆分/分幕均发 done 终止信号', () => {
     const okDone = /text: '解析完成'/.test(mainSrc) && /text: '拆分完成'/.test(mainSrc) && /text: '分幕完成'/.test(mainSrc);
     const okScene = /phase: 'scene'/.test(aiSrc2) && /scene: '剧本分幕'/.test(src);
