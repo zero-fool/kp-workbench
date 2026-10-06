@@ -6222,6 +6222,7 @@
     const has = !!S.rawText;
     const hasScript = Array.isArray(S.rawScript && S.rawScript.scenes);
     const v = S.rawShow || 'text';
+    const scConc = (S.settings && S.settings.rawSceneConc) || ''; // U3-10：分幕并发偏好（空=自动）
     let html = `<div class="page-title"><h2>原始文本</h2><span class="hint">去除无效乱码后的纯净文本，尽量保留原文结构；可把文件拖入窗口或点「导入文件」导入</span></div>`;
     html += `<div class="setcard">
       <div class="toolbar">
@@ -6230,6 +6231,13 @@
         <button class="ghost" onclick="WB.rawClear()">清空</button>
         <span class="grow"></span>
         <button id="rawSuggestBtn" ${has ? '' : 'disabled'} onclick="WB.rawSuggest()">⚡ AI 建议</button>
+        <select id="rawSceneConc" class="ghost small" title="分幕并发路数：自动=短文本 1 路串行、长文本自动扩到最多 4 路并行；手动固定可避免长文本排队更久" onchange="WB.rawSetConc(this.value)">
+          <option value="" ${scConc === '' ? 'selected' : ''}>自动</option>
+          <option value="1" ${scConc === '1' ? 'selected' : ''}>1 路</option>
+          <option value="2" ${scConc === '2' ? 'selected' : ''}>2 路</option>
+          <option value="3" ${scConc === '3' ? 'selected' : ''}>3 路</option>
+          <option value="4" ${scConc === '4' ? 'selected' : ''}>4 路</option>
+        </select>
         <button id="rawScriptBtn" ${has ? '' : 'disabled'} onclick="WB.rawScriptBreak()" title="在不改原剧情的前提下，把整篇团本拆分成一幕幕剧本（展示每幕的人物/地点/剧情/线索）">🎬 剧本分幕</button>
         <button class="ghost" onclick="WB.rawExport()">导出文本</button>
       </div>
@@ -6729,14 +6737,20 @@
     /* 投骰若并入了进行中遭遇的流水，就地刷新遭遇面板让新流水可见 */
     if (encCur()) { const wrap = q('gmEncWrap'); if (wrap) wrap.innerHTML = gmEncPanel(); }
   }
+  /* 分幕并发偏好：自动(空) 或固定 1~4 路；持久化到 settings.rawSceneConc */
+  function rawSetConc(v) {
+    S.settings.rawSceneConc = String(v || '');
+    persist();
+  }
   /* AI 剧本分幕：把原始文本拆成剧本（主进程对超长文本自动分块续幕） */
   async function rawScriptBreak() {
     const text = S.rawText;
     if (!text || !text.trim()) { toast('请先导入或粘贴原始文本', 'err'); return; }
     const btn = q('rawScriptBtn'); if (btn) btn.disabled = true;
-    toast('AI 正在剧本分幕，整篇会拆分重组为可上演的剧本，可能需要一点时间…');
+    const conc = (S.settings && S.settings.rawSceneConc) || '';
+    toast('AI 正在剧本分幕，整篇会拆分重组为可上演的剧本' + (conc ? '（' + conc + ' 路并发）' : '（自动并行）') + '，可能需要一点时间…');
     try {
-      const r = await window.api.breakdownScenario({ text });
+      const r = await window.api.breakdownScenario({ text, concurrency: conc || undefined });
       if (!r || !r.ok) { toast((r && r.error) || '剧本分幕失败', 'err'); return; }
       const scenes = (r.scenes || []).filter(s => s && s.title);
       if (!scenes.length) { toast('AI 未返回分幕结果，请重试', 'err'); return; }
@@ -6762,10 +6776,14 @@
       persist(); renderRawText();
       const saved = r.extractedPath ? '，剧本正文文件已保存：' + r.extractedPath : '';
       const scn = (r.sceneFiles && r.sceneFiles.length) ? '，每幕要点已分别保存为 txt（' + r.sceneFiles.length + ' 个文件）' : '';
-      // B-1 单次任务成本提示：用量 + 耗时 + 估算费用
+      // B-1 单次任务成本提示：用量 + 耗时 + 估算费用；另附分幕性能（段数/并发路数）
       const costTxt = scriptCostTxt(r.usage);
-      if (r.failed) toast('剧本分幕完成：共 ' + scenes.length + ' 幕，但有 ' + r.failed + ' 段未能解析，结果可能不完整，可点「补跑缺失段」再分一次' + saved + scn + costTxt, 'ok');
-      else toast('剧本分幕完成：共 ' + scenes.length + ' 幕（未改动原剧情）' + saved + scn + costTxt, 'ok');
+      const perfTxt = r.chunks > 1
+        ? ('（正文共 ' + r.chunks + ' 段' + (r.conc > 1 ? '、' + r.conc + ' 路并发' : '串行') + '处理）')
+        : '';
+      const longHint = r.chunks >= 20 ? '；正文很长，如需更快可手动分段后分别分幕。' : '';
+      if (r.failed) toast('剧本分幕完成：共 ' + scenes.length + ' 幕，但有 ' + r.failed + ' 段未能解析，结果可能不完整，可点「补跑缺失段」再分一次' + saved + scn + perfTxt + longHint + costTxt, 'ok');
+      else toast('剧本分幕完成：共 ' + scenes.length + ' 幕（未改动原剧情）' + saved + scn + perfTxt + longHint + costTxt, 'ok');
     } catch (e) {
       toast('剧本分幕失败：' + ((e && e.message) || e), 'err');
     } finally {
@@ -6946,9 +6964,10 @@
     }
     if (!src || !src.trim()) { toast('缺少剧本正文，请重新分幕', 'err'); return; }
     const btn = q('rawScriptBtn'); if (btn) btn.disabled = true;
+    const conc = (S.settings && S.settings.rawSceneConc) || '';
     toast('正在补跑 ' + failedIdx.length + ' 段缺失内容（其余幕直接沿用，不重复消耗）…');
     try {
-      const r = await window.api.breakdownScenario({ text: src, onlyChunks: failedIdx, prevChunkScenes: script.chunkScenes || [] });
+      const r = await window.api.breakdownScenario({ text: src, onlyChunks: failedIdx, prevChunkScenes: script.chunkScenes || [], concurrency: conc || undefined });
       if (!r || !r.ok) { toast((r && r.error) || '补跑失败', 'err'); return; }
       const scenes = (r.scenes || []).filter(s => s && s.title);
       if (!scenes.length) { toast('补跑未返回结果，请重试', 'err'); return; }
@@ -9206,7 +9225,7 @@
     relToggleList, relListPick, relFilter, relZoomIn, relZoomOut, relFit, relCenter, relClearMulti, toggleDrawerScript, setImportTpl,
     relToggleAll, relApplyOps,
     rawInput, rawClear, rawSuggest, rawExport, removePendFile, clearPendFiles,
-    rawScriptBreak, rawShowTxt, rawShowSug, rawShowScript, rawExportScript, openScriptFolder,
+    rawScriptBreak, rawShowTxt, rawShowSug, rawShowScript, rawExportScript, openScriptFolder, rawSetConc,
     scriptRerun, sceneRegen, sceneAccept, scriptVersions, sceneCompareVersion,
     scriptStatusCycle, scriptGoto, scriptToggleClue, scriptNoteSet, scriptReset, scriptChecklist, scriptJump,
     gmEnter, gmExit, toggleGmMode, gmSceneGo, gmRoll,

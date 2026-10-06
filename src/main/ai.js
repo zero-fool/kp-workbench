@@ -2267,10 +2267,13 @@ async function breakdownScenario(cfg, text, settings, opts) {
     }
     return arr;
   };
-  /* U3-10：受控并行分块（默认并发 3，取代逐块串行，长文本总耗时约降至 1/3）。
+  /* U3-10：受控并行分块（取代逐块串行，长文本总耗时约降至 1/3~1/4）。
    * 采用「波次」并行：同一波内的块并行请求，波间按块序归并并滚动更新锚点，
-   * 既保住跨段续写一致性（后一波能看到前一波全部结果），又稳定输出幕序（不因并发完成先后乱序）。 */
-  const SC_CONC = Math.max(1, Math.min(4, Number(opts && opts.concurrency) || 3));
+   * 既保住跨段续写一致性（后一波能看到前一波全部结果），又稳定输出幕序（不因并发完成先后乱序）。
+   * 并发度：显式传入优先；未传时按段数自适应——短文本（≤8 段）1 路串行避免浪费，
+   * 长文本自动扩到最多 4 路（9~16 段 2 路 / 17~24 段 3 路 / 25+ 段 4 路）。 */
+  const SC_CONC = Math.max(1, Math.min(4,
+    Number(opts && opts.concurrency) || Math.min(4, Math.max(1, Math.ceil(chunks.length / 8)))));
   const workChunk = async (c) => {
     // A-4 补跑：非目标段直接沿用既有结果，不再消耗 token（保持同段切分，幕号不重排）
     if (only && prev && !only.has(c) && Array.isArray(prev[c])) {
@@ -2333,7 +2336,7 @@ async function breakdownScenario(cfg, text, settings, opts) {
     n.index = ++idx;
     result.push(n);
   }
-  return { scenes: result, failed, failedIdx, chunkScenes, extracted: t, usage: usageByMark(mark) };
+  return { scenes: result, failed, failedIdx, chunkScenes, extracted: t, usage: usageByMark(mark), chunks: chunks.length, conc: SC_CONC };
 }
 
 /* A-6 单幕重生成：只让 AI 重写指定的一幕，其余幕不动（版本化对比 + 按幕调用）。

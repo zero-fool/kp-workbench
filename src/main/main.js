@@ -657,7 +657,11 @@ function registerIpc() {
       if (Array.isArray(args.onlyChunks)) opts.onlyChunks = args.onlyChunks;
       if (Array.isArray(args.prevChunkScenes)) opts.prevChunkScenes = args.prevChunkScenes;
       if (args.concurrency) opts.concurrency = Number(args.concurrency); // U3-10：分幕并发度（1~4）
-      const r = await ai.breakdownScenario(aiCfg('scenario', 'AI 剧本分幕'), text, doc.settings, opts);
+      // U3-10 提速：分幕单块输出大、耗时长，超时下限提到 180s——低于该值的配置会让大 JSON 被误判超时后整块重试（更浪费）；
+      // 用户配得更高则沿用其配置。aiCfg 每次返回新对象，可直接改 timeoutMs。
+      const sceneCfg = aiCfg('scenario', 'AI 剧本分幕');
+      sceneCfg.timeoutMs = Math.max(Number(sceneCfg.timeoutMs) || 0, 180000);
+      const r = await ai.breakdownScenario(sceneCfg, text, doc.settings, opts);
       let extractedPath = null;
       if (r && r.extracted && !args.onlyChunks) {   // 补跑复用既有正文文件，不再重复写盘
         try { extractedPath = saveScriptExtract(r.extracted); } catch (_) {}
@@ -671,6 +675,7 @@ function registerIpc() {
         ok: true, scenes: r.scenes, failed: r.failed,
         failedIdx: Array.isArray(r.failedIdx) ? r.failedIdx : [],
         chunkScenes: Array.isArray(r.chunkScenes) ? r.chunkScenes : [],
+        chunks: Number(r.chunks) || 0, conc: Number(r.conc) || 1,
         usage: r.usage || { calls: 0, errs: 0, msSum: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 },
         extractedPath, sceneDir, sceneFiles
       };

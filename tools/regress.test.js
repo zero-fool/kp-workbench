@@ -1924,7 +1924,7 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       && /attempt <= 3 && !arr/.test(aiSrc)
       && /function extractScriptBody\(/.test(aiSrc)             // 分幕前先提取剧本正文（清洗总文本）
       && /const t = extractScriptBody\(text\);/.test(aiSrc)
-      && /return \{ scenes: result, failed, failedIdx, chunkScenes, extracted: t, usage: usageByMark\(mark\) \};/.test(aiSrc)
+      && /return \{ scenes: result, failed, failedIdx, chunkScenes, extracted: t, usage: usageByMark\(mark\), chunks: chunks\.length, conc: SC_CONC \};/.test(aiSrc)
       && !/return \{ scenes: result, failed \};/.test(aiSrc)
       /* U3-8 拆分登记增强：段长降为 15000 防长 JSON 截断、重试放宽 token 上限、失败兜底返回部分结果 */
       && /const SEG = 15000, OVERLAP = 250;/.test(aiSrc)
@@ -2000,14 +2000,27 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       && /rawExportScript, openScriptFolder,/.test(src);
     return (okMain && okPreload && okUi) ? true : '分幕要点逐幕 txt 落盘缺失';
   });
-  check('U3-11 分幕提速：波次并发分块（默认并发 3）+ 主进程透传并发度 + 幕序稳定', () => {
+  check('U3-11 分幕提速：波次并发分块 + 主进程透传并发度 + 幕序稳定', () => {
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
-    const okConc = /const SC_CONC = Math\.max\(1, Math\.min\(4, Number\(opts && opts\.concurrency\) \|\| 3\)\);/.test(aiSrc)
+    const okConc = /const SC_CONC = Math\.max\(1, Math\.min\(4,/.test(aiSrc)
       && /for \(let start = 0; start < chunks\.length; start \+= SC_CONC\)/.test(aiSrc)
       && /Promise\.all\(Array\.from\(\{ length: end - start \}, \(_, k\) => workChunk\(start \+ k\)\)\)/.test(aiSrc)
       && /if \(!r\.reused\) mergeRoll\(roll, r\.arr\)/.test(aiSrc);
     const okPass = /if \(args\.concurrency\) opts\.concurrency = Number\(args\.concurrency\)/.test(mainSrc);
     return (okConc && okPass) ? true : '分幕波次并发缺失';
+  });
+  check('U3-12 分幕提速补全：并发自适应 + 分幕超时下限 180s + 并发选择器 + 段数回传提示', () => {
+    const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    const okAuto = /Math\.ceil\(chunks\.length \/ 8\)/.test(aiSrc)                    // 无显式并发时按段数自适应 1~4 路
+      && /chunks: chunks\.length, conc: SC_CONC/.test(aiSrc);                          // 回传段数/并发供提示
+    const okMain = /sceneCfg\.timeoutMs = Math\.max\(Number\(sceneCfg\.timeoutMs\) \|\| 0, 180000\)/.test(mainSrc)
+      && /chunks: Number\(r\.chunks\) \|\| 0, conc: Number\(r\.conc\) \|\| 1/.test(mainSrc);
+    const okUi = /id="rawSceneConc"/.test(src)
+      && /function rawSetConc\(v\)/.test(src)
+      && /concurrency: conc \|\| undefined/.test(src)
+      && /rawSetConc,/.test(src)
+      && /正文共 ' \+ r\.chunks \+ ' 段/.test(src);
+    return (okAuto && okMain && okUi) ? true : '分幕提速补全缺失';
   });
   check('U3-9 进度条结束即消失 + 分幕进度可见：解析/拆分/分幕均发 done 终止信号', () => {
     const okDone = /text: '解析完成'/.test(mainSrc) && /text: '拆分完成'/.test(mainSrc) && /text: '分幕完成'/.test(mainSrc);
