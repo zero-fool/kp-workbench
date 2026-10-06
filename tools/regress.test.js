@@ -1885,9 +1885,9 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
     return /U3-3/.test(aiSrc) && /正文摘要/.test(aiSrc) && /\.slice\(0, 40000\)/.test(aiSrc) ? true : '大输入未瘦身';
   });
-  check('U3-4 模组解析省 token：分段 24000/重叠 300 + 后续段轻量 schema', () => {
+  check('U3-4 模组解析省 token：分段 15000/重叠 250 + 后续段轻量 schema', () => {
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
-    return /const SEG = 24000, OVERLAP = 300;/.test(aiSrc)
+    return /const SEG = 15000, OVERLAP = 250;/.test(aiSrc)
       && /linkSchemaText\(effectiveFields\(fields\) \|\| DEFAULT_FIELDS\)/.test(aiSrc) ? true : '解析分段/schema 未优化';
   });
   check('U3-7 人物/场地拆分质量：后续段带中文标签 + 抽取规则 + 同名按归一化名称合并字段', () => {
@@ -1925,8 +1925,37 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       && /function extractScriptBody\(/.test(aiSrc)             // 分幕前先提取剧本正文（清洗总文本）
       && /const t = extractScriptBody\(text\);/.test(aiSrc)
       && /return \{ scenes: result, failed, failedIdx, chunkScenes, extracted: t, usage: usageByMark\(mark\) \};/.test(aiSrc)
-      && !/return \{ scenes: result, failed \};/.test(aiSrc);
+      && !/return \{ scenes: result, failed \};/.test(aiSrc)
+      /* U3-8 拆分登记增强：段长降为 15000 防长 JSON 截断、重试放宽 token 上限、失败兜底返回部分结果 */
+      && /const SEG = 15000, OVERLAP = 250;/.test(aiSrc)
+      && /attempt > 1 \? 12000 : 10000/.test(aiSrc)
+      && /type: '拆分失败告警'/.test(aiSrc)
+      && !/throw new Error\('AI 拆分登记在重试后仍失败'/.test(aiSrc)
+      /* U3-8 场地层级：regions 新增 parent 字段 + normalize 兜底保留 + ensureFields 升级补齐 */
+      && /\{ k: 'parent', l: '所属上级地区', t: 'text' \}/.test(aiSrc)
+      && /keys\.add\('parent'\)/.test(aiSrc)
+      && /function ensureFields\(/.test(aiSrc)
+      && /大场景内的小地区也必须各自独立建一条 regions/.test(aiSrc)
+      && /用 parent 字段填其所属的上级地区名/.test(aiSrc)
+      /* U3-8 关系网：空结果不缓存 + 关系密集段优先注入摘录 + 空结果定向挖掘重试 */
+      && /if \(final\.length\)/.test(aiSrc) && /relationCache\.set\(fpKey/.test(aiSrc)
+      && /const paraHits = \[\]/.test(aiSrc) && /paraHits\.sort\(\(a, b\) => b\.hits - a\.hits\)/.test(aiSrc)
+      && /const digHint = /.test(aiSrc);
     if (!structural) return '分幕优化缺失';
+    // U3-8 失败兜底行为验证：全部段失败时返回 partial 结果 + 告警，而非抛错丢失一切
+    const parseSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    if (!/merged\.partial = true;/.test(parseSrc)) return '拆分失败兜底未标记 partial';
+    if (!/merged\.updates\.push\(\{\s*\n\s*type: '拆分失败告警'/.test(parseSrc)) return '拆分失败兜底未写入告警';
+    // U3-8 关系缓存只写非空：空结果不 set、容量 FIFO 裁剪
+    if (!/relationCache\.size > RELATION_CACHE_MAX/.test(parseSrc)) return '关系缓存缺失容量裁剪';
+    if (!/digHint/.test(parseSrc) || !/rawJsonReply\(cfg, sys, user \+ RELATION_RETRY_HINT \+ digHint/.test(parseSrc)) return '关系空结果定向挖掘重试缺失';
+    // U3-8 ensureFields：旧 schema 缺失字段能补齐（只增不改、不覆盖自定义）
+    const oldFields = { npcs: [{ k: 'name', l: '姓名', t: 'text' }, { k: 'role', l: '身份', t: 'text' }], regions: [{ k: 'name', l: '名称', t: 'text' }] };
+    const mergedF = ai.ensureFields(oldFields);
+    if (mergedF.regions.some(f => f.k === 'parent') !== true) return 'ensureFields 未补齐 regions.parent';
+    if (mergedF.npcs[0].k !== 'name' || mergedF.npcs[1].k !== 'role') return 'ensureFields 改动/删除了已有字段';
+    if (new Set(mergedF.npcs.map(f => f.k)).size !== mergedF.npcs.length) return 'ensureFields 产生了重复字段';
+    if (mergedF.lore.some(f => f.k === 'category') !== true) return 'ensureFields 未补齐其他类别缺失字段';
     // 无标题文本应在空行（段落边界）处切分，而不是按固定字数把自然段拦腰截断
     const para = '甲'.repeat(60);
     const doc = [para, para, para, para, para].join('\n\n');

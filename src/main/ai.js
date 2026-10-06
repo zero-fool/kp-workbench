@@ -75,6 +75,7 @@ const DEFAULT_FIELDS = {
     { k: 'desc', l: '描述', t: 'textarea' },
     { k: 'food', l: '补给/资源', t: 'text' },
     { k: 'key', l: '关键地点/机关', t: 'tags' },
+    { k: 'parent', l: '所属上级地区', t: 'text' },
     { k: 'note', l: '备注', t: 'textarea' }
   ],
   logs: [
@@ -121,6 +122,18 @@ const DEFAULT_FIELDS = {
 
 function clone(v) { return JSON.parse(JSON.stringify(v)); }
 function defaultFields() { return clone(DEFAULT_FIELDS); }
+/* U3-8：版本升级字段补齐——把 DEFAULT_FIELDS 中当前 schema 缺失的字段合并进去（只增不改、
+ * 不覆盖用户自定字段），保证新增字段（如 regions.parent）在旧档案与自定义 schema 下也能显示与解析。 */
+function ensureFields(fields) {
+  const f = (fields && typeof fields === 'object') ? fields : {};
+  const out = {};
+  for (const k of _K) {
+    const cur = Array.isArray(f[k]) ? f[k] : [];
+    const have = new Set(cur.map(x => x && x.k));
+    out[k] = cur.concat((DEFAULT_FIELDS[k] || []).filter(x => !have.has(x.k)));
+  }
+  return out;
+}
 function effectiveFields(d) { return (d.fields && typeof d.fields === 'object') ? d.fields : DEFAULT_FIELDS; }
 
 function schemaText(fields) {
@@ -382,9 +395,10 @@ const DEFAULT_PROMPTS = {
     + '【场地抽取】\n'
     + '1) 每个可辨识的地点、场景、房间、建筑、街区、城镇、区域，都各建一条 regions；宁可多列，也不要只登记一个大地名而漏掉其中的具体场景(如酒馆、教堂、地下室、码头)。\n'
     + '2) 名称要具体、可区分：泛名（大厅/房间/入口/走廊/街道）须带上所属上下文写成「XX宅邸·大厅」，原文确实无名时用「类型+显著特征」命名；同一地点只用一个统一名称，别名写进 note。\n'
-    + '3) 用 desc 至少写 1~2 句：外观、氛围、用途与重要细节（关键物件/机关/出入口/在场者）；用 key 列出其中的关键地点/机关/出入口；type/area 按实际填，不确定可省略。\n'
-    + '4) 战斗向字段(danger/env/dist/cover)只有在原文确有说明时才填，剧情团通常留空即可。\n'
-    + '5) 整个世界/地区的地理总述、历史渊源等宏观内容归 lore，不要与具体场景混为一谈。\n'
+    + '3) 大场景内的小地区也必须各自独立建一条 regions（如一座宅邸内的各房间、一座城市内的街区与建筑、一处据点的各分区），不要把小地区合并进父地区或只提一句就漏掉；用 parent 字段填其所属的上级地区名（无明确上级可省略），形成父子层级，方便地图与关系网按区展开。\n'
+    + '4) 用 desc 至少写 1~2 句：外观、氛围、用途与重要细节（关键物件/机关/出入口/在场者）；用 key 列出其中的关键地点/机关/出入口；type/area 按实际填，不确定可省略。\n'
+    + '5) 战斗向字段(danger/env/dist/cover)只有在原文确有说明时才填，剧情团通常留空即可。\n'
+    + '6) 整个世界/地区的地理总述、历史渊源等宏观内容归 lore，不要与具体场景混为一谈。\n'
     + '【去重】已存在同名条目：{existing}。同名或同含义的不要重复新增，把「合并建议」写入 updates。\n'
     + '【输出格式】只输出一个合法 JSON，不要输出任何解释文字：\n'
     + '{"entities":{"pcs":[],"npcs":[],"regions":[],"logs":[],"mobs":[],"rules":[],"lore":[]},"updates":[]}\n'
@@ -1291,7 +1305,7 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
   const EXISTING = existing || {};
   const full = String(text || '');
   // U1-16：结构感知切分 + 受控并行分段（并发 3~5，取代逐段串行）
-  const SEG = 24000, OVERLAP = 300;   // U3-4：段长提高、重叠减小（原 18000/600），减少重复注入的 token
+  const SEG = 15000, OVERLAP = 250;   // U3-8：段长 24000→15000、重叠 300→250，单段输出更短，降低长 JSON 被截断/坏 JSON 概率
   const CONC = Math.max(1, Math.min(5, Number(opts.concurrency) || 3));
   const onProg = typeof opts.onProgress === 'function' ? opts.onProgress : null; // U1-15：进度回调
   const nameFilter = (opts.settings && opts.settings.nameFilter) || null;        // U1-18：自定义过滤词
@@ -1348,8 +1362,8 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           const remind = (attempt > 1) ? '\n【要求纠正】你上一次的回复没有返回可解析的 JSON 对象。请只输出一个 JSON 对象（字段含 entities），不要输出任何解释文字、Markdown 代码块或包围标记；若输出过长会被截断，请务必紧凑地给出完整字段。' : '';
-          // 剧本拆解输出量大，用更高 token 上限，避免完整 JSON 被截断成残缺对象
-          const c = stripWrap(await rawJsonReply(cfg, sys, makeUser() + remind, 10000));
+          // 剧本拆解输出量大，用更高 token 上限，避免完整 JSON 被截断成残缺对象；重试时再放宽上限
+          const c = stripWrap(await rawJsonReply(cfg, sys, makeUser() + remind, attempt > 1 ? 12000 : 10000));
           const j = extractJsonObject(c);
           if (!j) throw new Error('未返回 JSON 对象');
           const ent = (j && j.entities) || j || {};
@@ -1434,13 +1448,22 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
         + rejected.map(r => r.name + '（' + (KIND_LABEL[r.kind] || r.kind) + '）').join('、')
     });
   }
+  /* U3-8 修正：全部段落失败时不再整体抛错（否则用户端只看到「AI 拆分登记在重试后仍失败」、
+   * 连已解析的部分也一并丢失，等于整次无效）。改为返回空结果 + 明确告警，由渲染层提示补救方式；
+   * 有成功段时按下方「分段解析告警」返回部分结果。 */
   if (segs.length && !kinds.some(k => merged.entities[k].length)) {
     if (cancelled) throw new Error('AI_TASK_CANCELLED 解析已取消');
-    throw new Error('AI 拆分登记在重试后仍失败：' + (errors.join('；') || '所有段落均未识别出实体'));
+    merged.partial = true;
+    merged.updates.push({
+      type: '拆分失败告警',
+      note: '本次拆分未识别出任何实体（' + (errors.join('；') || '所有段落均未识别出实体') + '）。'
+        + '建议：1) 检查 AI 服务配置、额度与网络是否正常；2) 正文过长时可先拆成多个文件分段导入；3) 稍后仅对失败内容重新拆分一次。'
+    });
   }
   /* U3-4 补充：个别分段失败时不静默丢内容——明确列出失败段落，便于用户只对该部分再拆一次，
    * 而不必因为「感觉没解析全」把整份长文本重新上传。 */
   if (!cancelled && errors.length) {
+    merged.partial = true; // 有失败段：结果不完整，供渲染层提示「部分成功、可只补跑失败段」
     merged.updates.push({
       type: '分段解析告警',
       note: '有 ' + errors.length + ' / ' + segs.length + ' 段未能解析（' + errors.slice(0, 6).join('；') + (errors.length > 6 ? ' 等' : '') + '），结果可能不完整；可只对上述段落的内容重新拆分一次，无需重传整份文本。'
@@ -1454,7 +1477,8 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
 function normalize(item, schema, kind) {
   const o = { source: '剧本解析' };
   const keys = new Set((schema || []).map(f => f.k));
-  keys.add('desc'); // 兼容纳气字段
+  keys.add('desc');   // 兼容纳气字段
+  keys.add('parent'); // U3-8：子地区层级字段不依赖 schema（旧档案/自定义 schema 也可能缺失），保留层级信息
   for (const k of keys) {
     if (item[k] !== undefined && item[k] !== null && item[k] !== '') o[k] = item[k];
   }
@@ -1835,18 +1859,20 @@ async function suggestRelations(entities, relations, cfg, rawText) {
   const score = new Map();
   const rawTxt = String(rawText || '');
   const normRaw = normName(rawTxt);
+  const present = [];    // 出现在原文中的实体（归一化名 + 去括号名），供打分与摘录选段复用
+  const paraHits = [];   // { p: 原段落, hits: 命中实体数 } —— 供「关系密集段」摘录优先注入
   if (normRaw) {
-    const present = [];
     for (const e of all) {
       const nk = normName(e.name);
       const bare = normName(String(e.name).replace(/[（(].*?[）)]/g, '')); // 去括号备注后单独匹配
       if (normRaw.includes(nk) || (bare.length >= 2 && normRaw.includes(bare))) present.push({ name: e.name, nk, bare });
     }
-    const paras = String(rawTxt).split(/\n+/).map((s) => normName(s)).filter(Boolean);
+    const paras = String(rawTxt).split(/\n+/).map((s) => s.trim()).filter(Boolean);
     for (const p of paras) {
+      const pn = normName(p);
       const hit = [];
       for (const pe of present) {
-        if (p.includes(pe.nk) || (pe.bare.length >= 2 && p.includes(pe.bare))) hit.push(pe.name);
+        if (pn.includes(pe.nk) || (pe.bare.length >= 2 && pn.includes(pe.bare))) hit.push(pe.name);
       }
       for (let i = 0; i < hit.length; i++) {
         for (let j = i + 1; j < hit.length; j++) {
@@ -1854,6 +1880,7 @@ async function suggestRelations(entities, relations, cfg, rawText) {
           score.set(hit[j], (score.get(hit[j]) || 0) + 4);
         }
       }
+      if (hit.length) paraHits.push({ p, hits: hit.length });
     }
   }
   for (const e of edges) {
@@ -1891,6 +1918,18 @@ async function suggestRelations(entities, relations, cfg, rawText) {
   };
   const sys = '你是世界观关系网协同助手。基于给定卡片内容线索与团本原文，判断应新增、修正或删除哪几条连线。只输出合法 JSON 数组，不要任何解释、注释或 markdown 代码块。';
   const raw = String(rawText || '').replace(/\s+/g, '\n').trim();
+  /* U3-8：摘录不再只取开头 8000 字——按段落命中实体数排序，优先注入「实体共现最密集」的段落，
+   * 避免长文本前段的无关系描写把真正的关系线索挤出预算；预算仍封顶 8000 字符防 token 爆炸。 */
+  let excerpt = raw.slice(0, 8000);
+  if (paraHits.length) {
+    paraHits.sort((a, b) => b.hits - a.hits);
+    const parts = []; let used = 0;
+    for (const { p } of paraHits) {
+      if (used + p.length + 1 > 8000) break;
+      parts.push(p); used += p.length + 1;
+    }
+    if (parts.length) excerpt = parts.join('\n');
+  }
   const user = '输出 JSON 数组，每项是一个操作对象，支持三种类型：\n'
     + '新增：{"op":"add","from":"X","to":"Y","label":"关系说明(4~15字，如 师徒/敌对/私下结盟/隶属于火鳞商会/血亲/线索指向)"}\n'
     + '修正：{"op":"edit","from":"X","to":"Y","label":"纠正后的关系说明"}，from/to 必须是一对已有连线\n'
@@ -1899,7 +1938,7 @@ async function suggestRelations(entities, relations, cfg, rawText) {
     + '注意：请结合每张卡片「」内的内容线索与原始文本摘录中明确的描述来推断关系（如师徒、敌对、效忠、兄妹、线索指向等），不要因为没有看到显式关系词就一律输出空数组。'
     + '\n\n现有连线（供 add 去重、edit/del 定位）：' + (existingReadable.length ? existingReadable.join('　') : '（暂无）')
     + '\n\n清单（名称后是卡片关键内容）\n' + lines.join('\n').slice(0, 14000)
-    + (raw ? '\n\n原始文本摘录\n' + raw.slice(0, 8000) : '');
+    + (excerpt ? '\n\n原始文本摘录\n' + excerpt : '');
   /* P1-4：优先声明 response_format(json_object) 强约束输出 schema（上游不支持时 rawJsonReply 会自动去掉重试）；
    * 解析仍失败再走 P0-2 定向重试。 */
   let arr = [];
@@ -1913,6 +1952,19 @@ async function suggestRelations(entities, relations, cfg, rawText) {
     } catch (_) { arr = []; }
   }
   if (!Array.isArray(arr)) arr = [];
+  /* U3-8：解析成功但结果为空时再做一次「定向挖掘」重试——不少模型在第一次倾向直接输出 []，
+   * 强化提示后能对照卡片线索与原文摘录，找出已存在但未显式出现关系词的关系。 */
+  if (!arr.length) {
+    relationDiag.parseRetries += 1;
+    const digHint = '\n\n【重要】你刚才没有给出任何连线。请逐条对照「清单」里每张卡片的线索与「原始文本摘录」，'
+      + '找出其中明确写到的关系（如师徒、敌对、效忠、兄妹、同伙、上下级、结盟、线索指向、亲缘等），'
+      + '即使原文没有使用关系词、但通过共同行动/出身/阵营/描述可以确定的也要输出 add 操作；'
+      + '仅当确实完全找不到任何可信关系时才输出 []。';
+    try {
+      const retry = parseJsonObj(await rawJsonReply(cfg, sys, user + RELATION_RETRY_HINT + digHint, 4000));
+      if (Array.isArray(retry)) arr = retry;
+    } catch (_) { /* 保持空结果 */ }
+  }
   const out = [];
   const pick = (v) => { const f = String(v || '').trim(); return f || null; };
   for (const it of arr) {
@@ -1935,7 +1987,17 @@ async function suggestRelations(entities, relations, cfg, rawText) {
   // 去重 + 总量上限，防止 AI 反复输出同批内容造成「胡乱思考」
   const seen = new Set(); const dedup = [];
   for (const o of out) { const k = o.op + '|' + pairKey(o.from, o.to); if (seen.has(k)) continue; seen.add(k); dedup.push(o); }
-  return dedup.slice(0, 30);
+  const final = dedup.slice(0, 30);
+  /* U3-8：缓存只写入非空结果——否则「空结果被缓存 → 同输入下次直接复用空结果」，关系网永远解析不出。
+   * 容量按 RELATION_CACHE_MAX 做 FIFO 裁剪，防缓存无限膨胀。 */
+  if (final.length) {
+    relationCache.set(fpKey, { ops: final, at: Date.now() });
+    if (relationCache.size > RELATION_CACHE_MAX) {
+      const keys = Array.from(relationCache.keys()).slice(0, relationCache.size - RELATION_CACHE_MAX);
+      for (const k of keys) relationCache.delete(k);
+    }
+  }
+  return final;
 }
 
 /* 原始文本「带团建议」：保留原文结构与内容，在关键句子之后用标记插入一条主持(带团)建议/方案，
@@ -2319,4 +2381,4 @@ async function regenerateScene(cfg, text, scenes, index, opts) {
   return { ok: true, scene: n, usage: usageByMark(mark) };
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, regenerateScene, extractScriptBody, usageLog, usageByMark, healthStats, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, mergeRoll, buildContinueCtx };
+module.exports = { DEFAULT_FIELDS, defaultFields, ensureFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, regenerateScene, extractScriptBody, usageLog, usageByMark, healthStats, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, mergeRoll, buildContinueCtx };

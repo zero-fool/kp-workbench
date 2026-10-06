@@ -97,7 +97,7 @@ function bootData() {
       try {
         autoMigrateLegacyData(dataDir);
         doc = store.load();
-        if (!doc.fields) doc.fields = ai.defaultFields();
+        doc.fields = ai.ensureFields(doc.fields); // U3-8：升级补齐新增字段（如 regions.parent），旧档案/自定义 schema 自动补上
         if (!doc.settings.activeProfileId && doc.profiles.length) doc.settings.activeProfileId = doc.profiles[0].id;
         /* 卡片模板：首次启动/升级时把内置规则书模板(coc/dnd)注入 settings.templates，用户自建模板保留 */
         if (!Array.isArray(doc.settings.templates)) doc.settings.templates = [];
@@ -470,7 +470,7 @@ function registerIpc() {
     try {
       const n = copyDirRec(src, store.folder);
       doc = store.load(); // 重新加载合并后的数据
-      if (!doc.fields) doc.fields = ai.defaultFields();
+      doc.fields = ai.ensureFields(doc.fields); // U3-8：升级补齐新增字段
       return { ok: true, copied: n, target: store.folder };
     } catch (e) {
       return { ok: false, error: '导入失败：' + ((e && e.message) || e) };
@@ -543,7 +543,7 @@ function registerIpc() {
     try {
       const n = copyDirRec(src, store.folder);
       doc = store.load();
-      if (!doc.fields) doc.fields = ai.defaultFields();
+      doc.fields = ai.ensureFields(doc.fields); // U3-8：升级补齐新增字段
       runlog.warn('全量恢复', { source: src, files: n, safety });
       return { ok: true, copied: n, target: store.folder, safety };
     } catch (e) { return { ok: false, error: '恢复失败：' + ((e && e.message) || e) }; }

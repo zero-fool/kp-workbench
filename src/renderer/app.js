@@ -3638,9 +3638,11 @@
       const r = await window.api.aiParse(t, { title: (S.scriptFileName || '') });
       S.scriptPreview = r;
       const doneHint = '完成：' + KINDS.map(k => `${DATA_TYPE[k]} ${(r.entities[k] || []).length} 条`).join(' · ');
-      const partialHint = r && r.cancelled ? '（已取消：以下为已解析完成的部分结果）' : '';
+      const partialHint = r && (r.cancelled || r.partial) ? '（部分失败：以下为已成功解析的结果）' : '';
       S.scriptState = partialHint + doneHint;
-      openScriptPreview(r, 'auto', (r && r.cancelled ? '解析已取消，以下为已完成的部分结果' : '剧本解析完成：' + doneHint) + '\n预览勾选后（默认全选）确认写入工作台；可在此处直接给导入卡套用「卡片模板」。');
+      openScriptPreview(r, 'auto', (r && r.cancelled ? '解析已取消，以下为已完成的部分结果'
+        : (r && r.partial ? '拆分未完整成功，以下为已成功解析的结果（失败原因见预览上方告警，可只对失败段落重新拆分）'
+        : '剧本解析完成：' + doneHint)) + '\n预览勾选后（默认全选）确认写入工作台；可在此处直接给导入卡套用「卡片模板」。');
       const curState = q('drawerScriptState'); if (curState) curState.textContent = partialHint + doneHint;
     } catch (e) {
       S.scriptState = '';
@@ -3650,6 +3652,11 @@
   }
   function previewHTML(r) {
     let html = '';
+    /* U3-8：拆分失败/截断等告警置顶展示，避免「部分成功」被当成正常结果而忽略 */
+    const warns = (r && Array.isArray(r.updates)) ? r.updates.filter(u => u && u.note && ((u.type || '').indexOf('告警') >= 0 || (u.type || '').indexOf('失败') >= 0 || (u.type || '').indexOf('截断') >= 0)) : [];
+    if (warns.length) {
+      html += `<div class="warn-box">${warns.map(w => `<div><b>${esc(w.type || '提示')}：</b>${esc(w.note)}</div>`).join('')}</div>`;
+    }
     for (const k of KINDS) {
       const all = r.entities[k] || [];
       if (!all.length) continue;
