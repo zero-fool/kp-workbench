@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>关系网测试 · 日夜行人模组3.23</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#161a22; --panel2:#1c2230; --line:#2a3142;
+    --text:#e7e9ee; --muted:#8b93a7;
+    --pc:#4cc3ff; --npc:#ffb84d; --region:#6ee7a0; --edge:#64748b;
+    --good:#4cc3ff; --warn:#ffd166;
+  }
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font: 14px/1.6 "PingFang SC","Microsoft YaHei",-apple-system,sans-serif; }
+  #app { display:flex; height:100vh; }
+  #main { flex:1; min-width:0; display:flex; flex-direction:column; }
+  header { padding:14px 18px 10px; border-bottom:1px solid var(--line); }
+  header h1 { margin:0 0 2px; font-size:18px; font-weight:600; letter-spacing:.5px; }
+  header .sub { color:var(--muted); font-size:12px; }
+  .stats { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    padding:6px 12px; font-size:12px; color:var(--muted); }
+  .stat b { color:var(--text); font-size:14px; margin-right:2px; }
+  .stat.pc b { color:var(--pc); } .stat.npc b { color:var(--npc); } .stat.region b { color:var(--region); }
+  .toolbar { display:flex; align-items:center; gap:10px; padding:8px 18px;
+    border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .toolbar label { font-size:12px; color:var(--muted); }
+  .toolbar select, .toolbar button { background:var(--panel2); color:var(--text);
+    border:1px solid var(--line); border-radius:6px; padding:4px 10px; font-size:12px; cursor:pointer; }
+  .toolbar button:hover { border-color:var(--pc); }
+  #graphWrap { flex:1; position:relative; overflow:hidden; }
+  #graph { width:100%; height:100%; display:block; }
+  #legend { position:absolute; left:14px; bottom:14px; background:rgba(22,26,34,.92);
+    border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:12px; }
+  #legend .row { display:flex; align-items:center; gap:8px; margin:4px 0; }
+  .dot { width:12px; height:12px; border-radius:50%; display:inline-block; }
+  #tip { position:absolute; display:none; background:rgba(22,26,34,.97); border:1px solid var(--line);
+    border-radius:10px; padding:12px 14px; max-width:320px; font-size:12px; z-index:10; }
+  #tip .t-name { font-size:15px; font-weight:600; margin-bottom:4px; }
+  #tip .t-role { color:var(--muted); margin-bottom:6px; }
+  #tip .t-note { color:#c3c9d8; }
+  #tip .t-rel { color:var(--warn); margin-top:6px; }
+  #side { width:330px; border-left:1px solid var(--line); overflow-y:auto; padding:14px; }
+  #side h2 { font-size:13px; color:var(--muted); margin:14px 0 8px; letter-spacing:1px; }
+  #side h2:first-child { margin-top:0; }
+  .chip { display:inline-block; background:var(--panel2); border:1px solid var(--line);
+    border-radius:20px; padding:2px 10px; margin:3px 4px 0 0; font-size:12px; color:var(--muted); }
+  .chip.pc { color:var(--pc); border-color:#2b5d7d; }
+  .chip.region { color:var(--region); border-color:#24603f; }
+  .rel-list { list-style:none; margin:0; padding:0; }
+  .rel-list li { padding:7px 0; border-bottom:1px dashed var(--line); font-size:12px; }
+  .rel-list .lbl { color:var(--warn); }
+  .edge-lbl { fill:#aab3c5; font-size:10.5px; pointer-events:none; }
+  .node { cursor:pointer; }
+  .node circle { stroke:#fff; stroke-opacity:.25; }
+  .node text { fill:var(--text); font-size:12px; text-anchor:middle; pointer-events:none; }
+  .edge { stroke:var(--edge); stroke-opacity:.55; }
+  .edge.hl { stroke:var(--warn); stroke-opacity:1; stroke-width:2.5; }
+  .node.hl circle { stroke-width:2.5; }
+  .node.dim { opacity:.15; }
+  .edge.dim { opacity:.05; }
+  @media (max-width:900px) { #side { display:none; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="main">
+    <header>
+      <h1>关系网测试 · 《日夜行人》模组 3.23</h1>
+      <div class="sub">真实 AI 推断 · DeepSeek deepseek-chat · 生成于 <span id="genAt"></span></div>
+      <div class="stats">
+        <span class="stat pc"><b id="stPc">0</b>PC</span>
+        <span class="stat npc"><b id="stNpc">0</b>NPC</span>
+        <span class="stat region"><b id="stRegion">0</b>地区</span>
+        <span class="stat"><b id="stEdge">0</b>关系连线</span>
+        <span class="stat"><b id="stNode">0</b>主图节点</span>
+      </div>
+    </header>
+    <div class="toolbar">
+      <label>过滤</label>
+      <select id="filter">
+        <option value="all">全部</option>
+        <option value="pc">仅 PC 及直接关联</option>
+      </select>
+      <label>关系标注</label>
+      <select id="lblMode">
+        <option value="hover">悬停显示</option>
+        <option value="always">常显</option>
+        <option value="none">隐藏</option>
+      </select>
+      <label>布局</label>
+      <select id="layout">
+        <option value="force">力导向</option>
+        <option value="circle">环形</option>
+      </select>
+      <button id="reset" title="把拉扯乱的节点复位">复位布局</button>
+      <button id="png" title="把当前画面导出为 PNG">导出 PNG</button>
+      <span style="flex:1"></span>
+      <label style="color:var(--warn)">拖动节点可调整布局 · 悬停查看详情</label>
+    </div>
+    <div id="graphWrap">
+      <svg id="graph"></svg>
+      <div id="legend">
+        <div class="row"><span class="dot" style="background:var(--pc)"></span>PC 调查员</div>
+        <div class="row"><span class="dot" style="background:var(--npc)"></span>NPC 角色</div>
+        <div class="row"><span class="dot" style="background:var(--region)"></span>地区（有关系者入图）</div>
+        <div class="row"><span class="dot" style="background:var(--edge)"></span>AI 推断的关系</div>
+      </div>
+      <div id="tip"></div>
+    </div>
+  </div>
+  <div id="side">
+    <h2>全部关系（AI 推断）</h2>
+    <ul class="rel-list" id="relList"></ul>
+    <h2>PC 调查员</h2>
+    <div id="sidePcs"></div>
+    <h2>模组地区（未入图）</h2>
+    <div id="sideRegions"></div>
+  </div>
+</div>
+<script>
+const DATA = {"generatedAt":"2026/10/7 00:10:18","pcCount":5,"npcCount":30,"regionCount":18,"edgeCount":25,"nodeCount":21,"pcs":["HO1","HO2","HO3","PC们","PC"],"regions":["方山","高瞳县人民小学","高瞳县城","西城铜矿","贾村","中医院","麻将馆","高瞳县公安局","贾家祠堂","荒村","山路","惠民小区","月川河","厚德旅馆","HO3家","县史文化馆","后河村招待所","山顶"],"loneRegions":["方山","高瞳县人民小学","高瞳县城","西城铜矿","贾村","中医院","麻将馆","高瞳县公安局","贾家祠堂","荒村","山路","惠民小区","月川河","厚德旅馆","HO3家","县史文化馆","后河村招待所","山顶"],"nodes":[{"name":"HO1","group":"pc","role":"赴任教师","note":"首见于第1幕「暴雨困途·后河村夜宿」：2016年8月，中国北方小镇高瞳遭遇罕见暴雨。怀着不同目的的三人恰巧乘坐同一辆大巴前往高瞳，因暴雨封路不得不在高瞳周边的后河村暂时过夜。高瞳是常年徘徊在贫困线上下的落后县城，整座县城在大雨中散发着沉沉暮气。你们听说，高瞳至今保留着古代留存的原始崇拜习俗，不知道是真是假。HO1作为新入职教师，由高瞳小"},{"name":"HO3","group":"pc","role":"归乡学子","note":"首见于第1幕「暴雨困途·后河村夜宿」：2016年8月，中国北方小镇高瞳遭遇罕见暴雨。怀着不同目的的三人恰巧乘坐同一辆大巴前往高瞳，因暴雨封路不得不在高瞳周边的后河村暂时过夜。高瞳是常年徘徊在贫困线上下的落后县城，整座县城在大雨中散发着沉沉暮气。你们听说，高瞳至今保留着古代留存的原始崇拜习俗，不知道是真是假。HO1作为新入职教师，由高瞳小"},{"name":"HO2","group":"pc","role":"寻亲者","note":"首见于第1幕「暴雨困途·后河村夜宿」：2016年8月，中国北方小镇高瞳遭遇罕见暴雨。怀着不同目的的三人恰巧乘坐同一辆大巴前往高瞳，因暴雨封路不得不在高瞳周边的后河村暂时过夜。高瞳是常年徘徊在贫困线上下的落后县城，整座县城在大雨中散发着沉沉暮气。你们听说，高瞳至今保留着古代留存的原始崇拜习俗，不知道是真是假。HO1作为新入职教师，由高瞳小"},{"name":"王莲","group":"npc","role":"刑侦大队警察，旧友","note":"首见于第4幕「高瞳县公安局·王莲重逢」：HO1以教师身份为掩护，私下联系旧友王莲。两人在公安局外见面，王莲显得疲惫但正直，对HO1的到来感到高兴。王莲透露自己正在调查冯巍失踪案，但局里高层对此态度消极，调查受阻。他怀疑有内部人员受贿，但缺乏证据。王莲还提到高瞳的儿童失踪率异常高，最近又有多起案件，但都被压了下来。他提醒HO1注意安全，不要"},{"name":"程尹","group":"npc","role":"高瞳小学美术老师（电话联系）","note":"首见于第1幕「暴雨困途·后河村夜宿」：2016年8月，中国北方小镇高瞳遭遇罕见暴雨。怀着不同目的的三人恰巧乘坐同一辆大巴前往高瞳，因暴雨封路不得不在高瞳周边的后河村暂时过夜。高瞳是常年徘徊在贫困线上下的落后县城，整座县城在大雨中散发着沉沉暮气。你们听说，高瞳至今保留着古代留存的原始崇拜习俗，不知道是真是假。HO1作为新入职教师，由高瞳小"},{"name":"莫槐君","group":"npc","role":"父亲，医生","note":"首见于第6幕「HO3家·莫槐君归来」：HO3回到家中，父亲莫槐君对其突然归来反应冷淡，甚至有些恼怒，质问为何旷掉夏令营课程。HO3若提及贾士慈，莫槐君会显得更加不悦，并警告HO3少与贾士慈来往。莫槐君对HO3的母亲话题避而不谈，用敷衍的谎言搪塞。家中气氛压抑，HO3感受到父亲一如既往的严厉与疏离。夜晚，HO3可能注意到窗外有异常的人影或"},{"name":"贾士慈","group":"npc","role":"贾家族长，高瞳实际领袖","note":"首见于第12幕「政府大楼·贾士慈的接见」：HO3应贾士慈之约前往政府大楼。贾士慈热情接待，回忆童年往事，显得亲切。他告诉HO3，自己叫他回来是因为“拜山祭”需要贾家血脉的参与，并暗示HO3的母亲与祭典有关。贾士慈还提到，高瞳最近不太平，儿童失踪案频发，但警方无能为力。他希望HO3能帮忙说服莫槐君合作，共同维护高瞳的“传统”。HO3感到贾士慈"},{"name":"陈皓雅","group":"npc","role":"民俗学教授，HO2的同伴","note":"首见于第19幕「前日谈·陈皓雅公寓夜半惊魂」：HO2在陈皓雅教师公寓小住，某夜从噩梦惊醒，发现自己平躺在客厅地毯上，陈皓雅正举着电饼铛尴尬地看着他。HO2梦到坐在老宅祠堂，铜铃梆子声围绕，隐秘注视停留在头顶。陈皓雅做了夜宵“瞎眼眶子炸虾酱”。暴雨中传来敲门声，门外是张秀兰，额头撞门，自称是HO2四叔家的婶子，求开门。若不开门，张秀兰会守在门口一"},{"name":"金二婶","group":"npc","role":"麻将馆老板娘","note":"首见于第39幕「金花房·麻将馆初探与拜山传言」：PC们来到高瞳消息最灵通的麻将馆‘金花房’，这里原是粮站职工宿舍锅炉间，现为二层麻将馆，空气污浊，角落供奉黄铜地母小像。向路人询问信息都会被推荐来此。馆内人们抱怨洪讯和夜晚危险，失踪的不止儿童，成年人也在雨夜被亡魂带走。一个老人安慰道：‘要等拜山，等拜山之后就好了……’普通百姓只模糊知道贾家每年鬼节"},{"name":"贾士涟","group":"npc","role":"麻将馆常客","note":"首见于第8幕「麻将馆·贾士涟的暗示」：HO3在县城闲逛时被贾士涟搭话，贾士涟是贾家成员，看似随意地邀请HO3打麻将。交谈中，贾士涟暗示高瞳最近不太平，夜晚不要出门，并提到“拜山祭”即将到来，贾家需要“准备”。他还意味深长地说HO3“长大了，该知道些事了”，但随即被其他贾家人叫走。HO3感到贾士涟的话中有话，且对贾士慈的行踪含糊其辞。"},{"name":"冯巍","group":"npc","role":"学生，写信求助","note":"首见于第30幕「信件往来·程尹与冯巍的通信」：冯巍写信给程尹，询问爱德华·蒙克的事，并抱怨爷爷奶奶不允许她读太多书。程尹以楷体回信，介绍蒙克的精神疾病与画作《呐喊》，并约定在学校面谈。三个月后，冯巍来信说爷爷奶奶发疯想献祭她，哄骗她吃药，她嫌难吃没喝，请求程尹帮她杀了爷爷奶奶。程尹耐心回信，指出杀人不对，并建议她抱住爷爷奶奶说‘都是我不好，爷爷"},{"name":"后姥娘娘（黑山羊之母）","group":"npc","role":"降临的邪神","note":"首见于第92幕「祭祀失败·黑山羊之母显现」：如果PC破坏了拜山祭但没有找到替代方案，恐怖的灾祸降临：一道惊雷响彻山涧，令人牙酸的巨响从山脊传来。山脊线猛地凸起、碎裂，一道深不见底的裂隙豁然张开，涌动着比黑夜更深的粘稠黑暗。一座庞大扭曲的形影自暴雨中升起，碾开碎石断木。潮湿油腻的惨白色肉肢自碎裂山石中显现，在闪电照耀下反射出病态金光。数百年来被"},{"name":"波琳娜·伊戈列芙娜","group":"npc","role":"日记作者，已故调查员","note":"首见于第60幕「波琳娜的手记其一·从密大到高瞳」：PC们阅读波琳娜的手记其一，原件为俄文，可用翻译器查看。日记记录她收到密斯卡托尼克大学入学通知、入学后结识莫槐君、偷学用筷子、偷吃饺子、被举报到教务处、莫槐君解释“傻逼”含义、莫槐君因家乡晚辈去世而悲伤、毕业后波琳娜坚持随莫槐君来高瞳、晕机、两个月后在高瞳西城矿区工作、贾安排工作、贾家地位超然、一周"},{"name":"贾知微","group":"npc","role":"化名晁见远的调查记者，可能出现在大巴车上","note":"首见于第22幕「模组正文·44路夜车驶向高瞳」：2016年8月，中国北方小镇高瞳遭遇罕见暴雨，已下四五天。雨水侵蚀使山石结构危险，可能发生泥石流和山体滑坡，周围村镇汽车站减少前往高瞳的车次。PC们乘坐的44路公交车是封山前最后一班。这种异变是受到黑山羊之母影响，渴望祭品的森林之母渴望潮湿阴暗环境，因此天气降临高瞳。模组开始时，贾知微化名晁见远，可"},{"name":"晁见远","group":"npc","role":"自称调查记者，实为贾知微","note":"首见于第15幕「荒村·贾知微的蛊惑」：夜晚，HO2和HO3在山中迷路，误入一个荒村。村中房屋破败，但有一间亮着灯。他们遇到自称调查记者的晁见远，他热情地提供帮助，说自己也在调查高瞳的怪事。晁见远对高瞳的历史了如指掌，提到贾知微和拜山祭的传说，但坚称那只是迷信。他建议两人尽快离开，并主动带路。途中，HO2注意到晁见远没有影子，且对某些问题"},{"name":"贾士信","group":"npc","role":"张秀兰之子，已成为后姥伥鬼","note":"首见于第19幕「前日谈·陈皓雅公寓夜半惊魂」：HO2在陈皓雅教师公寓小住，某夜从噩梦惊醒，发现自己平躺在客厅地毯上，陈皓雅正举着电饼铛尴尬地看着他。HO2梦到坐在老宅祠堂，铜铃梆子声围绕，隐秘注视停留在头顶。陈皓雅做了夜宵“瞎眼眶子炸虾酱”。暴雨中传来敲门声，门外是张秀兰，额头撞门，自称是HO2四叔家的婶子，求开门。若不开门，张秀兰会守在门口一"},{"name":"四叔","group":"npc","role":"后河村招待所老板","note":"首见于第24幕「后河村招待所·四叔与登记」：大巴驶入后河村，停在二层小楼前。司机因暴雨和车上多出的乘客感到恐惧，决定在此借宿，搪塞PC说暴雨夜不适合继续行车。司机敲门，四叔开门，他头发全白、面容惨淡、眼白布满血丝、嘴唇不断张合念叨。司机称其为“四叔”，先行去二楼。四叔一瘸一拐引PC到前台，要求登记姓名、电话、身份证号，然后给钥匙。PC可翻看登"},{"name":"旅馆老板父母","group":"npc","role":"邪教徒","note":"首见于第7幕「厚德旅馆·研究队警告」：HO2根据线索找到陈皓雅研究队曾入住的厚德旅馆。旅馆老板看似热情，但其父母行为古怪，对HO2的询问闪烁其词。老板透露研究队确实住过，但某天晚上一位老师突然死亡，研究队便匆忙离开前往方山。HO2在房间内发现陈皓雅遗留的笔记，提到“他们发现了我们的目的”“必须尽快离开”等字样。当晚，HO2感到被窥视，旅"},{"name":"科考队成员","group":"npc","role":"采集样本、移开骸骨","note":"首见于第47幕「西城铜矿·矿道深入与名册异象」：陈皓雅和队员们穿着冲锋衣沿崎岖矿道深入，一路采集土壤样本。废弃矿道石壁覆盖青苔霉斑，地面散落破碎木板与腐朽器具。约一小时后进入工人衣帽间，陈皓雅推开腐朽房门，一排排生锈铁柜和斑驳木架显现，柜门半开或紧闭，积满灰尘散发霉味。坍塌使矿路更逼仄，工具间尽头两具布满蛛网与灰尘的骨骸堵住去路。科考队成员低声议"},{"name":"铜花教徒","group":"npc","role":"监视外乡人","note":"首见于第28幕「高瞳车站·程尹接站与铜花教徒」：大巴抵达高瞳车站，车站冷清，时刻表只剩县内班次。成功侦察可注意到角落有几个农民鬼鬼祟祟观察PC，是程尹命令的狂信徒，察觉目光即跑开。出站口，程尹拿着手机，黑眼圈严重，疲惫地询问HO1。他鞠躬道歉，介绍落脚处：教师村短租公寓（免费，条件差）和厚德旅馆（自费，条件好），PC也可提出去程尹家、贾士涟家或H"},{"name":"贾家族人","group":"npc","role":"参与祭祀","note":"首见于第90幕「拜山祭·祭品与仪式」：END3:重壤茱萸（祖祭结局）触发条件：未能阻止拜山祭的进行。NE的一种，即在调查员完全不干涉NPC们行动的情况下，最有可能发生的结局。与END4皇天后土的条件有可能同时满足，因此有可能最终达成END4。在这种情况下，需要进行极其艰苦的结局处理：若祭祀成功且阻止了程尹，则达成NE重壤茱萸；若二者任一"}],"edges":[{"a":"HO1","b":"王莲","labels":["旧友，私下联系调查"],"ops":[{"op":"add","from":"HO1","to":"王莲","label":"旧友，私下联系调查"}]},{"a":"HO1","b":"程尹","labels":["赴任小学的同事"],"ops":[{"op":"add","from":"HO1","to":"程尹","label":"赴任小学的同事"}]},{"a":"HO3","b":"莫槐君","labels":["父子，冷淡疏离"],"ops":[{"op":"add","from":"HO3","to":"莫槐君","label":"父子，冷淡疏离"}]},{"a":"HO3","b":"贾士慈","labels":["被其召回的族中晚辈"],"ops":[{"op":"add","from":"HO3","to":"贾士慈","label":"被其召回的族中晚辈"}]},{"a":"HO2","b":"陈皓雅","labels":["同伴，为其奔走"],"ops":[{"op":"add","from":"HO2","to":"陈皓雅","label":"同伴，为其奔走"}]},{"a":"HO2","b":"金二婶","labels":["二婶，贾家守旧派"],"ops":[{"op":"add","from":"HO2","to":"金二婶","label":"二婶，贾家守旧派"}]},{"a":"HO2","b":"贾士涟","labels":["贾家亲戚，曾暗示"],"ops":[{"op":"add","from":"HO2","to":"贾士涟","label":"贾家亲戚，曾暗示"}]},{"a":"贾士涟","b":"金二婶","labels":["母子"],"ops":[{"op":"add","from":"贾士涟","to":"金二婶","label":"母子"}]},{"a":"贾士慈","b":"程尹","labels":["暗中合作，助其上位"],"ops":[{"op":"add","from":"贾士慈","to":"程尹","label":"暗中合作，助其上位"}]},{"a":"程尹","b":"冯巍","labels":["杀害冯巍的凶手"],"ops":[{"op":"add","from":"程尹","to":"冯巍","label":"杀害冯巍的凶手"}]},{"a":"程尹","b":"后姥娘娘（黑山羊之母）","labels":["虔信徒，召唤幼崽"],"ops":[{"op":"add","from":"程尹","to":"后姥娘娘（黑山羊之母）","label":"虔信徒，召唤幼崽"}]},{"a":"莫槐君","b":"后姥娘娘（黑山羊之母）","labels":["铜花药会虔信徒"],"ops":[{"op":"add","from":"莫槐君","to":"后姥娘娘（黑山羊之母）","label":"铜花药会虔信徒"}]},{"a":"莫槐君","b":"波琳娜·伊戈列芙娜","labels":["夫妻，同为教徒"],"ops":[{"op":"add","from":"莫槐君","to":"波琳娜·伊戈列芙娜","label":"夫妻，同为教徒"}]},{"a":"波琳娜·伊戈列芙娜","b":"HO3","labels":["母子，鬼胎之母"],"ops":[{"op":"add","from":"波琳娜·伊戈列芙娜","to":"HO3","label":"母子，鬼胎之母"}]},{"a":"贾知微","b":"晁见远","labels":["同一人，化名身份"],"ops":[{"op":"add","from":"贾知微","to":"晁见远","label":"同一人，化名身份"}]},{"a":"贾知微","b":"后姥娘娘（黑山羊之母）","labels":["百年前召唤者"],"ops":[{"op":"add","from":"贾知微","to":"后姥娘娘（黑山羊之母）","label":"百年前召唤者"}]},{"a":"贾士信","b":"四叔","labels":["父子，灵堂藏于招待所"],"ops":[{"op":"add","from":"贾士信","to":"四叔","label":"父子，灵堂藏于招待所"}]},{"a":"冯巍","b":"王莲","labels":["被其救下躲避追捕"],"ops":[{"op":"add","from":"冯巍","to":"王莲","label":"被其救下躲避追捕"}]},{"a":"旅馆老板父母","b":"科考队成员","labels":["杀害落单老师警告"],"ops":[{"op":"add","from":"旅馆老板父母","to":"科考队成员","label":"杀害落单老师警告"}]},{"a":"铜花教徒","b":"程尹","labels":["受其命令监视外乡人"],"ops":[{"op":"add","from":"铜花教徒","to":"程尹","label":"受其命令监视外乡人"}]},{"a":"贾家族人","b":"贾士慈","labels":["受其统领参与祭祀"],"ops":[{"op":"add","from":"贾家族人","to":"贾士慈","label":"受其统领参与祭祀"}]},{"a":"贾士慈","b":"贾知微","labels":["同族，贾家先祖"],"ops":[{"op":"add","from":"贾士慈","to":"贾知微","label":"同族，贾家先祖"}]},{"a":"陈皓雅","b":"科考队成员","labels":["带领研究队入高瞳"],"ops":[{"op":"add","from":"陈皓雅","to":"科考队成员","label":"带领研究队入高瞳"}]},{"a":"HO2","b":"后姥娘娘（黑山羊之母）","labels":["被诅咒的祭品"],"ops":[{"op":"add","from":"HO2","to":"后姥娘娘（黑山羊之母）","label":"被诅咒的祭品"}]},{"a":"HO3","b":"后姥娘娘（黑山羊之母）","labels":["鬼胎，受其污染"],"ops":[{"op":"add","from":"HO3","to":"后姥娘娘（黑山羊之母）","label":"鬼胎，受其污染"}]}]};
+
+const svg = document.getElementById('graph');
+const NS = 'http://www.w3.org/2000/svg';
+const W = () => svg.clientWidth, H = () => svg.clientHeight;
+let nodes = [], edges = [], state = { filter: 'all', lbl: 'hover', layout: 'force' };
+
+const tip = document.getElementById('tip');
+const relList = document.getElementById('relList');
+document.getElementById('genAt').textContent = DATA.generatedAt;
+document.getElementById('stPc').textContent = DATA.pcCount;
+document.getElementById('stNpc').textContent = DATA.npcCount;
+document.getElementById('stRegion').textContent = DATA.regionCount;
+document.getElementById('stEdge').textContent = DATA.edgeCount;
+document.getElementById('stNode').textContent = DATA.nodeCount;
+
+// ---- 侧栏 ----
+DATA.edges.forEach(e => {
+  const li = document.createElement('li');
+  li.innerHTML = '<b class="lbl">' + esc(e.a) + '</b> ——(' + esc(e.labels.join('；')) + ')—— <b class="lbl">' + esc(e.b) + '</b>';
+  relList.appendChild(li);
+});
+const pcsBox = document.getElementById('sidePcs');
+DATA.pcs.forEach(n => { const c = document.createElement('span'); c.className = 'chip pc'; c.textContent = n; pcsBox.appendChild(c); });
+const rgBox = document.getElementById('sideRegions');
+DATA.loneRegions.forEach(n => { const c = document.createElement('span'); c.className = 'chip region'; c.textContent = n; rgBox.appendChild(c); });
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+// ---- 建图 ----
+function buildNodes() {
+  nodes = DATA.nodes.map(n => ({
+    name: n.name, group: n.group, role: n.role || '', note: n.note || '',
+    x: Math.random() * W() * .8 + W() * .1, y: Math.random() * H() * .8 + H() * .1,
+    vx: 0, vy: 0, fx: null, fy: null
+  }));
+  // 环形备用坐标
+  const cyc = DATA.nodes.length;
+  DATA.nodes.forEach((n, i) => {
+    n._cx = W() / 2 + Math.cos(2 * Math.PI * i / Math.max(cyc, 1)) * Math.min(W(), H()) * .36;
+    n._cy = H() / 2 + Math.sin(2 * Math.PI * i / Math.max(cyc, 1)) * Math.min(W(), H()) * .36;
+  });
+  const idx = {};
+  nodes.forEach(n => idx[n.name] = n);
+  edges = DATA.edges.map(e => ({ a: idx[e.a], b: idx[e.b], labels: e.labels }));
+  edges = edges.filter(e => e.a && e.b);
+  edges.forEach(e => { e.lx = 0; e.ly = 0; });
+}
+
+// ---- 力导向 ----
+function tick() {
+  const K = 1800, REP = 240, ATTR = .045;
+  for (const n of nodes) {
+    if (n.fx != null) { n.x = n.fx; n.y = n.fy; n.vx = n.vy = 0; }
+    n.vx *= .85; n.vy *= .85;
+    // 向心
+    n.vx += (W() / 2 - n.x) * .0018;
+    n.vy += (H() / 2 - n.y) * .0018;
+  }
+  for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+    const a = nodes[i], b = nodes[j];
+    let dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy || 1;
+    const d = Math.sqrt(d2), f = REP / d2;
+    const fx = dx / d * f, fy = dy / d * f;
+    a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+  }
+  for (const e of edges) {
+    const dx = e.b.x - e.a.x, dy = e.b.y - e.a.y, d = Math.sqrt(dx * dx + dy * dy || 1);
+    const f = (d - 170) * ATTR;
+    const fx = dx / d * f, fy = dy / d * f;
+    e.a.vx += fx; e.a.vy += fy; e.b.vx -= fx; e.b.vy -= fy;
+  }
+  for (const n of nodes) {
+    if (n.fx == null) { n.x += n.vx; n.y += n.vy; }
+    n.x = Math.max(30, Math.min(W() - 30, n.x));
+    n.y = Math.max(30, Math.min(H() - 30, n.y));
+  }
+}
+
+// ---- 渲染 ----
+let edgeEls = [], nodeEls = [], lblEls = [];
+const COLOR = { pc: 'var(--pc)', npc: 'var(--npc)', region: 'var(--region)' };
+
+function render() {
+  const w = W(), h = H();
+  svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+  // 背景
+  svg.innerHTML = '<rect width="' + w + '" height="' + h + '" fill="var(--bg)"/>';
+  edgeEls = []; nodeEls = []; lblEls = [];
+  const gE = document.createElementNS(NS, 'g');
+  const gN = document.createElementNS(NS, 'g');
+  const gL = document.createElementNS(NS, 'g');
+  svg.appendChild(gE); svg.appendChild(gL); svg.appendChild(gN);
+
+  const shown = state.filter === 'all' ? nodes : nodes.filter(n => n.group === 'pc');
+  const shownSet = new Set(shown.map(n => n.name));
+  const shownEdges = edges.filter(e => shownSet.has(e.a.name) && shownSet.has(e.b.name));
+
+  for (const e of shownEdges) {
+    const line = document.createElementNS(NS, 'line');
+    line.setAttribute('class', 'edge');
+    line.setAttribute('stroke', 'var(--edge)');
+    line.setAttribute('x1', e.a.x); line.setAttribute('y1', e.a.y);
+    line.setAttribute('x2', e.b.x); line.setAttribute('y2', e.b.y);
+    gE.appendChild(line);
+    const lbl = document.createElementNS(NS, 'text');
+    lbl.setAttribute('class', 'edge-lbl');
+    lbl.setAttribute('x', (e.a.x + e.b.x) / 2);
+    lbl.setAttribute('y', (e.a.y + e.b.y) / 2 - 4);
+    lbl.textContent = e.labels[0];
+    gL.appendChild(lbl);
+    e._el = line; e._lbl = lbl;
+    edgeEls.push(line); lblEls.push(lbl);
+  }
+  for (const n of shown) {
+    const g = document.createElementNS(NS, 'g');
+    g.setAttribute('class', 'node');
+    const r = n.group === 'pc' ? 15 : n.group === 'region' ? 11 : 12;
+    const c = document.createElementNS(NS, 'circle');
+    c.setAttribute('r', r);
+    c.setAttribute('fill', COLOR[n.group]);
+    g.appendChild(c);
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('y', r + 13);
+    t.textContent = n.name;
+    g.appendChild(t);
+    g.setAttribute('transform', 'translate(' + n.x + ',' + n.y + ')');
+    gN.appendChild(g);
+    n._el = g; n._r = r;
+    nodeEls.push(g);
+    g.addEventListener('mouseenter', () => hover(n, true));
+    g.addEventListener('mouseleave', () => hover(n, false));
+    g.addEventListener('mousedown', ev => startDrag(n, ev));
+  }
+  applyLblMode();
+}
+
+function applyLblMode() {
+  lblEls.forEach(l => l.style.display = state.lbl === 'always' ? '' : 'none');
+}
+
+function hover(n, on) {
+  if (on) {
+    const rel = edges.filter(e => e.a.name === n.name || e.b.name === n.name).map(e => {
+      const other = e.a.name === n.name ? e.b : e.a;
+      return other.name + '（' + e.labels.join('；') + '）';
+    });
+    tip.style.display = 'block';
+    tip.innerHTML = '<div class="t-name">' + esc(n.name) + ' <span style="font-size:11px;color:var(--muted)">' + (n.group === 'pc' ? 'PC 调查员' : n.group === 'region' ? '地区' : 'NPC') + '</span></div>'
+      + '<div class="t-role">' + esc(n.role || '') + '</div>'
+      + (n.note ? '<div class="t-note">' + esc(n.note) + '…</div>' : '')
+      + (rel.length ? '<div class="t-rel">关联：' + rel.map(esc).join('；') + '</div>' : '');
+    nodeEls.forEach(el => { const o = el.__n === n ? false : true; el.classList.add('dim'); });
+    edgeEls.forEach((el, i) => {
+      const e = edges[i];
+      const hit = e.a.name === n.name || e.b.name === n.name;
+      el.classList.toggle('hl', hit);
+      el.classList.toggle('dim', !hit);
+      if (state.lbl === 'hover') lblEls[i].style.display = hit ? '' : 'none';
+    });
+    n._el.classList.remove('dim');
+  } else {
+    tip.style.display = 'none';
+    nodeEls.forEach(el => el.classList.remove('dim'));
+    edgeEls.forEach(el => el.classList.remove('hl', 'dim'));
+    applyLblMode();
+  }
+}
+
+// ---- 拖拽 ----
+let dragging = null;
+function startDrag(n, ev) {
+  ev.preventDefault();
+  dragging = n;
+  const rect = svg.getBoundingClientRect();
+  const move = e => {
+    n.fx = e.clientX - rect.left;
+    n.fy = e.clientY - rect.top;
+  };
+  const up = () => {
+    n.fx = null; n.fy = null;
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+    dragging = null;
+  };
+  move(ev);
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+}
+
+// ---- 主循环 ----
+let running = true;
+function loop() {
+  if (state.layout === 'force') {
+    tick();
+    for (const e of edges) {
+      if (e._el) { e._el.setAttribute('x1', e.a.x); e._el.setAttribute('y1', e.a.y); e._el.setAttribute('x2', e.b.x); e._el.setAttribute('y2', e.b.y); }
+      if (e._lbl) e._lbl.setAttribute('x', (e.a.x + e.b.x) / 2); e._lbl && e._lbl.setAttribute('y', (e.a.y + e.b.y) / 2 - 4);
+    }
+    for (const n of nodes) if (n._el) n._el.setAttribute('transform', 'translate(' + n.x + ',' + n.y + ')');
+  } else {
+    for (const n of nodes) { n.x = n._cx; n.y = n._cy; }
+    for (const e of edges) {
+      if (e._el) { e._el.setAttribute('x1', e.a.x); e._el.setAttribute('y1', e.a.y); e._el.setAttribute('x2', e.b.x); e._el.setAttribute('y2', e.b.y); }
+      if (e._lbl) { e._lbl.setAttribute('x', (e.a.x + e.b.x) / 2); e._lbl.setAttribute('y', (e.a.y + e.b.y) / 2 - 4); }
+    }
+    for (const n of nodes) if (n._el) n._el.setAttribute('transform', 'translate(' + n.x + ',' + n.y + ')');
+    running = false;
+  }
+  if (running) requestAnimationFrame(loop);
+}
+
+// ---- 控件 ----
+document.getElementById('filter').onchange = e => { state.filter = e.target.value; render(); };
+document.getElementById('lblMode').onchange = e => { state.lbl = e.target.value; applyLblMode(); };
+document.getElementById('layout').onchange = e => { state.layout = e.target.value; running = state.layout === 'force'; render(); if (running) requestAnimationFrame(loop); };
+document.getElementById('reset').onclick = () => {
+  nodes.forEach(n => { n.x = W() / 2 + (Math.random() - .5) * W() * .6; n.y = H() / 2 + (Math.random() - .5) * H() * .6; n.vx = n.vy = 0; });
+  if (!running) { running = true; requestAnimationFrame(loop); }
+};
+document.getElementById('png').onclick = () => {
+  const clone = svg.cloneNode(true);
+  clone.setAttribute('xmlns', NS);
+  const s = new XMLSerializer().serializeToString(clone);
+  const img = new Image();
+  img.onload = () => {
+    const cv = document.createElement('canvas');
+    cv.width = W(); cv.height = H();
+    cv.getContext('2d').drawImage(img, 0, 0);
+    const a = document.createElement('a');
+    a.href = cv.toDataURL('image/png');
+    a.download = '关系网测试.png';
+    a.click();
+  };
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(s);
+};
+
+window.addEventListener('resize', () => render());
+buildNodes();
+render();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
