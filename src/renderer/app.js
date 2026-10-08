@@ -9292,7 +9292,7 @@
   const REL_ETYPES = [['', '默认'], ['ally', '友好'], ['enemy', '敌对'], ['sub', '隶属'], ['un', '未知']];
   const REL_ECOLOR = { ally: '#3fa37f', enemy: '#e05d5d', sub: '#5d7fd6', un: '#9aa3b5', def: '#8a93a6' };
   function relEdgeColor(t) { return REL_ECOLOR[t] || REL_ECOLOR.def; }
-  const _rel = { tx: 80, ty: 60, k: 1, W: 900, H: 600, sel: null, multi: null, box: null, drag: null, pan: null, edgeMode: false, pendingFrom: null, svg: null, _escInstalled: false, _resizeInstalled: false, undo: [], filter: '', _raf: 0, _rafKind: null, _domEls: null, _edgeIdx: null, _vpRect: null, focusIds: null, hoverId: null };
+  const _rel = { tx: 80, ty: 60, k: 1, W: 900, H: 600, sel: null, multi: null, box: null, drag: null, pan: null, edgeMode: false, pendingFrom: null, svg: null, _escInstalled: false, _resizeInstalled: false, undo: [], filter: '', _raf: 0, _rafKind: null, _domEls: null, _edgeIdx: null, _vpRect: null, focusIds: null, hoverId: null, _settleRaf: 0 };
   /* P1-10 网格分桶：节点按世界坐标归入 REL_CELL 大小的格子，框选/命中只查相交格子，避免数百节点时线性扫全表 */
   const REL_CELL = 160;
   let _relBuckets = null;
@@ -9446,43 +9446,140 @@
     const p = _rel._vpRect;
     if (!p || v.x0 < p.x0 || v.y0 < p.y0 || v.x1 > p.x1 || v.y1 > p.y1) relPaint();
   }
-  /* 拖拽：只移动被拖节点（含多选整组）及其关联连线的几何属性，拖拽中不再整帧重建 SVG */
-  function relPaintDraggedOnly() {
-    const svg = _rel.svg; if (!svg || !_rel.drag) return;
-    const d = _rel.drag;
+  /* ---------- 力导向「拉扯」：拖动节点时带动关联节点 ----------
+   * 手感目标：像抓住橡皮筋——拖动某人，与它相连的人被弹簧力带着一起走、连线绷紧；
+   *          松开后弹簧把连线拉回自然长度，邻居轻微回弹并收敛。
+   * 做法（位置式松弛，全程无随机数，稳定可复现）：
+   *  1) 拖动开始时取受影响子图 = 被拖节点(fixed) + 一跳邻居(n1) + 二跳邻居(n2)，
+   *     并把子图内每条连线「当前长度」记为自然长度——不动的时候弹簧力为 0，布局不会被无端改动；
+   *  2) 拖动每一帧：被拖节点直接跟随指针；n1 按弹簧力向自然长度靠拢（朝向被拖节点的牵引权重更高，
+   *     所以跟得紧、像橡皮筋），n2 再被 n1 带动形成余波；单帧位移设上限，避免抖飞；
+   *  3) 松开后：同样的松弛跑十来帧、力度逐帧衰减，让连线收回自然长度，然后落盘并整帧重绘。 */
+  const REL_REST_DEF = 150, REL_RUBBER_N1 = 0.34, REL_RUBBER_N2 = 0.12, REL_RUBBER_CAP = 70;
+  /* 构建受影响子图与每条连线的自然长度（=拖动前的当前长度，保证初始零位移） */
+  function relBuildRubber(fixedIds) {
     const r = relData();
     if (!_rel._edgeIdx) _rel._edgeIdx = relBuildEdgeIdx(r);
-    if (!relDomEls()) return;
-    const byId = {}; for (const n of r.nodes) byId[n.id] = n;
-    const R = 20;
-    const nids = d.multi ? d.multi : [d.primary];
-    for (const id of nids) {
-      const n = byId[id]; if (!n || typeof n.x !== 'number' || typeof n.y !== 'number') continue;
-      const g = _rel._domEls.g.get(String(id)); if (!g) continue;
-      const cx = n.x.toFixed(1), cy = n.y.toFixed(1);
-      const body = g.querySelector('circle.rel-n-body'); if (body) { body.setAttribute('cx', cx); body.setAttribute('cy', cy); }
-      const hitc = g.querySelector('circle.rel-n-hit'); if (hitc) { hitc.setAttribute('cx', cx); hitc.setAttribute('cy', cy); }
-      const lab = g.querySelector('text.rel-nlabel'); if (lab) { lab.setAttribute('x', cx); lab.setAttribute('y', (n.y + R + 16).toFixed(1)); }
-      const kind = g.querySelector('text.rel-nkind'); if (kind) { kind.setAttribute('x', cx); kind.setAttribute('y', (n.y - R - 6).toFixed(1)); }
-      const es = _rel._edgeIdx.get(String(id));
-      if (!es) continue;
+    const fixed = new Set(fixedIds.map(String));
+    const n1 = new Set(), n2 = new Set();
+    for (const id of fixed) {
+      const es = _rel._edgeIdx.get(id); if (!es) continue;
       for (const e of es) {
-        const a = byId[e.from], b = byId[e.to]; if (!a || !b) continue;
-        const line = _rel._domEls.line.get(String(e.id)); if (!line) continue;
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const len = Math.hypot(dx, dy);
-        let x2 = b.x, y2 = b.y, mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 12;
-        if (len > 1) {
-          const ux = dx / len, uy = dy / len;
-          x2 = b.x - ux * (R + 3); y2 = b.y - uy * (R + 3);
-          mx = (a.x + x2) / 2; my = (a.y + y2) / 2 - 12;
-        }
-        line.setAttribute('x1', a.x.toFixed(1)); line.setAttribute('y1', a.y.toFixed(1));
-        line.setAttribute('x2', x2.toFixed(1)); line.setAttribute('y2', y2.toFixed(1));
-        const lb = _rel._domEls.elabel.get(String(e.id));
-        if (lb) { lb.setAttribute('x', mx.toFixed(1)); lb.setAttribute('y', my.toFixed(1)); }
+        const a = String(e.from), b = String(e.to), other = a === id ? b : a;
+        if (!fixed.has(other)) n1.add(other);
       }
     }
+    for (const id of n1) {
+      const es = _rel._edgeIdx.get(id); if (!es) continue;
+      for (const e of es) {
+        const a = String(e.from), b = String(e.to), other = a === id ? b : a;
+        if (!fixed.has(other) && !n1.has(other)) n2.add(other);
+      }
+    }
+    const byId = {}; for (const n of r.nodes) byId[String(n.id)] = n;
+    const moveAll = new Set([...fixed, ...n1, ...n2]);
+    const rests = new Map();
+    for (const e of r.edges) {
+      const a = String(e.from), b = String(e.to);
+      if (!moveAll.has(a) && !moveAll.has(b)) continue;
+      const na = byId[a], nb = byId[b];
+      if (!na || !nb || typeof na.x !== 'number' || typeof nb.x !== 'number') continue;
+      rests.set(String(e.id), Math.max(1, Math.hypot(nb.x - na.x, nb.y - na.y)));
+    }
+    return { fixed, n1: Array.from(n1), n2: Array.from(n2), rests, syncIds: Array.from(moveAll) };
+  }
+  /* 一次弹簧松弛：按连线自然长度把 moveIds 里的节点向平衡位置挪动（strength 为本次力度） */
+  function relRubberStep(rubber, moveIds, strength) {
+    if (!moveIds.length || strength <= 0) return;
+    const r = relData();
+    if (!_rel._edgeIdx) _rel._edgeIdx = relBuildEdgeIdx(r);
+    const byId = {}; for (const n of r.nodes) byId[String(n.id)] = n;
+    const disp = new Map();
+    for (const raw of moveIds) {
+      const id = String(raw);
+      const n = byId[id]; if (!n || typeof n.x !== 'number' || typeof n.y !== 'number') continue;
+      const es = _rel._edgeIdx.get(id); if (!es) continue;
+      let fx = 0, fy = 0, w = 0;
+      for (const e of es) {
+        const a = String(e.from), b = String(e.to), oid = a === id ? b : a;
+        const o = byId[oid]; if (!o || typeof o.x !== 'number' || typeof o.y !== 'number') continue;
+        const eid = String(e.id);
+        const rest = rubber.rests.has(eid) ? rubber.rests.get(eid) : REL_REST_DEF;
+        const dx = o.x - n.x, dy = o.y - n.y, d = Math.hypot(dx, dy) || 1;
+        const f = d - rest;                        // >0 被拉长了要拉近；<0 太挤了要推开
+        const wt = rubber.fixed.has(oid) ? 2 : 1;  // 朝向被拖节点的牵引更强 → 邻居跟得紧，像橡皮筋
+        fx += dx / d * f * wt; fy += dy / d * f * wt; w += wt;
+      }
+      if (!w) continue;
+      fx /= w; fy /= w;
+      const m = Math.hypot(fx, fy);
+      if (m > REL_RUBBER_CAP) { fx = fx / m * REL_RUBBER_CAP; fy = fy / m * REL_RUBBER_CAP; }
+      disp.set(id, { dx: fx * strength, dy: fy * strength });
+    }
+    for (const [id, d] of disp) { byId[id].x += d.dx; byId[id].y += d.dy; }
+  }
+  /* 把指定节点的坐标（及其关联连线/标签）同步进现有 DOM——拖动与回弹都走这里，避免整帧重建 SVG */
+  function relSyncGeometry(idList) {
+    const svg = _rel.svg; if (!svg) return;
+    const els = relDomEls(); if (!els) return;
+    const r = relData();
+    if (!_rel._edgeIdx) _rel._edgeIdx = relBuildEdgeIdx(r);
+    const byId = {}; for (const n of r.nodes) byId[String(n.id)] = n;
+    const R = 20;
+    const movedEdges = new Set();
+    for (const raw of idList) {
+      const id = String(raw);
+      const n = byId[id]; if (!n || typeof n.x !== 'number' || typeof n.y !== 'number') continue;
+      const g = els.g.get(id);
+      if (g) {
+        const cx = n.x.toFixed(1), cy = n.y.toFixed(1);
+        const body = g.querySelector('circle.rel-n-body'); if (body) { body.setAttribute('cx', cx); body.setAttribute('cy', cy); }
+        const hitc = g.querySelector('circle.rel-n-hit'); if (hitc) { hitc.setAttribute('cx', cx); hitc.setAttribute('cy', cy); }
+        const lab = g.querySelector('text.rel-nlabel'); if (lab) { lab.setAttribute('x', cx); lab.setAttribute('y', (n.y + R + 16).toFixed(1)); }
+        const kind = g.querySelector('text.rel-nkind'); if (kind) { kind.setAttribute('x', cx); kind.setAttribute('y', (n.y - R - 6).toFixed(1)); }
+      }
+      const es = _rel._edgeIdx.get(id); if (es) for (const e of es) movedEdges.add(e);
+    }
+    for (const e of movedEdges) {
+      const a = byId[String(e.from)], b = byId[String(e.to)]; if (!a || !b) continue;
+      const line = els.line.get(String(e.id)); if (!line) continue;
+      const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+      let x2 = b.x, y2 = b.y, mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 12;
+      if (len > 1) {
+        const ux = dx / len, uy = dy / len;
+        x2 = b.x - ux * (R + 3); y2 = b.y - uy * (R + 3);
+        mx = (a.x + x2) / 2; my = (a.y + y2) / 2 - 12;
+      }
+      line.setAttribute('x1', a.x.toFixed(1)); line.setAttribute('y1', a.y.toFixed(1));
+      line.setAttribute('x2', x2.toFixed(1)); line.setAttribute('y2', y2.toFixed(1));
+      const lb = els.elabel.get(String(e.id));
+      if (lb) { lb.setAttribute('x', mx.toFixed(1)); lb.setAttribute('y', my.toFixed(1)); }
+    }
+  }
+  /* 拖拽帧：先跑一次弹簧松弛带动邻居，再把所有受影响节点/连线同步进 DOM（不整帧重建 SVG） */
+  function relPaintDraggedOnly() {
+    const d = _rel.drag; if (!_rel.svg || !d) return;
+    if (d.rubber) {
+      relRubberStep(d.rubber, d.rubber.n1, REL_RUBBER_N1);
+      relRubberStep(d.rubber, d.rubber.n2, REL_RUBBER_N2);
+    }
+    relSyncGeometry(d.syncIds || (d.multi || [d.primary]));
+  }
+  /* 松开后的回弹收敛：连线收回自然长度，力度逐帧衰减，跑完后落盘并整帧重绘一次 */
+  function relSettleRubber(rubber) {
+    if (_rel._settleRaf) { cancelAnimationFrame(_rel._settleRaf); _rel._settleRaf = 0; }
+    const svg = _rel.svg;
+    let f = 1;
+    const step = () => {
+      _rel._settleRaf = 0;
+      if (_rel.svg !== svg || f <= 0) { relPersist(); relPaint(); return; }
+      relRubberStep(rubber, rubber.n1, REL_RUBBER_N1 * f);
+      relRubberStep(rubber, rubber.n2, REL_RUBBER_N2 * f);
+      relSyncGeometry(rubber.syncIds);
+      f -= 0.12;
+      _rel._settleRaf = requestAnimationFrame(step);
+    };
+    step();
   }
   let _relFocus = null;   // U2-3：由卡片「⇄ 关系网」带入的待定位节点（进入关系网视图后消费一次）
 
@@ -9575,6 +9672,7 @@
       <div class="rel-legend" id="relLegend"></div>`);
     _rel.sel = null; _rel.multi = null; _rel.box = null; _rel.drag = null; _rel.pan = null; _rel.edgeMode = false; _rel.pendingFrom = null; _rel.listMode = false;
     _rel.focusIds = null; _rel.hoverId = null;
+    if (_rel._settleRaf) { cancelAnimationFrame(_rel._settleRaf); _rel._settleRaf = 0; }
     const lb = q('relListBtn'); if (lb) lb.textContent = '☰ 关系清单';
     const sv2 = q('relSide'); if (sv2) { sv2.hidden = true; sv2.innerHTML = ''; }
     /* 缺坐标（含只有 x 没有 y 的脏数据）即补种，避免 relPaint 里 toFixed 抛错 */
@@ -9782,6 +9880,10 @@
         _rel.drag = { multi: null, offs: null, primary: nid, offX: n ? (n.x - u.x) : 0, offY: n ? (n.y - u.y) : 0 };
         _rel.sel = nid;
       }
+      /* 开始拖拽：先掐掉上一次可能还在跑的回弹动画，再算出「谁会跟着一起被拉动」 */
+      if (_rel._settleRaf) { cancelAnimationFrame(_rel._settleRaf); _rel._settleRaf = 0; }
+      _rel.drag.rubber = relBuildRubber(_rel.drag.multi || [_rel.drag.primary]);
+      _rel.drag.syncIds = _rel.drag.rubber.syncIds;
       /* 拖动期间持续高亮被拖节点及其关联对象：连线随节点一起动时，仍能看清和谁有关 */
       relSetFocus(_rel.drag.multi || [_rel.drag.primary]);
       try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
@@ -9832,7 +9934,9 @@
       _rel.sel = d.primary;
       _rel.multi = d.multi ? d.multi : _rel.multi;
       _rel.edgeMode = false; _rel.pendingFrom = null;
-      relPersist(); relPaint();
+      /* 松手：有邻居被拉动就跑一段回弹收敛，让连线收回自然长度后再落盘重绘 */
+      if (d.rubber && (d.rubber.n1.length || d.rubber.n2.length)) relSettleRubber(d.rubber);
+      else { relPersist(); relPaint(); }
     } else if (_rel.box) {
       const b = _rel.box; _rel.box = null;
       /* 空白单击（几乎无位移）：取消选择 */
