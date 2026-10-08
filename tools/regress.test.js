@@ -258,7 +258,12 @@ check('版本与变更日志：最新条目与 APP_VERSION 同步、含本次改
 
 console.log('\n[T10] 关系网一键整理（分组打包）：分组各自排布须两两不重叠、结果可复现');
 const relNodeRadius = load('relNodeRadius');
-const relLocalLayout = load('relLocalLayout');
+/* relLocalLayout 现在依赖「连线尽量不相交」的辅助函数，抽取时一并拼进同一作用域 */
+const relLocalLayout = (() => {
+  const parts = [extract('relSegCross'), extract('relCountCross'), extract('relReduceCrossings'), extract('relLocalLayout')];
+  if (parts.some(p => !p)) return null;
+  return new Function(parts.join('\n') + '\nreturn relLocalLayout;')();
+})();
 check('relNodeRadius 存在，随名称变长而增大且不超上限', () => {
   if (!relNodeRadius) return '函数未找到';
   const a = relNodeRadius({ label: '甲' }), b = relNodeRadius({ label: '一个名字很长很长的角色甲乙丙丁戊己庚辛' });
@@ -301,6 +306,88 @@ check('外接圆 rad 覆盖全部节点（含节点自身半径）', () => {
 check('同输入两次结果完全一致（确定式，不随机的）', () => {
   const one = () => { const c = mkComp(); return JSON.stringify(relLocalLayout(c.ids, c.inner, c.byId, c.rad).P); };
   return one() === one() ? true : '两次结果不一致（含随机因素）';
+});
+/* ---- 连线尽量不相交 ---- */
+const relReduceCrossings = (() => {
+  const parts = [extract('relSegCross'), extract('relReduceCrossings')];
+  if (parts.some(p => !p)) return null;
+  return new Function(parts.join('\n') + '\nreturn relReduceCrossings;')();
+})();
+/* 造一个 K4：四角摆放 + 两条对角线 ⇒ 恰好 1 处交叉；K4 可平面化，故应该能被消成 0 */
+function mkK4() {
+  const ids = ['a', 'b', 'c', 'd'];
+  const rad = {}; for (const id of ids) rad[id] = 40;
+  const P = { a: [-150, -150], b: [150, -150], c: [150, 150], d: [-150, 150] };
+  const inner = [['a', 'b'], ['b', 'c'], ['c', 'd'], ['d', 'a'], ['a', 'c'], ['b', 'd']]
+    .map(([from, to], i) => ({ id: 'k' + i, from, to }));
+  return { ids, rad, P, inner };
+}
+function countCross(inner, P) {
+  const cr = (a, b, c, d) => {
+    const o1 = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    const o2 = (b[0] - a[0]) * (d[1] - a[1]) - (b[1] - a[1]) * (d[0] - a[0]);
+    const o3 = (d[0] - c[0]) * (a[1] - c[1]) - (d[1] - c[1]) * (a[0] - c[0]);
+    const o4 = (d[0] - c[0]) * (b[1] - c[1]) - (d[1] - c[1]) * (b[0] - c[0]);
+    return ((o1 > 0) !== (o2 > 0)) && ((o3 > 0) !== (o4 > 0));
+  };
+  const share = (e, f) => e.from === f.from || e.from === f.to || e.to === f.from || e.to === f.to;
+  let n = 0;
+  for (let i = 0; i < inner.length; i++) for (let j = i + 1; j < inner.length; j++) {
+    const e = inner[i], f = inner[j]; if (share(e, f)) continue;
+    if (cr(P[e.from], P[e.to], P[f.from], P[f.to])) n++;
+  }
+  return n;
+}
+check('连线尽量不相交：已知交叉布局经下降搜索后交叉清零（K4），且不产生叠压', () => {
+  if (!relReduceCrossings) return '函数未找到';
+  const { ids, rad, P, inner } = mkK4();
+  const before = countCross(inner, P);
+  relReduceCrossings(ids, inner, P, rad);
+  const after = countCross(inner, P);
+  if (before < 1) return '用例本身没有交叉（before=' + before + '）';
+  if (after !== 0) return '仍有交叉 after=' + after;
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+    const a = ids[i], b = ids[j], d = Math.hypot(P[a][0] - P[b][0], P[a][1] - P[b][1]);
+    if (d < rad[a] + rad[b] - 0.6) return a + '/' + b + ' 交叉下降后发生叠压';
+  }
+  return true;
+});
+check('连线尽量不相交：一键整理后的布局交叉数不高于整理前（含 K4 分量）', () => {
+  if (!relLocalLayout) return '函数未找到';
+  const k = mkK4();
+  const byId = {}; for (const id of k.ids) byId[id] = { id, x: k.P[id][0], y: k.P[id][1] };
+  const before = countCross(k.inner, k.P);
+  const L = relLocalLayout(k.ids, k.inner, byId, k.rad);
+  const after = countCross(k.inner, L.P);
+  return after <= before ? true : '整理后交叉反而变多 ' + before + '→' + after;
+});
+/* 8 节点纠缠图（圆周摆放 + 8 条弦，共 16 条连线）：交叉应被大幅压下，且重复整理不再变多 */
+function mkTangled() {
+  const ids = [], rad = {}, P = {}, inner = [];
+  for (let i = 1; i <= 8; i++) {
+    const a = (i - 1) / 8 * 2 * Math.PI;
+    const id = 'n' + i; ids.push(id); rad[id] = 40;
+    P[id] = [Math.cos(a) * 200, Math.sin(a) * 200];
+  }
+  for (let i = 1; i <= 8; i++) inner.push({ id: 'c' + i, from: 'n' + i, to: 'n' + (i % 8 + 1) });
+  [[1, 4], [2, 5], [3, 6], [4, 7], [5, 8], [6, 1], [7, 2], [8, 3]]
+    .forEach(([a, b], i) => inner.push({ id: 'k' + i, from: 'n' + a, to: 'n' + b }));
+  return { ids, rad, P, inner };
+}
+check('连线尽量不相交：纠缠图整理后交叉显著下降，且重复整理不再变多', () => {
+  if (!relLocalLayout) return '函数未找到';
+  const t = mkTangled();
+  const byId = {}; for (const id of t.ids) byId[id] = { id, x: t.P[id][0], y: t.P[id][1] };
+  const before = countCross(t.inner, t.P);
+  if (before < 6) return '用例本身交叉太少（before=' + before + '）';
+  const L1 = relLocalLayout(t.ids, t.inner, byId, t.rad);
+  const after1 = countCross(t.inner, L1.P);
+  if (after1 > before * 0.6) return '交叉下降不足 ' + before + '→' + after1;
+  /* 以第一次结果为输入再整理一次：交叉数只应持平或更少（结果收敛，不再越摆越乱） */
+  const byId2 = {}; for (const id of t.ids) byId2[id] = { id, x: L1.P[id][0], y: L1.P[id][1] };
+  const L2 = relLocalLayout(t.ids, t.inner, byId2, t.rad);
+  const after2 = countCross(t.inner, L2.P);
+  return after2 <= after1 ? true : '重复整理交叉反而变多 ' + after1 + '→' + after2;
 });
 check('整理相关函数已无 Math.random（避免“越点越乱”）', () => {
   const seg = [extract('relSeedLayout'), extract('relLayout'), extract('relLocalLayout')].join('\n');

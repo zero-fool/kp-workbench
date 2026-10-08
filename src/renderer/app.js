@@ -10304,6 +10304,103 @@
     return Math.max(38, Math.min(len * 7, 104));
   }
 
+  /* ---------- 连线尽可能不相交 ----------
+   * 交叉只可能发生在同一连通分量内部（连线的两端必在同一分量），所以逐个分量做即可覆盖全部。
+   * 做法：在「已消重叠」的前提下，做一轮交叉数下降的局部搜索——
+   *   每个节点试 8 个方向 × 2 种步长；只有「与它相关的连线交叉数严格变少」且「不与任何节点重叠」的落点才被接受。
+   * 因为移动某节点只会改变「与它相连的连线」的交叉情况，所以只统计该节点相关交叉即可，复杂度可控。
+   * 全程无随机数：同一张图重复整理结果一致。 */
+  function relSegCross(a, b, c, d) {   // 线段 ab 与 cd 是否真交叉（共端点的情形由调用方先行跳过）
+    const o1 = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    const o2 = (b[0] - a[0]) * (d[1] - a[1]) - (b[1] - a[1]) * (d[0] - a[0]);
+    const o3 = (d[0] - c[0]) * (a[1] - c[1]) - (d[1] - c[1]) * (a[0] - c[0]);
+    const o4 = (d[0] - c[0]) * (b[1] - c[1]) - (d[1] - c[1]) * (b[0] - c[0]);
+    return ((o1 > 0) !== (o2 > 0)) && ((o3 > 0) !== (o4 > 0));
+  }
+  function relCountCross(inner, P) {   // 统计全部连线交叉数（同分量内，跳过共端点的连线对）
+    let n = 0;
+    for (let i = 0; i < inner.length; i++) {
+      const e = inner[i], a = P[e.from], b = P[e.to]; if (!a || !b) continue;
+      for (let j = i + 1; j < inner.length; j++) {
+        const f = inner[j];
+        if (e.from === f.from || e.from === f.to || e.to === f.from || e.to === f.to) continue;
+        const c = P[f.from], d = P[f.to]; if (!c || !d) continue;
+        if (relSegCross(a, b, c, d)) n++;
+      }
+    }
+    return n;
+  }
+  function relReduceCrossings(ids, inner, P, rad) {
+    if (inner.length < 2 || ids.length < 3) return;
+    const E = inner;
+    const adj = {};
+    E.forEach((e, i) => { (adj[e.from] = adj[e.from] || []).push(i); (adj[e.to] = adj[e.to] || []).push(i); });
+    const shareEnd = (e, f) => e.from === f.from || e.from === f.to || e.to === f.from || e.to === f.to;
+    /* 某节点落在某位置时，与它相连的连线产生的交叉数 */
+    const crossAt = (id, pos) => {
+      const inc = adj[id]; if (!inc) return 0;
+      let c = 0;
+      for (const i of inc) {
+        const e = E[i];
+        const pa = e.from === id ? pos : P[e.from], pb = e.to === id ? pos : P[e.to];
+        if (!pa || !pb) continue;
+        for (let j = 0; j < E.length; j++) {
+          const f = E[j];
+          if (shareEnd(e, f)) continue;
+          if (relSegCross(pa, pb, P[f.from], P[f.to])) c++;
+        }
+      }
+      return c;
+    };
+    const overlaps = (id, pos) => {
+      for (const oid of ids) {
+        if (oid === id) continue;
+        const q = P[oid]; if (!q) continue;
+        const need = rad[id] + rad[oid] + 10;
+        const dx = pos[0] - q[0], dy = pos[1] - q[1];
+        if (dx * dx + dy * dy < need * need) return true;
+      }
+      return false;
+    };
+    const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [0.707, 0.707], [-0.707, 0.707], [0.707, -0.707], [-0.707, -0.707]];
+    const size = Math.max(ids.length, inner.length);
+    const maxRounds = size > 160 ? 4 : size > 80 ? 10 : 24;
+    const now = () => ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now());
+    const t0 = now();
+    for (let round = 0; round < maxRounds; round++) {
+      let moved = false;
+      for (const id of ids) {
+        if (!adj[id] || adj[id].length < 2) continue;   // 只有一条连线的端点挪动通常只会增加交叉
+        const cur = P[id]; if (!cur) continue;
+        /* 候选落点：先试「向邻居重心靠拢」（既缩短连线，也常一步消除交叉，例如把 K4 的点拉进三角内部），
+           再试 8 个方向 × 4 档步长的自由位移——多档步长用于跨过「暂时不改变交叉数」的平台区。 */
+        let bx = 0, by = 0, bn = 0;
+        for (const i of adj[id]) {
+          const e = E[i];
+          const oid = e.from === id ? e.to : e.from;
+          const q = P[oid]; if (!q) continue;
+          bx += q[0]; by += q[1]; bn++;
+        }
+        const cands = [];
+        if (bn) { const gx2 = bx / bn, gy2 = by / bn; cands.push([gx2, gy2], [(cur[0] + gx2) / 2, (cur[1] + gy2) / 2]); }
+        const base = Math.max(26, rad[id] * 0.9);
+        for (const dis of [base * 0.5, base, base * 2, base * 4]) {
+          for (const dr of DIRS) cands.push([cur[0] + dr[0] * dis, cur[1] + dr[1] * dis]);
+        }
+        const curC = crossAt(id, cur);
+        let bestC = curC, bestPos = null, bestD = Infinity;
+        for (const cand of cands) {
+          if (overlaps(id, cand)) continue;
+          const c = crossAt(id, cand);
+          const dd = (cand[0] - cur[0]) * (cand[0] - cur[0]) + (cand[1] - cur[1]) * (cand[1] - cur[1]);
+          if (c < bestC || (c === bestC && bestPos && dd < bestD)) { bestC = c; bestPos = cand; bestD = dd; }
+        }
+        if (bestPos && bestC < curC) { P[id] = bestPos; moved = true; }   // 仅接受严格减少交叉的落点，保证单调下降
+      }
+      if (!moved || (now() - t0) > 220) break;   // 收敛或超时即停，避免大图卡顿
+    }
+  }
+
   /* 单个连通分量的局部排布：返回 {ids, P:{id:[x,y]}, rad}，P 以该组重心为原点 */
   function relLocalLayout(ids, inner, byId, rad) {
     const P = {};
@@ -10319,58 +10416,92 @@
       const rr = Math.max(80, Math.sqrt(ids.length) * 48);
       ids.forEach((id, i) => { const a = (i / ids.length) * 2 * Math.PI; P[id] = [Math.cos(a) * rr, Math.sin(a) * rr]; });
     }
-    /* 位置式松弛：奇数轮消重叠、偶数轮收连线长度，交替进行，稳定不发散 */
-    for (let it = 0; it < 360; it++) {
-      for (let i = 0; i < ids.length; i++) {
-        for (let j = i + 1; j < ids.length; j++) {
-          const a = ids[i], b = ids[j], pa = P[a], pb = P[b];
-          let dx = pb[0] - pa[0], dy = pb[1] - pa[1];
-          let d = Math.sqrt(dx * dx + dy * dy);
-          const need = rad[a] + rad[b] + 14;
-          if (d >= need) continue;
-          if (d < 0.01) { dx = (i % 2 ? 1 : -1) * 1.3; dy = (j % 2 ? 1 : -1) * 1.3; d = Math.sqrt(dx * dx + dy * dy); }
-          const push = (need - d) * 0.5 * 0.55;
-          dx /= d; dy /= d;
-          pa[0] -= dx * push; pa[1] -= dy * push;
-          pb[0] += dx * push; pb[1] += dy * push;
+    /* 单轮「位置式松弛 → 硬消重叠」：松弛里奇数轮消重叠、偶数轮收连线长度，交替进行，稳定不发散；
+       消重叠阶段用「不重叠」替换概率保证。 */
+    const relRound = (iters, overlapPasses) => {
+      for (let it = 0; it < iters; it++) {
+        for (let i = 0; i < ids.length; i++) {
+          for (let j = i + 1; j < ids.length; j++) {
+            const a = ids[i], b = ids[j], pa = P[a], pb = P[b];
+            let dx = pb[0] - pa[0], dy = pb[1] - pa[1];
+            let d = Math.sqrt(dx * dx + dy * dy);
+            const need = rad[a] + rad[b] + 14;
+            if (d >= need) continue;
+            if (d < 0.01) { dx = (i % 2 ? 1 : -1) * 1.3; dy = (j % 2 ? 1 : -1) * 1.3; d = Math.sqrt(dx * dx + dy * dy); }
+            const push = (need - d) * 0.5 * 0.55;
+            dx /= d; dy /= d;
+            pa[0] -= dx * push; pa[1] -= dy * push;
+            pb[0] += dx * push; pb[1] += dy * push;
+          }
         }
-      }
-      for (const e of inner) {
-        const pa = P[e.from], pb = P[e.to]; if (!pa || !pb) continue;
-        let dx = pb[0] - pa[0], dy = pb[1] - pa[1];
-        const d = Math.sqrt(dx * dx + dy * dy) || 1;
-        const rest = rad[e.from] + rad[e.to] + 26;
-        const mv = Math.max(-14, Math.min(14, (d - rest) * 0.14)) * 0.5;
-        dx /= d; dy /= d;
-        pa[0] += dx * mv; pa[1] += dy * mv;
-        pb[0] -= dx * mv; pb[1] -= dy * mv;
-      }
-      /* 轻微回中，避免整组在松弛中慢慢漂走 */
-      let gx = 0, gy = 0;
-      for (const id of ids) { gx += P[id][0]; gy += P[id][1]; }
-      gx /= ids.length; gy /= ids.length;
-      for (const id of ids) { P[id][0] -= gx * 0.03; P[id][1] -= gy * 0.03; }
-    }
-    /* 收尾再消一遍重叠：把「不重叠」从概率变成硬保证 */
-    for (let pass = 0; pass < 30; pass++) {
-      let moved = false;
-      for (let i = 0; i < ids.length; i++) {
-        for (let j = i + 1; j < ids.length; j++) {
-          const a = ids[i], b = ids[j], pa = P[a], pb = P[b];
+        for (const e of inner) {
+          const pa = P[e.from], pb = P[e.to]; if (!pa || !pb) continue;
           let dx = pb[0] - pa[0], dy = pb[1] - pa[1];
-          let d = Math.sqrt(dx * dx + dy * dy);
-          const need = rad[a] + rad[b] + 12;
-          if (d >= need) continue;
-          if (d < 0.01) { dx = (i % 2 ? 1 : -1) * 1.3; dy = (j % 2 ? 1 : -1) * 1.3; d = Math.sqrt(dx * dx + dy * dy); }
+          const d = Math.sqrt(dx * dx + dy * dy) || 1;
+          const rest = rad[e.from] + rad[e.to] + 26;
+          const mv = Math.max(-14, Math.min(14, (d - rest) * 0.14)) * 0.5;
           dx /= d; dy /= d;
-          const push = (need - d) * 0.5 + 0.01;
-          pa[0] -= dx * push; pa[1] -= dy * push;
-          pb[0] += dx * push; pb[1] += dy * push;
-          moved = true;
+          pa[0] += dx * mv; pa[1] += dy * mv;
+          pb[0] -= dx * mv; pb[1] -= dy * mv;
         }
+        /* 轻微回中，避免整组在松弛中慢慢漂走 */
+        let gx = 0, gy = 0;
+        for (const id of ids) { gx += P[id][0]; gy += P[id][1]; }
+        gx /= ids.length; gy /= ids.length;
+        for (const id of ids) { P[id][0] -= gx * 0.03; P[id][1] -= gy * 0.03; }
       }
-      if (!moved) break;
+      for (let pass = 0; pass < overlapPasses; pass++) {
+        let moved = false;
+        for (let i = 0; i < ids.length; i++) {
+          for (let j = i + 1; j < ids.length; j++) {
+            const a = ids[i], b = ids[j], pa = P[a], pb = P[b];
+            let dx = pb[0] - pa[0], dy = pb[1] - pa[1];
+            let d = Math.sqrt(dx * dx + dy * dy);
+            const need = rad[a] + rad[b] + 12;
+            if (d >= need) continue;
+            if (d < 0.01) { dx = (i % 2 ? 1 : -1) * 1.3; dy = (j % 2 ? 1 : -1) * 1.3; d = Math.sqrt(dx * dx + dy * dy); }
+            dx /= d; dy /= d;
+            const push = (need - d) * 0.5 + 0.01;
+            pa[0] -= dx * push; pa[1] -= dy * push;
+            pb[0] += dx * push; pb[1] += dy * push;
+            moved = true;
+          }
+        }
+        if (!moved) break;
+      }
+    };
+    /* 先跑一轮完整「松弛 + 硬消重叠」，得到「不重叠」的基线布局——这一步是硬保证，绝不能被后面的回退破坏。
+       同时把「输入布局本身」也作为候选基线（前提是它已经不重叠）：这样以「上一次整理结果」为输入重复整理时，
+       交叉数只会持平或更少，最终收敛成不动点，不会因为松弛漂到更差的盆地而反弹。 */
+    const noOverlap = () => {
+      for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+        const a = P[ids[i]], b = P[ids[j]];
+        const need = rad[ids[i]] + rad[ids[j]] + 12;
+        const dx = a[0] - b[0], dy = a[1] - b[1];
+        if (dx * dx + dy * dy < need * need) return false;
+      }
+      return true;
+    };
+    let bestC = Infinity;
+    const bestP = {};
+    if (noOverlap()) { bestC = inner.length > 1 ? relCountCross(inner, P) : 0; for (const id of ids) bestP[id] = [P[id][0], P[id][1]]; }
+    relRound(360, 30);
+    const c0 = inner.length > 1 ? relCountCross(inner, P) : 0;
+    if (c0 < bestC) { bestC = c0; for (const id of ids) bestP[id] = [P[id][0], P[id][1]]; }
+    /* 之后把「松弛」与「交叉下降」交替迭代到收敛：单次一键整理即逼近不动点，重复点击不再越摆越乱。
+       每轮都记录「交叉最少」的一版，某轮反而变差就回退，保证交叉数只减不增。
+       交叉下降只接受「不与任何节点重叠」的落点，故回退到的每一版都满足「不重叠」硬保证。
+       全程无随机数：同一张图重复整理结果一致。 */
+    const cap = ids.length > 140 ? 2 : ids.length > 70 ? 3 : 6;
+    for (let round = 0; round < cap; round++) {
+      if (inner.length < 2) break;   // 没有连线就无需再做交叉下降
+      relReduceCrossings(ids, inner, P, rad);
+      const c = relCountCross(inner, P);
+      if (c < bestC) { bestC = c; for (const id of ids) bestP[id] = [P[id][0], P[id][1]]; }
+      if (bestC === 0) break;        // 已经完全不相交，收工
+      if (round + 1 < cap) relRound(200, 12);
     }
+    for (const id of ids) { P[id][0] = bestP[id][0]; P[id][1] = bestP[id][1]; }
     let R = 0;
     for (const id of ids) { const p = P[id]; R = Math.max(R, Math.sqrt(p[0] * p[0] + p[1] * p[1]) + rad[id]); }
     return { ids, P, rad: R };
@@ -10436,7 +10567,7 @@
     _rel.k = Math.max(0.12, Math.min(1, (W - pad * 2) / bw, (H - pad * 2) / bh));
     _rel.tx = W / 2 - ((minX + maxX) / 2) * _rel.k;
     _rel.ty = H / 2 - ((minY + maxY) / 2) * _rel.k;
-    relPersist('已按关系分组整理：有关系的节点聚成一块，块与块互不重叠' + (blocks.length > 1 ? '（共 ' + blocks.length + ' 组）' : ''));
+    relPersist('已按关系整理：有关系的节点聚成一块、块间不重叠，并尽量减少连线交叉' + (blocks.length > 1 ? '（共 ' + blocks.length + ' 组）' : ''));
     relPaint();
   }
   async function relClear() {
