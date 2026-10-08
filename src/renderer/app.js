@@ -9292,7 +9292,7 @@
   const REL_ETYPES = [['', '默认'], ['ally', '友好'], ['enemy', '敌对'], ['sub', '隶属'], ['un', '未知']];
   const REL_ECOLOR = { ally: '#3fa37f', enemy: '#e05d5d', sub: '#5d7fd6', un: '#9aa3b5', def: '#8a93a6' };
   function relEdgeColor(t) { return REL_ECOLOR[t] || REL_ECOLOR.def; }
-  const _rel = { tx: 80, ty: 60, k: 1, W: 900, H: 600, sel: null, multi: null, box: null, drag: null, pan: null, edgeMode: false, pendingFrom: null, svg: null, _escInstalled: false, _resizeInstalled: false, undo: [], filter: '', _raf: 0, _rafKind: null, _domEls: null, _edgeIdx: null, _vpRect: null };
+  const _rel = { tx: 80, ty: 60, k: 1, W: 900, H: 600, sel: null, multi: null, box: null, drag: null, pan: null, edgeMode: false, pendingFrom: null, svg: null, _escInstalled: false, _resizeInstalled: false, undo: [], filter: '', _raf: 0, _rafKind: null, _domEls: null, _edgeIdx: null, _vpRect: null, focusIds: null, hoverId: null };
   /* P1-10 网格分桶：节点按世界坐标归入 REL_CELL 大小的格子，框选/命中只查相交格子，避免数百节点时线性扫全表 */
   const REL_CELL = 160;
   let _relBuckets = null;
@@ -9325,6 +9325,76 @@
       if (b) b.push(e); else m.set(e.to, [e]);
     }
     return m;
+  }
+  /* 关系网邻居聚焦：鼠标悬停或拖动某个节点时，把「该节点 + 与它直接相连的节点和连线」提亮、
+   * 其余淡出，一眼看清谁和谁有关系。聚焦集合在这里统一计算，供整帧绘制（relPaint 直接写 class）
+   * 与免重绘的即时切换（relApplyFocus 改已有 DOM）共用。 */
+  function relFocusSets() {
+    const ids = _rel.focusIds;
+    if (!ids || !ids.length) return { N: null, E: null };
+    const r = relData();
+    if (!_rel._edgeIdx) _rel._edgeIdx = relBuildEdgeIdx(r);
+    const N = new Set(), E = new Set();
+    for (const raw of ids) {
+      const id = String(raw);
+      N.add(id);
+      const es = _rel._edgeIdx.get(id);
+      if (!es) continue;
+      for (const e of es) { E.add(String(e.id)); N.add(String(e.from)); N.add(String(e.to)); }
+    }
+    return { N, E };
+  }
+  /* 已有的节点/连线 DOM 引用缓存：悬停高亮与拖拽都直接改属性/class，不重建 SVG。
+   * relPaint 整帧重建后缓存作废，这里按需惰性重建。 */
+  function relDomEls() {
+    const svg = _rel.svg; if (!svg) return null;
+    if (_rel._domEls) return _rel._domEls;
+    const els = { g: new Map(), line: new Map(), elabel: new Map() };
+    const gs = svg.querySelectorAll('g.rel-node');
+    for (let i = 0; i < gs.length; i++) els.g.set(gs[i].getAttribute('data-nid'), gs[i]);
+    const ls = svg.querySelectorAll('line.rel-edge');
+    for (let i = 0; i < ls.length; i++) els.line.set(ls[i].getAttribute('data-eid'), ls[i]);
+    const lbs = svg.querySelectorAll('text.rel-elabel');
+    for (let i = 0; i < lbs.length; i++) els.elabel.set(lbs[i].getAttribute('data-eid'), lbs[i]);
+    _rel._domEls = els;
+    return els;
+  }
+  /* 免重绘地把聚焦高亮刷到现有 DOM 上（悬停切换用；整帧绘制走 relPaint 内联 class，不经过这里） */
+  function relApplyFocus() {
+    const els = relDomEls(); if (!els) return;
+    const { N, E } = relFocusSets();
+    els.g.forEach((el, id) => {
+      const on = !N || N.has(id);
+      el.classList.toggle('hl', !!N && on);
+      el.classList.toggle('dim', !!N && !on);
+    });
+    els.line.forEach((el, id) => {
+      const on = !E || E.has(id);
+      el.classList.toggle('hl', !!E && on);
+      el.classList.toggle('dim', !!E && !on);
+    });
+    els.elabel.forEach((el, id) => { el.classList.toggle('dim', !!E && !E.has(id)); });
+  }
+  /* 设置 / 清除聚焦节点。ids 为空即清除高亮，恢复整图常态显示。 */
+  function relSetFocus(ids) {
+    const list = (ids && ids.length) ? ids.map(String) : null;
+    const cur = _rel.focusIds;
+    const same = (!list && !cur) || (list && cur && list.length === cur.length && list.every((v, i) => cur[i] === v));
+    if (same) return;
+    _rel.focusIds = list;
+    relApplyFocus();
+  }
+  /* 悬停命中：鼠标压在节点上则聚焦该节点及其邻居；压在连线上则聚焦该连线两端；空白处清除 */
+  function relHover(ev) {
+    const t = ev.target, attr = (t && t.getAttribute) ? t.getAttribute.bind(t) : null;
+    const nid = attr ? attr('data-nid') : null;
+    if (nid) { _rel.hoverId = nid; relSetFocus([nid]); return; }
+    const eid = attr ? attr('data-eid') : null;
+    if (eid) {
+      const e = relData().edges.find(x => String(x.id) === String(eid));
+      if (e) { _rel.hoverId = null; relSetFocus([e.from, e.to]); return; }
+    }
+    _rel.hoverId = null; relSetFocus(null);
   }
   /* P2-13 视口虚拟化：仅渲染落在当前视口（含缓冲 margin）内的节点与两端都在视口内的连线。
    * 屏幕 = 世界 * k + t ⇒ 世界 = (屏幕 - t) / k。vpRect 记录上次整帧渲染覆盖的世界范围，
@@ -9382,16 +9452,7 @@
     const d = _rel.drag;
     const r = relData();
     if (!_rel._edgeIdx) _rel._edgeIdx = relBuildEdgeIdx(r);
-    if (!_rel._domEls) {
-      const els = { g: new Map(), line: new Map(), elabel: new Map() };
-      const gs = svg.querySelectorAll('g.rel-node');
-      for (let i = 0; i < gs.length; i++) els.g.set(gs[i].getAttribute('data-nid'), gs[i]);
-      const ls = svg.querySelectorAll('line.rel-edge');
-      for (let i = 0; i < ls.length; i++) els.line.set(ls[i].getAttribute('data-eid'), ls[i]);
-      const lbs = svg.querySelectorAll('text.rel-elabel');
-      for (let i = 0; i < lbs.length; i++) els.elabel.set(lbs[i].getAttribute('data-eid'), lbs[i]);
-      _rel._domEls = els;
-    }
+    if (!relDomEls()) return;
     const byId = {}; for (const n of r.nodes) byId[n.id] = n;
     const R = 20;
     const nids = d.multi ? d.multi : [d.primary];
@@ -9513,6 +9574,7 @@
       </div>
       <div class="rel-legend" id="relLegend"></div>`);
     _rel.sel = null; _rel.multi = null; _rel.box = null; _rel.drag = null; _rel.pan = null; _rel.edgeMode = false; _rel.pendingFrom = null; _rel.listMode = false;
+    _rel.focusIds = null; _rel.hoverId = null;
     const lb = q('relListBtn'); if (lb) lb.textContent = '☰ 关系清单';
     const sv2 = q('relSide'); if (sv2) { sv2.hidden = true; sv2.innerHTML = ''; }
     /* 缺坐标（含只有 x 没有 y 的脏数据）即补种，避免 relPaint 里 toFixed 抛错 */
@@ -9527,6 +9589,8 @@
     svg.addEventListener('pointermove', relPointerMove);
     svg.addEventListener('pointerup', relPointerUp);
     svg.addEventListener('pointercancel', relPointerUp);
+    /* 悬停邻居高亮：鼠标压在节点/连线上时提亮其关联对象，移出画布即恢复 */
+    svg.addEventListener('pointerleave', () => { _rel.hoverId = null; relSetFocus(null); });
     svg.addEventListener('wheel', relWheel, { passive: false });
     svg.addEventListener('dblclick', relDblClick);
     relPaintLegend();
@@ -9565,6 +9629,9 @@
      * 此时不虚拟化以免过滤目标落在视口外而「看不见」。 */
     const v = relViewportRect();
     const visIds = kw ? null : relVpNodeIds(v.x0, v.y0, v.x1, v.y1);
+    /* 聚焦高亮（悬停/拖动节点时提亮其关联节点与连线）：整帧绘制时直接把 class 写进 HTML，
+       省掉一次全图 DOM 扫描；悬停过程中不重绘，改由 relApplyFocus 就地切换 class。 */
+    const fx = relFocusSets();
     let eHtml = '', nHtml = '';
     /* 方向箭头 marker：每种连线颜色一个箭头定义，markerUnits=strokeWidth 使箭头随描边/缩放同步缩放 */
     const defs = `<defs>${Object.entries(REL_ECOLOR).map(([key, col]) => `<marker id="relArw${key}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 10 5 L 0 10 z" fill="${col}"/></marker>`).join('')}</defs>`;
@@ -9585,15 +9652,17 @@
         mx = (a.x + x2) / 2; my = (a.y + y2) / 2 - 12;
         if (len < 30) mkEnd = '';   /* 两点过近：箭头会被节点完全盖住，省略 */
       }
-      eHtml += `<line class="rel-edge${sel ? ' sel' : ''}${show ? '' : ' off'}" data-eid="${esc(e.id)}" style="stroke:${ecol}"${mkEnd} x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/>`;
-      if (show) eHtml += `<text class="rel-elabel" data-eid="${esc(e.id)}" style="fill:${ecol}" x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle">${esc(e.label || '关系')}</text>`;
+      const fxc = fx.E ? (fx.E.has(String(e.id)) ? ' hl' : ' dim') : '';
+      eHtml += `<line class="rel-edge${sel ? ' sel' : ''}${show ? '' : ' off'}${fxc}" data-eid="${esc(e.id)}" style="stroke:${ecol}"${mkEnd} x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/>`;
+      if (show) eHtml += `<text class="rel-elabel${fxc === ' dim' ? ' dim' : ''}" data-eid="${esc(e.id)}" style="fill:${ecol}" x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle">${esc(e.label || '关系')}</text>`;
     }
     for (const n of r.nodes) {
       if (visIds && !visIds.has(n.id)) continue;   /* P2-13 视口外节点不渲染 */
       const col = REL_COLORS[n.kind] || REL_COLORS.base;
       const sel = _rel.sel === n.id || (_rel.multi && _rel.multi.includes(n.id));
       const show = hit(n);
-      nHtml += `<g class="rel-node" data-nid="${esc(n.id)}">
+      const fxn = fx.N ? (fx.N.has(String(n.id)) ? ' hl' : ' dim') : '';
+      nHtml += `<g class="rel-node${fxn}" data-nid="${esc(n.id)}">
         <circle class="rel-n-body${sel ? ' sel' : ''}${show ? '' : ' off'}" data-nid="${esc(n.id)}" r="${R}" cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" fill="${col}" fill-opacity="${sel ? 1 : 0.9}" stroke="${sel ? '#fff' : (show && kw ? '#ffd24d' : 'rgba(0,0,0,.35)')}" stroke-width="${sel ? 3 : (show && kw ? 2.5 : 1)}"/>
         <circle class="rel-n-hit${show ? '' : ' off'}" data-nid="${esc(n.id)}" r="${R + 12}" fill="transparent"/>
         ${_rel.edgeMode && _rel.pendingFrom === n.id ? `<circle class="rel-n-pulse" data-nid="${esc(n.id)}" r="${R + 7}" fill="none" stroke="${col}" stroke-width="2"/>` : ''}
@@ -9713,6 +9782,8 @@
         _rel.drag = { multi: null, offs: null, primary: nid, offX: n ? (n.x - u.x) : 0, offY: n ? (n.y - u.y) : 0 };
         _rel.sel = nid;
       }
+      /* 拖动期间持续高亮被拖节点及其关联对象：连线随节点一起动时，仍能看清和谁有关 */
+      relSetFocus(_rel.drag.multi || [_rel.drag.primary]);
       try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
       ev.preventDefault();
       return;
@@ -9750,6 +9821,9 @@
       _rel.tx = _rel.pan.tx + (ev.clientX - _rel.pan.px);
       _rel.ty = _rel.pan.ty + (ev.clientY - _rel.pan.py);
       relSchedulePaint('view');
+    } else {
+      /* 空闲移动：按鼠标下的节点/连线切换邻居高亮（拖动中由被拖节点驱动，见 relPointerDown） */
+      relHover(ev);
     }
   }
   function relPointerUp(ev) {
