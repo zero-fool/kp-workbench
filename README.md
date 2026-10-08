@@ -3,7 +3,7 @@
 > 一款专为 TRPG 主持人（KP / 守密人 / GM）打造的 **Windows 桌面辅助工具**：资料管理、AI 辅助创作、剧本分幕、地图与关系网、骰娘检定、记录润色，全部收在一个免安装即用的应用里。
 > 制作人：**零弈秋**　|　反馈 QQ：**247910428**　|　[下载最新版](https://github.com/zero-fool/kp-workbench/releases)　|　[下载与绿色版使用须知](DOWNLOAD.md)
 
-[![最新版本](https://img.shields.io/badge/版本-3.2.7-4c1d95)](https://github.com/zero-fool/kp-workbench/releases)　[![平台](https://img.shields.io/badge/平台-Windows%2010%2F11%20(64%E4%BD%8D)-0078d4)]()　[![许可](https://img.shields.io/badge/许可-MIT-green)]()　[![形态](https://img.shields.io/badge/形态-Electron%20%E7%BB%BF%E8%89%B2%E7%89%88-orange)]()
+[![最新版本](https://img.shields.io/badge/版本-3.3.0-4c1d95)](https://github.com/zero-fool/kp-workbench/releases)　[![平台](https://img.shields.io/badge/平台-Windows%2010%2F11%20(64%E4%BD%8D)-0078d4)]()　[![许可](https://img.shields.io/badge/许可-MIT-green)]()　[![形态](https://img.shields.io/badge/形态-Electron%20%E7%BB%BF%E8%89%B2%E7%89%88-orange)]()
 
 - **免费**：个人独立开发的免费辅助工具，请勿用于商业用途
 - **数据自持**：所有资料保存在本地 `data` 目录，不上传、不经第三方服务器
