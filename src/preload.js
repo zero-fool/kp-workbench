@@ -196,6 +196,7 @@ contextBridge.exposeInMainWorld('api', {
   aiTest: (...a) => aiGuard('aiTest', () => ipcRenderer.invoke('ai:test', ...a))(),
   aiAudit: (...a) => aiGuard('aiAudit', () => ipcRenderer.invoke('ai:audit', ...a))(),
   relationsSuggest: (...a) => aiGuard('relationsSuggest', () => ipcRenderer.invoke('ai:relationsSuggest', ...a))(),
+  relationsLocal: (...a) => ipcRenderer.invoke('ai:relationsLocal', ...a),   // U9-2：本地推导不走 AI 队列，无需 guard
   splitImport: (...a) => aiGuard('splitImport', () => ipcRenderer.invoke('file:splitImport', ...a))(),
   analyzeImport: (...a) => aiGuard('analyzeImport', () => ipcRenderer.invoke('file:analyzeImport', ...a))(),
   /* 大文件 AI 分析整理进度广播：渲染层用于显示分块/合并进度条 */

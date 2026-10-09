@@ -2089,10 +2089,10 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
   });
   check('U3-11 分幕提速：波次并发分块 + 主进程透传并发度 + 幕序稳定', () => {
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
-    const okConc = /const SC_CONC = Math\.max\(1, Math\.min\(4,/.test(aiSrc)
+    const okConc = /const SC_CONC = Math\.max\(1, Math\.min\(3,/.test(aiSrc)   /* U8-5：并发上限 4→3（有意降档） */
       && /for \(let start = 0; start < chunks\.length; start \+= SC_CONC\)/.test(aiSrc)
       && /Promise\.all\(Array\.from\(\{ length: end - start \}, \(_, k\) => workChunk\(start \+ k\)\)\)/.test(aiSrc)
-      && /if \(!r\.reused\) mergeRoll\(roll, r\.arr\)/.test(aiSrc);
+      && /if \(!r\.reused && r\.arr\.length\) mergeRoll\(roll, r\.arr\)/.test(aiSrc);   /* U8-1：空幕不合并 */
     const okPass = /if \(args\.concurrency\) opts\.concurrency = Number\(args\.concurrency\)/.test(mainSrc);
     return (okConc && okPass) ? true : '分幕波次并发缺失';
   });

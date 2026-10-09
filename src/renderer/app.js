@@ -9239,7 +9239,7 @@
     relAddNode, relSaveNewNode, relSaveNode, relDelNode, relAddEdge, relSaveNewEdge, relSaveEdge, relDelEdge,
     relEdgePick, relConfirmEdge, relLayout, relUndo, relClear, relImportEnts, relAiSuggest, relGoNode,
     relToggleList, relListPick, relFilter, relZoomIn, relZoomOut, relFit, relCenter, relClearMulti, toggleDrawerScript, setImportTpl,
-    relToggleAll, relApplyOps,
+    relToggleAll, relApplyOps, relSetLineLen,
     rawInput, rawClear, rawSuggest, rawExport, removePendFile, clearPendFiles,
     rawScriptBreak, rawShowTxt, rawShowSug, rawShowScript, rawExportScript, openScriptFolder, rawSetConc,
     scriptRerun, sceneRegen, sceneAccept, scriptVersions, sceneCompareVersion,
@@ -9472,6 +9472,12 @@
    *     所以跟得紧、像橡皮筋），n2 再被 n1 带动形成余波；单帧位移设上限，避免抖飞；
    *  3) 松开后：同样的松弛跑十来帧、力度逐帧衰减，让连线收回自然长度，然后落盘并整帧重绘。 */
   const REL_REST_DEF = 150, REL_RUBBER_N1 = 0.34, REL_RUBBER_N2 = 0.12, REL_RUBBER_CAP = 70;
+  /* U9-4：关系线期望长度（60~400，用户滑杆可调），持久化在关系网数据里；
+   * 「一键整理」的松弛目标、弹簧兜底长度都读它，调整后全图连线朝该长度收敛。 */
+  function relLineLen() {
+    const v = Number((S.data.relations || {}).lineLen);
+    return (Number.isFinite(v) && v >= 60 && v <= 400) ? Math.round(v) : REL_REST_DEF;
+  }
   /* 构建受影响子图与每条连线的自然长度（=拖动前的当前长度，保证初始零位移） */
   function relBuildRubber(fixedIds) {
     const r = relData();
@@ -9520,7 +9526,7 @@
         const a = String(e.from), b = String(e.to), oid = a === id ? b : a;
         const o = byId[oid]; if (!o || typeof o.x !== 'number' || typeof o.y !== 'number') continue;
         const eid = String(e.id);
-        const rest = rubber.rests.has(eid) ? rubber.rests.get(eid) : REL_REST_DEF;
+        const rest = rubber.rests.has(eid) ? rubber.rests.get(eid) : relLineLen();   // U9-4：兜底长度用滑杆值
         const dx = o.x - n.x, dy = o.y - n.y, d = Math.hypot(dx, dy) || 1;
         const f = d - rest;                        // >0 被拉长了要拉近；<0 太挤了要推开
         const wt = rubber.fixed.has(oid) ? 2 : 1;  // 朝向被拖节点的牵引更强 → 邻居跟得紧，像橡皮筋
@@ -9581,18 +9587,42 @@
     }
     relSyncGeometry(d.syncIds || (d.multi || [d.primary]));
   }
-  /* 松开后的回弹收敛：连线收回自然长度，力度逐帧衰减，跑完后落盘并整帧重绘一次 */
-  function relSettleRubber(rubber) {
+  /* U9-3：把受影响子图内每条连线的自然长度重锚为「当前实际长度」。
+   * 拖动松手时调用——用户拉长/缩短后的布局立即成为新的自然长度，
+   * 回弹收敛时弹簧力为 0，布局定格在松手瞬间，不再弹回拖动前的长度。 */
+  function relReanchorRests(rubber) {
+    const r = relData();
+    const byId = {}; for (const n of r.nodes) byId[String(n.id)] = n;
+    for (const e of r.edges) {
+      const eid = String(e.id);
+      if (!rubber.rests.has(eid)) continue;
+      const a = byId[String(e.from)], b = byId[String(e.to)];
+      if (!a || !b || typeof a.x !== 'number' || typeof b.x !== 'number') continue;
+      rubber.rests.set(eid, Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)));
+    }
+  }
+  /* U9-4：全图弹簧子图——所有节点可动、所有连线自然长度统一为 len，供滑杆即时收敛用 */
+  function relRubberAll(len) {
+    const r = relData();
+    const rests = new Map();
+    for (const e of r.edges) rests.set(String(e.id), Math.max(1, len));
+    const ids = r.nodes.map(n => String(n.id));
+    return { fixed: new Set(), n1: ids, n2: [], rests, syncIds: ids };
+  }
+  /* 松开后的回弹收敛：连线收回自然长度，力度逐帧衰减，跑完后落盘并整帧重绘一次。
+   * U9-4：frames 可调——滑杆调线长用更多帧（大范围调整收敛更充分），拖动回弹维持默认。 */
+  function relSettleRubber(rubber, frames) {
     if (_rel._settleRaf) { cancelAnimationFrame(_rel._settleRaf); _rel._settleRaf = 0; }
     const svg = _rel.svg;
     let f = 1;
+    const decay = 1 / Math.max(4, Math.min(48, Math.round(frames) || 9));
     const step = () => {
       _rel._settleRaf = 0;
       if (_rel.svg !== svg || f <= 0) { relPersist(); relPaint(); return; }
       relRubberStep(rubber, rubber.n1, REL_RUBBER_N1 * f);
       relRubberStep(rubber, rubber.n2, REL_RUBBER_N2 * f);
       relSyncGeometry(rubber.syncIds);
-      f -= 0.12;
+      f -= decay;
       _rel._settleRaf = requestAnimationFrame(step);
     };
     step();
@@ -9671,6 +9701,9 @@
         <button class="ghost" onclick="WB.relAiSuggest()">⚡ AI 补全关系</button>
         <button class="ghost" onclick="WB.consistencyOpen()" title="检查重名 / 悬空连线等结构问题">🛡 一致性</button>
         <button onclick="WB.relLayout()">⟳ 一键整理</button>
+        <span class="rel-linelen" title="关系线期望长度：拖动后全图连线即时收敛到该长度，「一键整理」也按此长度排布">
+          <span class="hint">线长</span><input type="range" id="relLineLen" min="60" max="400" step="10" value="${relLineLen()}" oninput="WB.relSetLineLen(this.value)"><span class="hint" id="relLineLenNum">${relLineLen()}</span>
+        </span>
         <button class="ghost" onclick="WB.relUndo()" id="relUndoBtn" title="撤销最近一次整理/删除/清空">↩ 撤销</button>
         <button class="ghost" onclick="WB.relToggleList()" id="relListBtn" title="以文本列表形式浏览全部关系内容，避免画布连成一片看不清">☰ 关系清单</button>
         <span class="rel-search"><span class="gf">⌕</span><input id="relFilter" placeholder="筛选节点…" value="${esc(_rel.filter || '')}" oninput="WB.relFilter(this.value)"></span>
@@ -9950,8 +9983,9 @@
       _rel.sel = d.primary;
       _rel.multi = d.multi ? d.multi : _rel.multi;
       _rel.edgeMode = false; _rel.pendingFrom = null;
-      /* 松手：有邻居被拉动就跑一段回弹收敛，让连线收回自然长度后再落盘重绘 */
-      if (d.rubber && (d.rubber.n1.length || d.rubber.n2.length)) relSettleRubber(d.rubber);
+      /* 松手：U9-3 先把自然长度重锚为松手瞬间的实际长度（拖长/缩短都定格，不再弹回），
+         再跑一段收敛做微平衡后落盘重绘 */
+      if (d.rubber && (d.rubber.n1.length || d.rubber.n2.length)) { relReanchorRests(d.rubber); relSettleRubber(d.rubber); }
       else { relPersist(); relPaint(); }
     } else if (_rel.box) {
       const b = _rel.box; _rel.box = null;
@@ -9973,6 +10007,16 @@
   }
   /* 清除多选（侧栏「清除选择」按钮） */
   function relClearMulti() { _rel.multi = null; _rel.sel = null; relPaint(); }
+  /* U9-4：线长滑杆——记录期望长度并启动全图收敛动画（全部连线朝目标长度松弛），
+   * 动画结束自动落盘（含 lineLen 值）；连续拖动时旧动画被取消，只有最终值会落盘。 */
+  function relSetLineLen(v) {
+    const len = (Number.isFinite(Number(v)) && Number(v) >= 60 && Number(v) <= 400) ? Math.round(Number(v)) : REL_REST_DEF;
+    const r = relData();
+    r.lineLen = len;
+    const num = q('relLineLenNum'); if (num) num.textContent = String(len);
+    if (!r.nodes.length || !r.edges.length) return;   // 空图无需收敛，值已记录
+    relSettleRubber(relRubberAll(len), 24);           // 内部会取消仍在跑的旧动画，最终只落盘一次
+  }
   function relWheel(ev) {
     const svg = _rel.svg; if (!svg) return;
     ev.preventDefault();
@@ -10193,21 +10237,47 @@
     else { relAutoSize(); relPaint(); toast('没有可新增的实体节点', 'ok'); }
   }
 
-  /* AI 一键补全关系：AI 返回「新增/修正/删除」三类候选，先预览确认再应用（防误改误删） */
+  /* AI 一键补全关系：AI 返回「新增/修正/删除」三类候选，先预览确认再应用（防误改误删）。
+   * U9-2：同时跑零 token 本地推导（人物-地点「驻地」/地点-地点「位于、毗邻」），
+   *       与 AI 候选合并去重后一起预览；AI 失败时本地候选仍然可用。 */
   async function relAiSuggest() {
     const totalEnts = KINDS.reduce((s, k) => s + (S.data.entities[k] || []).length, 0);
     if (!totalEnts) { toast('请先登记人物/NPC/势力等资料，AI 才能推断关系', 'err'); return; }
-    toast('AI 正在分析角色与势力关系…', 'ok');
+    toast('正在分析角色与势力关系…', 'ok');
+    /* 本地推导（免费、确定、不调上游）：NPC/人物「所在位置」→驻地，地区上下级→位于，地区介绍互提→毗邻 */
+    let localOps = [];
+    try {
+      const lr = await window.api.relationsLocal({ entities: S.data.entities, relations: relData() });
+      if (lr && lr.ok) localOps = Array.isArray(lr.candidates) ? lr.candidates : [];
+    } catch (_) { /* 本地推导失败不阻塞 AI 流程 */ }
     try {
       const payload = { entities: S.data.entities, relations: relData(), raw: String(S.rawText || '').slice(0, 8000) };
       const res = await window.api.relationsSuggest(payload);
-      if (!res || !res.ok) { toast('AI 调用失败：' + ((res && res.error) || '未知错误'), 'err'); return; }
+      if (!res || !res.ok) {
+        if (localOps.length) { toast('AI 调用失败：' + ((res && res.error) || '未知错误') + '，已展示本地推导候选', 'warn'); relBuildPreview(localOps); }
+        else toast('AI 调用失败：' + ((res && res.error) || '未知错误'), 'err');
+        return;
+      }
       const ops = Array.isArray(res.relations) ? res.relations : [];
-      if (!ops.length) { toast('AI 未推断出可用的关系操作，请稍后重试或补充资料', 'err'); return; }
-      relBuildPreview(ops);
+      const merged = relMergeOps(localOps, ops);
+      if (!merged.length) { toast('AI 未推断出可用的关系操作，请稍后重试或补充资料', 'err'); return; }
+      relBuildPreview(merged);
     } catch (e) {
-      toast('AI 补全失败：' + ((e && e.message) || e), 'err');
+      if (localOps.length) { toast('AI 补全失败：' + ((e && e.message) || e) + '，已展示本地推导候选', 'warn'); relBuildPreview(localOps); }
+      else toast('AI 补全失败：' + ((e && e.message) || e), 'err');
     }
+  }
+  /* U9-2：合并本地候选与 AI 候选——同一对实体 + 同一关系标签只保留一条（本地优先：免费且带依据） */
+  function relMergeOps(localOps, aiOps) {
+    const kk = (s) => String(s || '').toLowerCase().replace(/[\s·・_\-—–（）()【】\[\]「」『』：:，,。.、"'']+/g, '');
+    const seen = new Set(); const out = [];
+    for (const o of (localOps || []).concat(aiOps || [])) {
+      if (!o || !o.from || !o.to) continue;
+      const k = (o.op || 'add') + '|' + kk(o.from) + '→' + kk(o.to) + '|' + String(o.label || '').trim();
+      if (seen.has(k)) continue;
+      seen.add(k); out.push(o);
+    }
+    return out;
   }
 
   /* 生成“操作预览”确认弹窗：按类型分组列出，每项可勾选，确认后才真正写入 */
@@ -10217,7 +10287,7 @@
     const r = relData();
     const nameById = {}; for (const n of r.nodes) nameById[n.id] = n.label;
     const edgeLabelOf = (a, b) => { const e = r.edges.find(x => (x.from === a && x.to === b) || (x.from === b && x.to === a)); return e ? (e.label || '关系') : '关系'; };
-    let html = `<h3>AI 关系操作预览</h3><div class="note" style="margin-bottom:8px">AI 依据现有资料推断出以下操作，请逐项勾选确认后再应用。修正/删除只会作用于已存在的连线，AI 无法凭空删改其它内容。</div>`;
+    let html = `<h3>关系操作预览</h3><div class="note" style="margin-bottom:8px">AI 与本地推导依据现有资料给出以下操作，请逐项勾选确认后再应用。修正/删除只会作用于已存在的连线；带「依据」的为本地从卡片字段直接推导的候选（不消耗 AI）。应用时若图中没有对应节点，会自动按资料新建。</div>`;
     const grp = { add: [], edit: [], del: [] };
     ops.forEach(o => { if (grp[o.op]) grp[o.op].push(o); });
     const rows = [];
@@ -10226,7 +10296,7 @@
       const [tag, col] = opLabel[o.op] || opLabel.add;
       let desc = '';
       const na = String(o.from || '').trim(), nb = String(o.to || '').trim();
-      if (o.op === 'add') desc = `<b>${esc(na)}</b> —— <b>${esc(nb)}</b>` + `<div class="hint">关系：${esc(o.label || '关系')}</div>`;
+      if (o.op === 'add') desc = `<b>${esc(na)}</b> —— <b>${esc(nb)}</b>` + `<div class="hint">关系：${esc(o.label || '关系')}${o.basis ? '　·　依据：' + esc(o.basis) : ''}</div>`;
       else if (o.op === 'edit') desc = `<b>${esc(na)}</b> —— <b>${esc(nb)}</b>` + `<div class="hint">${esc(edgeLabelOf(o.from, o.to))}　→　${esc(o.label || '关系')}</div>`;
       else desc = `<b>${esc(na)}</b> —— <b>${esc(nb)}</b>` + `<div class="hint">当前：${esc(edgeLabelOf(o.from, o.to))}</div>`;
       /* 勾选框编号必须用「原始 ops 下标」：渲染按 add→edit→del 分组，
@@ -10283,7 +10353,7 @@
     closeModal();
     relSeedLayout(true); relPaint(); relPersist();
     aiLandCommit(); // C2：关系应用完成，登记落地记录
-    toast('已应用 AI 操作：新增 ' + adds + ' · 修正 ' + edits + ' · 删除 ' + dels + (newNodes ? ' · 新建节点 ' + newNodes : ''), 'ok');
+    toast('已应用关系操作：新增 ' + adds + ' · 修正 ' + edits + ' · 删除 ' + dels + (newNodes ? ' · 新建节点 ' + newNodes : ''), 'ok');
   }
 
   /* 连通分量：把有连线关系的节点归入同一子图，用于分组整理 */
@@ -10417,8 +10487,10 @@
     }
   }
 
-  /* 单个连通分量的局部排布：返回 {ids, P:{id:[x,y]}, rad}，P 以该组重心为原点 */
-  function relLocalLayout(ids, inner, byId, rad) {
+  /* 单个连通分量的局部排布：返回 {ids, P:{id:[x,y]}, rad}，P 以该组重心为原点。
+   * U9-4：lineLen 为「线长滑杆」期望值（由调用方 relLayout 传入，保持本函数为纯函数）。 */
+  function relLocalLayout(ids, inner, byId, rad, lineLen) {
+    const lineTarget = Math.max(1, Number(lineLen) || 0);
     const P = {};
     if (ids.length === 1) { P[ids[0]] = [0, 0]; return { ids, P, rad: rad[ids[0]] }; }
     /* 种子：沿用当前位置（保留用户已摆好的相对关系）；缺坐标则按确定式圆环铺开 */
@@ -10454,7 +10526,8 @@
           const pa = P[e.from], pb = P[e.to]; if (!pa || !pb) continue;
           let dx = pb[0] - pa[0], dy = pb[1] - pa[1];
           const d = Math.sqrt(dx * dx + dy * dy) || 1;
-          const rest = rad[e.from] + rad[e.to] + 26;
+          /* U9-4：松弛目标 = max(不重叠下限, 线长滑杆期望值)——滑杆调大整理后线更长，调小则收紧到不重叠为止 */
+          const rest = Math.max(rad[e.from] + rad[e.to] + 26, lineTarget);
           const mv = Math.max(-14, Math.min(14, (d - rest) * 0.14)) * 0.5;
           dx /= d; dy /= d;
           pa[0] += dx * mv; pa[1] += dy * mv;
@@ -10536,7 +10609,7 @@
     const blocks = comps.map((c, i) => {
       const set = new Set(c.ids);
       const inner = r.edges.filter(e => set.has(e.from) && set.has(e.to));
-      const L = relLocalLayout(c.ids, inner, byId, rad);
+      const L = relLocalLayout(c.ids, inner, byId, rad, relLineLen());
       L.idx = i;
       return L;
     });

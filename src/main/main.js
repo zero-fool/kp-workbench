@@ -766,6 +766,16 @@ function registerIpc() {
       return { ok: false, error: String((err && err.message) || err) };
     }
   });
+  /* U9-2：零 token 本地关系推导——纯结构化字段计算（不调上游），与 AI 补全互补 */
+  ipcMain.handle('ai:relationsLocal', async (e, payload) => {
+    try {
+      payload = payload || {};
+      const res = ai.localRelationCandidates(payload.entities || (doc.entities || {}), payload.relations || (doc.relations || { nodes: [], edges: [] }));
+      return { ok: true, candidates: (res && res.candidates) || [] };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  });
   ipcMain.handle('ai:test', async () => {
     // 全局 AI 配置已就绪即可连通测试（不再强制要求已配置「AI 设定」角色卡）
     const cfg = aiCfg('sys', 'AI 连通性测试');

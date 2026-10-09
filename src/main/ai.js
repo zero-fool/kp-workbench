@@ -498,14 +498,16 @@ function usageLog() {
  * 汇总调用数 / 耗时 / token，供界面即时提示「本次耗时与预估费用」。 */
 function usageByMark(mark) {
   const key = String(mark || '');
-  let prompt = 0, completion = 0, total = 0, calls = 0, msSum = 0, errs = 0;
+  let prompt = 0, completion = 0, total = 0, calls = 0, msSum = 0, errs = 0, timeouts = 0, estPrompt = 0;
   for (const x of _usageLog) {
     if (key && x.mark !== key) continue;
     calls++; msSum += x.ms || 0;
     if (x.error || x.cancelled) errs++;
+    if (x.timeout) timeouts++;                       // U8-2：超时次数（上游可能已计费）
+    estPrompt += x.estPromptTokens || 0;             // U8-2：失败/超时请求的估算输入 token
     prompt += x.promptTokens || 0; completion += x.completionTokens || 0; total += x.totalTokens || 0;
   }
-  return { mark: key, calls, errs, msSum, promptTokens: prompt, completionTokens: completion, totalTokens: total };
+  return { mark: key, calls, errs, timeouts, estPromptTokens: estPrompt, msSum, promptTokens: prompt, completionTokens: completion, totalTokens: total };
 }
 /* B-3 服务商健康度：按模型汇总最近窗口内的请求数 / 成功率 / 平均延迟 / 最近一次状态。
  * 数据直接取自用量环形日志（每次请求都带 model / ms / error / status），供「AI 配置/用量」页展示。 */
@@ -601,10 +603,44 @@ function aiShouldRetry(e) {
   return false;
 }
 
-/* 指数退避；限流多等一会儿。 */
-function aiBackoffMs(status, attempt) {
+/* 指数退避；限流多等一会儿。U8-5：上游给了 Retry-After 时优先遵循（限幅 30s）。 */
+function aiBackoffMs(status, attempt, retryAfterMs) {
+  if (retryAfterMs > 0) return Math.max(800, Math.min(retryAfterMs, 30000));
   const base = status === 429 ? 1500 : 800;
   return base * Math.pow(2, attempt);
+}
+
+/* U8-5：解析上游 Retry-After（秒数或 HTTP 日期），限幅 30 秒，解析不出返回 0 */
+function parseRetryAfter(h) {
+  if (!h) return 0;
+  const s = Number(h);
+  if (Number.isFinite(s) && s >= 0) return Math.min(s * 1000, 30000);
+  const d = Date.parse(String(h));
+  if (Number.isFinite(d)) return Math.min(Math.max(0, d - Date.now()), 30000);
+  return 0;
+}
+
+/* U8-2：超时/中断请求上游可能已完整生成并计费（本地拿不到 usage）——
+ * 按请求体字符量估算 prompt token（约 2 字符/token）计入用量日志，让「仪表盘 20 倍之谜」在应用内可见。 */
+function estBodyTokens(body) {
+  try {
+    let n = 0;
+    for (const m of (body && body.messages) || []) n += String((m && m.content) || '').length;
+    return Math.round(n / 2);
+  } catch (_) { return 0; }
+}
+
+/* U8-3：任务级请求次数预算——每个任务入口把 {left,cap} 挂在 cfg.budgetBox（引用共享），
+ * requestOnce 每发起一次上游请求扣 1 次；left<=0 直接失败（不重试），作为重试风暴的最后闸门。 */
+function spendRequest(cfg) {
+  const box = cfg && cfg.budgetBox;
+  if (!box) return;
+  if (!(box.left > 0)) {
+    const err = new Error('AI_REQUEST_BUDGET 本次任务的上游请求次数已达上限（' + box.cap + ' 次），已停止重试以避免消耗失控；请稍后对失败部分单独补跑');
+    err.budget = true;
+    throw err;
+  }
+  box.left -= 1;
 }
 
 /* 可取消的退避：注册哨兵 controller 到当前组，用户取消该组会 abort 哨兵，从而中止重试循环。 */
@@ -636,7 +672,7 @@ async function requestCompletions(cfg, body, timeoutMs) {
       e = err;
       if (!aiShouldRetry(err)) throw err;
       if (attempt >= AI_MAX_ATTEMPTS - 1) throw err;
-      const back = aiBackoffMs(err.status, attempt);
+      const back = aiBackoffMs(err.status, attempt, err.retryAfterMs || 0);   // U8-5：遵循 Retry-After
       await aiSleep(back, cfg.group);
     }
   }
@@ -648,6 +684,7 @@ async function requestOnce(cfg, body, timeoutMs) {
     throw new Error('AI 未配置完整（需 baseUrl/apiKey/model）');
   }
   budgetGuard(cfg); // U3-5：超出预算直接熔断，不再发起上游请求
+  spendRequest(cfg); // U8-3：请求次数预算扣减，超限直接失败（防重试风暴）
   const url = String(cfg.baseUrl).replace(/\/+$/, '') + '/chat/completions';
   const ms = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : (cfg.timeoutMs || 120000);
   const controller = new AbortController();
@@ -671,14 +708,16 @@ async function requestOnce(cfg, body, timeoutMs) {
         recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: msNow, cancelled: true, group: cfg.group });
         throw new Error('AI_TASK_CANCELLED 该任务已被取消');
       }
+      // U8-2：超时请求上游可能已生成并计费——记入用量日志并标注 timeout + 估算输入，面板可见
+      recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: msNow, error: true, timeout: true, estPromptTokens: estBodyTokens(body), group: cfg.group });
       throw new Error('AI 请求超时（超过 ' + Math.round(ms / 1000) + ' 秒）：连接/发送阶段无响应，请检查网络或调大「AI 配置」中的超时时间');
     }
-    recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: msNow, error: true, group: cfg.group });
+    recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: msNow, error: true, estPromptTokens: estBodyTokens(body), group: cfg.group });
     throw new Error('AI 请求发送失败（上游原因）：' + ((e && e.message) || e));
   }
   if (!resp.ok) {
     clearTimeout(timer); release();
-    recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: Date.now() - t0, error: true, status: resp.status, group: cfg.group });
+    recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: Date.now() - t0, error: true, status: resp.status, estPromptTokens: estBodyTokens(body), group: cfg.group });
     // 优先透传上游返回的具体错误信息，读不到再退化为状态码摘要
     let msg = 'AI 上游返回 ' + resp.status + ' ' + (resp.statusText || '');
     try {
@@ -694,6 +733,7 @@ async function requestOnce(cfg, body, timeoutMs) {
     }
     const httpErr = new Error(msg.trim());
     httpErr.status = resp.status;
+    httpErr.retryAfterMs = parseRetryAfter(resp.headers && resp.headers.get('retry-after'));   // U8-5
     throw httpErr;
   }
   let j;
@@ -707,9 +747,11 @@ async function requestOnce(cfg, body, timeoutMs) {
         recordUsage({ label, ms: msNow, cancelled: true, group: cfg.group });
         throw new Error('AI_TASK_CANCELLED 该任务已被取消');
       }
+      // U8-2：响应读取超时同样可能已被上游计费——记入用量日志
+      recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: msNow, error: true, timeout: true, estPromptTokens: estBodyTokens(body), group: cfg.group });
       throw new Error('AI 响应读取超时（超过 ' + Math.round(ms / 1000) + ' 秒）：已收到响应但长时间未完成，请调大超时时间后重试');
     }
-    recordUsage({ label, ms: msNow, error: true, group: cfg.group });
+    recordUsage({ label, ms: msNow, error: true, estPromptTokens: estBodyTokens(body), group: cfg.group });   // U8-2
     throw new Error('AI 响应解析失败：' + ((e && e.message) || e));
   }
   clearTimeout(timer); release();
@@ -738,9 +780,17 @@ async function apiCall(cfg, system, user) {
   return c;
 }
 
+/* U8-4：response_format 探测缓存——网关明确报「不支持 JSON 模式」后记住该 endpoint+model，
+ * 后续请求直接跳过 JSON 模式尝试（省一轮往返；先生成后校验的网关也不再双倍计费） */
+const NO_JSON_MODE = new Set();
+const jsonModeKey = (cfg) => String((cfg && cfg.baseUrl) || '') + '|' + String((cfg && cfg.model) || '');
+const isJsonModeErr = (msg) => /response_format|json_object|json mode/i.test(String(msg || ''));
+
 /* 需要模型返回严格 JSON 的调用：优先声明 response_format(json_object) 以大幅提升“纯 JSON”合规率；
- * 若上游接口不支持该字段则自动去掉后重试一次，兼容各类 OpenAI 兼容网关。返回原始回复文本。 */
-async function rawJsonReply(cfg, system, user, maxTokens) {
+ * 若上游接口不支持该字段则自动去掉后重试一次，兼容各类 OpenAI 兼容网关。返回原始回复文本。
+ * U8-6：contOpts = { maxAppend } 时，检测 finish_reason=length（截断）改为「续写补尾」——
+ * 把已生成内容回传让模型接着写，不再整段重发重计全额输出 token。 */
+async function rawJsonReply(cfg, system, user, maxTokens, contOpts) {
   const high = (typeof maxTokens === 'number' && maxTokens > 0) ? maxTokens : (cfg.maxTokens || 6000);
   const limit1 = Math.max(high, 2000);       // 首选上限：尽量给足，避免大 JSON 被截断
   // U1-14：结构化生成（JSON）默认更低随机性，降低「跑题/编造」概率；用户显式配置的 temperature 仍优先。
@@ -751,22 +801,53 @@ async function rawJsonReply(cfg, system, user, maxTokens) {
     max_tokens: limit,
     messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
   });
-  const pick = (j) => (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
-  let j;
-  // 用户主动取消必须直接抛出（不可重试）；超时/上游不支持 response_format 等才吞掉重试
+  const pick = (j) => (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
+  // 用户主动取消/预算用尽必须直接抛出（不可重试）；超时/上游不支持 response_format 等才吞掉重试
   const isUserCancel = (e) => !!e && typeof e.message === 'string' && e.message.indexOf('AI_TASK_CANCELLED') === 0;
+  const isBudget = (e) => !!(e && e.budget);
+  /* U8-6：截断续写。finish_reason=length 时把已有内容作为 assistant 消息回传，要求接着写完（最多 maxAppend 次） */
+  const contDone = async (j) => {
+    let text = pick(j);
+    const maxAppend = (contOpts && contOpts.maxAppend) || 0;
+    let finish = (j && j.choices && j.choices[0] && j.choices[0].finish_reason) || '';
+    for (let k = 0; k < maxAppend && finish === 'length' && text; k++) {
+      try {
+        const j2 = await requestCompletions(cfg, {
+          model: cfg.model,
+          temperature: jsonTemp,
+          max_tokens: limit1,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+            { role: 'assistant', content: text },
+            { role: 'user', content: '继续：从上方内容被截断处紧接着输出剩余部分，不要重复任何已输出字符，不要解释，直接续写到结束。' }
+          ]
+        }, cfg.timeoutMs);
+        const c2 = pick(j2); if (!c2) break;
+        text += c2;
+        finish = (j2 && j2.choices && j2.choices[0] && j2.choices[0].finish_reason) || '';
+      } catch (_c) { if (isUserCancel(_c) || isBudget(_c)) throw _c; break; }
+    }
+    return text;
+  };
+  let j;
   try {
-    j = await requestCompletions(cfg, Object.assign({}, mk(limit1), { response_format: { type: 'json_object' } }), cfg.timeoutMs);
-    if (pick(j).length) return pick(j);
-  } catch (_e) { if (isUserCancel(_e)) throw _e; }
+    if (!NO_JSON_MODE.has(jsonModeKey(cfg))) {
+      j = await requestCompletions(cfg, Object.assign({}, mk(limit1), { response_format: { type: 'json_object' } }), cfg.timeoutMs);
+      if (pick(j).length) return contDone(j);
+    }
+  } catch (_e) {
+    if (isUserCancel(_e) || isBudget(_e)) throw _e;
+    if (!NO_JSON_MODE.has(jsonModeKey(cfg)) && isJsonModeErr(_e && _e.message)) NO_JSON_MODE.add(jsonModeKey(cfg));   // U8-4
+  }
   try {
     j = await requestCompletions(cfg, mk(limit1), cfg.timeoutMs); // 上游不支持 response_format → 去掉重试
-    if (pick(j).length) return pick(j);
-  } catch (_e2) { if (isUserCancel(_e2)) throw _e2; }
+    if (pick(j).length) return contDone(j);
+  } catch (_e2) { if (isUserCancel(_e2) || isBudget(_e2)) throw _e2; }
   // 部分模型不接收过大的 max_tokens（400）：退回保守上限兜底
   const cons = Math.min(limit1, Math.max(cfg.maxTokens || 4000, 3000));
   j = await requestCompletions(cfg, mk(cons), cfg.timeoutMs);
-  return pick(j);
+  return contDone(j);
 }
 
 /* 从（可能夹带解释文字的）回复中稳健抽取一个 JSON 对象，容忍代码块与尾逗号；不是对象/解析失败返回 null */
@@ -1306,7 +1387,7 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
   const full = String(text || '');
   // U1-16：结构感知切分 + 受控并行分段（并发 3~5，取代逐段串行）
   const SEG = 15000, OVERLAP = 250;   // U3-8：段长 24000→15000、重叠 300→250，单段输出更短，降低长 JSON 被截断/坏 JSON 概率
-  const CONC = Math.max(1, Math.min(5, Number(opts.concurrency) || 3));
+  const CONC = Math.max(1, Math.min(3, Number(opts.concurrency) || 2));   // U8-5：默认并发 3→2、上限 5→3，降低同 Key 限流概率
   const onProg = typeof opts.onProgress === 'function' ? opts.onProgress : null; // U1-15：进度回调
   const nameFilter = (opts.settings && opts.settings.nameFilter) || null;        // U1-18：自定义过滤词
   const docTitle = String(opts.title || '').trim();
@@ -1317,6 +1398,9 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
     : '';
   const FILTER_KINDS = opts.excludePC === true ? { npcs: 1 } : { pcs: 1, npcs: 1 };
   const segs = splitByStructure(full, SEG, OVERLAP);
+  // U8-3：任务级请求次数预算（box 引用共享，克隆 cfg 不影响计数）——分段数×2 + 6 次兜底，防止重试风暴滚雪球
+  const reqCap = segs.length * 2 + 6;
+  cfg.budgetBox = { left: reqCap, cap: reqCap };
   const segParsed = new Array(segs.length);
   const errors = [];
   const rejected = [];
@@ -1350,7 +1434,8 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
       const schemaForSeg = si === 0
         ? schemaText(effectiveFields(fields) || DEFAULT_FIELDS)
         : linkSchemaText(effectiveFields(fields) || DEFAULT_FIELDS);
-      const makeUser = () => renderPrompt(prompts.registration, {
+      // U8-7：提示词在段内按 attempt 复用——重试只追加纠正尾注，不再重拼整段提示词
+      const userBase = renderPrompt(prompts.registration, {
         schema: schemaForSeg,
         existing: JSON.stringify(existingMap(existingForSeg || {})),
         fragment: seg
@@ -1363,13 +1448,20 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
         try {
           const remind = (attempt > 1) ? '\n【要求纠正】你上一次的回复没有返回可解析的 JSON 对象。请只输出一个 JSON 对象（字段含 entities），不要输出任何解释文字、Markdown 代码块或包围标记；若输出过长会被截断，请务必紧凑地给出完整字段。' : '';
           // 剧本拆解输出量大，用更高 token 上限，避免完整 JSON 被截断成残缺对象；重试时再放宽上限
-          const c = stripWrap(await rawJsonReply(cfg, sys, makeUser() + remind, attempt > 1 ? 12000 : 10000));
+          // U8-6：JSON 被截断（finish_reason=length）时改用「续写补尾」，不再整段重发重计全额输出
+          const c = stripWrap(await rawJsonReply(cfg, sys, userBase + remind, attempt > 1 ? 12000 : 10000, { maxAppend: 2 }));
           const j = extractJsonObject(c);
           if (!j) throw new Error('未返回 JSON 对象');
           const ent = (j && j.entities) || j || {};
           for (const k of kinds) if (!Array.isArray(ent[k])) ent[k] = [];
           const empty = kinds.every(k => !Array.isArray(ent[k]) || !ent[k].length);
-          if (empty) throw new Error('解析结果为空（未识别出任何实体）');
+          if (empty) {
+            // U8-1：空段是合法结果（过渡章节/纯叙事段模型本就识别不出实体），
+            // 直接接受空结果，不再 throw 触发 3 次整段重试白烧 token
+            parsed = { entities: {}, updates: Array.isArray(j && j.updates) ? j.updates : [], empty: true };
+            for (const k of kinds) parsed.entities[k] = [];
+            break;
+          }
           const fe = effectiveFields(fields);
           parsed = { entities: {}, updates: Array.isArray(j && j.updates) ? j.updates : [] };
           for (const k of kinds) {
@@ -1383,7 +1475,10 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
           lastErr = e;
           // U1-15：用户取消 → 停止调度剩余段落并保留已完成段
           if (String((e && e.message) || e).indexOf('AI_TASK_CANCELLED') === 0) { cancelled = true; return; }
-          if (attempt < 3) await new Promise(r => setTimeout(r, 600 * attempt));
+          // U8-3：请求预算用尽 → 立即放弃本段（继续重试只会继续失败并挤占其它段的额度）
+          if (e && e.budget) break;
+          // U8-5：退避遵循上游 Retry-After（429 场景）
+          if (attempt < 3) await new Promise(r => setTimeout(r, aiBackoffMs((e && e.status) || 0, attempt, (e && e.retryAfterMs) || 0)));
         }
       }
       if (!parsed) errors.push('[段落 ' + (si + 1) + '] ' + ((lastErr && lastErr.message) || '未知错误'));
@@ -1803,6 +1898,65 @@ function parseJsonObj(txt) {
 const relationDiag = { parseRetries: 0, cacheHits: 0 };
 const RELATION_CACHE_MAX = 50;
 const relationCache = new Map(); // fpKey → { ops, at }
+/* U9-2：零 token 本地推导关系候选——从卡片结构化字段直接推导「人物-地点/地点-地点」候选，
+ * 与 AI 推断互补且完全免费：npc/pc 的 location ↔ 地区名 → 驻地；regions 的 parent/描述提及 → 位于/毗邻。
+ * 返回与 suggestRelations 同构的 add 操作（from/to 为实体名），由渲染层预览勾选后应用。 */
+function localRelationCandidates(entities, relations) {
+  const ents = entities || {};
+  const nodes = ((relations && relations.nodes) || []).filter(n => n && n.id);
+  const edges = ((relations && relations.edges) || []).filter(e => e && e.from && e.to);
+  const kk = (s) => String(s || '').toLowerCase().replace(/[\s·・_\-—–（）()【】\[\]「」『』：:，,。.、"'']+|（[^）]*）|\([^)]*\)/g, '');
+  const labelOf = {}; const kindOf = {};
+  for (const n of nodes) { const nm = String(n.label || '').trim(); if (nm) { labelOf[String(n.id)] = nm; kindOf[String(n.id)] = n.kind || ''; } }
+  const exist = new Set();
+  for (const e of edges) {
+    const a = labelOf[String(e.from)], b = labelOf[String(e.to)];
+    if (a && b) { exist.add(kk(a) + '→' + kk(b)); exist.add(kk(b) + '→' + kk(a)); }
+  }
+  const cands = []; const seen = new Set();
+  const push = (from, to, label, basis) => {
+    const a = String(from || '').trim(), b = String(to || '').trim();
+    if (!a || !b || a === b) return;
+    const s1 = kk(a) + '→' + kk(b), s2 = kk(b) + '→' + kk(a);
+    const tag = s1 + '|' + label;
+    if (exist.has(s1) || exist.has(s2) || seen.has(tag)) return;
+    seen.add(tag);
+    cands.push({ op: 'add', from: a, to: b, label, basis });
+  };
+  // 地区名索引（归一化）
+  const regList = [];
+  for (const g of (ents.regions || [])) {
+    const nm = String(g.name || '').trim(); if (!nm) continue;
+    regList.push({ name: nm, key: kk(nm), it: g });
+  }
+  const regByKey = new Map(regList.map(g => [g.key, g]));
+  // 1) 人物-地点：npc/pc 的 location 字段 ↔ 地区名 → 「驻地」
+  for (const kind of ['npcs', 'pcs']) {
+    for (const p of (ents[kind] || [])) {
+      const nm = String(p.name || '').trim();
+      const loc = String(p.location || '').trim();
+      if (!nm || !loc) continue;
+      const g = regByKey.get(kk(loc));
+      if (g) push(nm, g.name, '驻地', '卡片「所在位置」=' + loc);
+    }
+  }
+  // 2) 地点-地点：regions.parent 结构化字段 → 「位于」；desc/key/area 文本提及其他地区名 → 「毗邻」
+  for (const g of regList) {
+    const par = g.it.parent;
+    const parKey = kk(typeof par === 'string' ? par : (par && par.name));
+    if (parKey && regByKey.has(parKey) && parKey !== g.key) {
+      push(regByKey.get(parKey).name, g.name, '位于', '地区「上级地区」字段');
+    }
+    const hay = kk([g.it.desc, g.it.key, g.it.area].map(x => String(x == null ? '' : x)).join(' '));
+    if (!hay) continue;
+    for (const other of regList) {
+      if (other.key === g.key || other.key.length < 2 || !hay.includes(other.key)) continue;
+      push(other.name, g.name, '毗邻', '「' + other.name + '」在地区介绍中被提及');
+    }
+  }
+  return { ok: true, candidates: cands.slice(0, 60) };
+}
+
 function relFpHash(s) { let h = 5381; const str = String(s || ''); for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
 const RELATION_RETRY_HINT = '\n\n注意：你上一次输出没有给出可解析的 JSON 数组（可能带了 markdown 代码块、解释文字或格式错误）。请只输出一个 JSON 数组（没有结果时输出 []），不要任何额外文字。';
 async function suggestRelations(entities, relations, cfg, rawText) {
@@ -1888,21 +2042,24 @@ async function suggestRelations(entities, relations, cfg, rawText) {
     if (a) score.set(a, (score.get(a) || 0) + 10);
     if (b) score.set(b, (score.get(b) || 0) + 10);
   }
-  /* 展示行：按相关度排序、每类截断 90 条（分数相同保持插入顺序，无原文时与旧版一致） */
+  /* U9-5：展示行按类别分组注入（【人物】【地区】…分节），让模型按类型找「地点-人物/地点-地点」关系对 */
   const lines = [];
   for (const k of _K) {
     const ranked = all.filter((e) => e.k === k)
       .map((e) => ({ e, s: score.get(e.name) || 0 }))
-      .sort((x, y) => y.s - x.s);
-    for (const { e } of ranked.slice(0, 90)) {
+      .sort((x, y) => y.s - x.s)
+      .slice(0, 90);
+    if (!ranked.length) continue;
+    lines.push('【' + (kl[k] || k) + '】');
+    for (const { e } of ranked) {
       const nm = e.name;
-      const tag = [kl[k] || k, e.it.faction, e.it.subtitle || e.it.role].filter(Boolean).join(' · ');
+      const tag = [e.it.faction, e.it.subtitle || e.it.role].filter(Boolean).join(' · ');
       const det = [];
       for (const fk of CONTENT_FIELDS[k] || []) {
         const v = String(e.it[fk] == null ? '' : e.it[fk]).replace(/\s+/g, ' ').trim();
         if (v) det.push(v.slice(0, FIELD_LIMIT));
       }
-      lines.push(nm + '(' + (tag || kl[k] || k) + ')' + (det.length ? '\n　　' + det.join('；') : ''));
+      lines.push('- ' + nm + (tag ? '(' + tag + ')' : '') + (det.length ? '\n　　' + det.join('；') : ''));
     }
   }
   const existingPairs = new Set();
@@ -1934,8 +2091,13 @@ async function suggestRelations(entities, relations, cfg, rawText) {
     + '新增：{"op":"add","from":"X","to":"Y","label":"关系说明(4~15字，如 师徒/敌对/私下结盟/隶属于火鳞商会/血亲/线索指向)"}\n'
     + '修正：{"op":"edit","from":"X","to":"Y","label":"纠正后的关系说明"}，from/to 必须是一对已有连线\n'
     + '删除：{"op":"del","from":"X","to":"Y"}，from/to 必须是一对已有连线，仅当确认该关系不合理或名存实亡时才删\n'
-    + '要求：from、to 必须严格来自下方清单中的名称；add 的 from/to 不得与现有连线重复；edit/del 只能针对已有连线（正反方向皆可）；避免给只是“同属一大势力”的所有人都互相连线；优先保留最显著、对剧情推进最有价值的关系；每个操作都要确有必要，总量控制在 3~15 条。\n'
-    + '注意：请结合每张卡片「」内的内容线索与原始文本摘录中明确的描述来推断关系（如师徒、敌对、效忠、兄妹、线索指向等），不要因为没有看到显式关系词就一律输出空数组。'
+    + '要求：from、to 必须严格来自下方清单中的名称（不限人物——人物-地点、地点-地点同样成立）；add 的 from/to 不得与现有连线重复；edit/del 只能针对已有连线（正反方向皆可）；避免给只是“同属一大势力”的所有人都互相连线；优先保留最显著、对剧情推进最有价值的关系；每个操作都要确有必要，总量控制在 3~15 条。\n'
+    /* U9-1/U9-5：关系类型不限人物——给出人物-地点、地点-地点的关系示例，地点关系不再被提示词引导埋没 */
+    + '注意：请结合每张卡片「」内的内容线索与原始文本摘录中明确的描述来推断关系，关系类型不限人物：\n'
+    + '· 人物-人物：师徒、敌对、效忠、亲缘、同伙、上下级、线索指向；\n'
+    + '· 人物-地点：驻地、居住于、把守、囚禁于、管辖、失踪于；\n'
+    + '· 地点-地点：位于、毗邻、通道相连、包含于、曾是同一处。\n'
+    + '清单按【人物】【地区】等类别分节；地点之间、人物与地点之间有明确线索时同样要输出 add，不要因为没有看到显式关系词就一律输出空数组。'
     + '\n\n现有连线（供 add 去重、edit/del 定位）：' + (existingReadable.length ? existingReadable.join('　') : '（暂无）')
     + '\n\n清单（名称后是卡片关键内容）\n' + lines.join('\n').slice(0, 14000)
     + (excerpt ? '\n\n原始文本摘录\n' + excerpt : '');
@@ -1957,7 +2119,7 @@ async function suggestRelations(entities, relations, cfg, rawText) {
   if (!arr.length) {
     relationDiag.parseRetries += 1;
     const digHint = '\n\n【重要】你刚才没有给出任何连线。请逐条对照「清单」里每张卡片的线索与「原始文本摘录」，'
-      + '找出其中明确写到的关系（如师徒、敌对、效忠、兄妹、同伙、上下级、结盟、线索指向、亲缘等），'
+      + '找出其中明确写到的关系（如师徒、敌对、效忠、兄妹、同伙、上下级、结盟、线索指向、亲缘，以及人物-地点的驻地/把守/囚禁于、地点-地点的位于/毗邻/通道相连等），'
       + '即使原文没有使用关系词、但通过共同行动/出身/阵营/描述可以确定的也要输出 add 操作；'
       + '仅当确实完全找不到任何可信关系时才输出 []。';
     try {
@@ -2103,6 +2265,16 @@ function sceneSysPrompt() {
     + '5) 只输出 JSON，不要输出任何解释文字或 Markdown 代码块。\n'
     + '6) 本段通常拆 3~8 幕：只输出本段正文对应的幕，内容超出本段时不要硬塞；若「续写要求」给出前文已分好的幕与设定，不要重复它们，人物/地点/线索的名称与事实必须与其保持一致，不得改名、遗漏或自相矛盾。';
 }
+
+/* U8-7：续块精简系统提示——只保留 JSON schema、输出约束与一致性要求（完整版 ~800 字 → ~350 字）。
+ * 首块仍用完整版（建立分幕细则）；中后段的细则由首块确立、跨块一致性由「续写要求」锚点负责。 */
+function sceneSysPromptLite() {
+  return '你是资深 TRPG 主持人（KP）的剧本拆解助手。把给定片段继续拆成幕（scenes），严格输出一个 JSON 对象：'
+    + '{"scenes":[{"title":"幕标题(具体且可区分)","location":["地点"],"time":"大概时间","characters":[{"name":"人物","role":"身份(可空)"}],"plot":"剧情经过 200~400 字","clues":["线索"],"props":["道具"],"note":"承接提示(可空)"}]}。\n'
+    + '要求：一幕=一个完整剧情节点，不机械等分；plot 忠于原文顺序、不加戏；'
+    + '只列本段明确提及的地点/人物/线索，没有给空数组；'
+    + '名称与「续写要求」中已确立的保持一致，不重复已分好的幕；只输出 JSON，无任何解释。';
+}
 function normalizeScene(it, idx) {
   const s = (it && typeof it === 'object') ? it : {};
   const loc = (Array.isArray(s.location) ? s.location : []).map(x => sanitizeStr(x, 60).trim()).filter(Boolean);
@@ -2160,12 +2332,18 @@ function mergeRoll(roll, arr) {
 function buildContinueCtx(c, total, roll, lastPlot) {
   if (total <= 1) return '';
   let s = '\n【续写要求】这是全篇第 ' + (c + 1) + ' / ' + total + ' 部分。\n';
-  if (roll.titles.length) s += '已分好的幕（不要重复，只列出其后新出现的幕）：\n- ' + roll.titles.join('\n- ') + '\n';
+  if (roll.titles.length) {
+    // U8-7：标题最多回传最近 12 条 + 总数摘要——长文本不再全量回传 24 条标题
+    const T = roll.titles.slice(-12);
+    s += '已分好的幕共 ' + roll.titles.length + ' 条' + (roll.titles.length > 12 ? '（仅列最近 12 条）' : '') + '（不要重复，只列出其后新出现的幕）：\n- ' + T.join('\n- ') + '\n';
+  }
   else s += '这是全篇开头，请从这里开始分幕。\n';
   if (roll.chars.length) s += '前文已确立的关键人物：' + roll.chars.join('、') + '\n';
   if (roll.locs.length) s += '前文已确立的地点：' + roll.locs.join('、') + '\n';
-  if (roll.clues.length) s += '前文已确立的线索/伏笔：' + roll.clues.join('、') + '\n';
-  if (lastPlot) s += '上一幕结尾：' + lastPlot + '\n';
+  // U8-7：线索每条截 40 字，只回传最近 20 条
+  if (roll.clues.length) s += '前文已确立的线索/伏笔：' + roll.clues.slice(-20).map(x => String(x).slice(0, 40)).join('、') + '\n';
+  // U8-7：上一幕结尾 300→200 字
+  if (lastPlot) s += '上一幕结尾：' + String(lastPlot).slice(0, 200) + '\n';
   s += '本块分幕须与前文一致：人物/地点/线索沿用上述名称，不得改名、遗漏或自相矛盾。\n';
   return s;
 }
@@ -2214,9 +2392,13 @@ async function breakdownScenario(cfg, text, settings, opts) {
   // 第 1 步：提取剧本正文——清洗总文本，得到干净正文；分幕基于该正文进行
   const t = extractScriptBody(text);
   if (!t) return { scenes: [], failed: 0, failedIdx: [], chunkScenes: [], extracted: '', usage: usageByMark(mark) };
-  const sys = sceneSysPrompt();
+  const sysFull = sceneSysPrompt();
+  const sysLite = sceneSysPromptLite();   // U8-7：续块精简系统提示
   // 按章节/段落/句子边界切分（而非定长硬切），避免把一幕从中间截断；少量重叠用于承接，重复的边界幕由结尾去重合并。
   const chunks = splitByStructure(t, SC_CHUNK, SC_OVERLAP);
+  // U8-3：任务级请求次数预算（box 引用共享）——块数×2 + 6 次兜底，防重试风暴滚雪球
+  const reqCap = chunks.length * 2 + 6;
+  cfg2.budgetBox = { left: reqCap, cap: reqCap };
   // A-4 补跑：onlyChunks = 需要重跑的下标集，prevChunkScenes = 既有各段场景（未失败段直接复用，不耗 token）
   const only = (opts && Array.isArray(opts.onlyChunks)) ? new Set(opts.onlyChunks) : null;
   const prev = (opts && Array.isArray(opts.prevChunkScenes)) ? opts.prevChunkScenes : null;
@@ -2248,21 +2430,25 @@ async function breakdownScenario(cfg, text, settings, opts) {
   const roll = { chars: [], locs: [], clues: [], titles: [] };
   // 补跑模式：先用既有成功段回填一致性锚点（人物/地点/线索/标题），再仅对失败段发起 AI
   if (only && prev) for (const g of prev) if (Array.isArray(g)) mergeRoll(roll, g);
-  /* 对一段正文调用 AI 产出幕；返回 null 表示多次尝试后仍失败。用户取消立即上抛。 */
-  const tryChunk = async (user) => {
+  /* 对一段正文调用 AI 产出幕；返回 null 表示多次尝试后仍失败（[] 为合法空结果）。用户取消立即上抛。 */
+  const tryChunk = async (user, sys) => {
     let arr = null;
     for (let attempt = 1; attempt <= 3 && !arr; attempt++) {
       try {
         const remind = attempt > 1 ? '\n【要求纠正】你上一次没有返回可解析的 JSON。请只输出一个 JSON 对象（含 scenes 数组），紧凑完整，不要解释文字或代码块。' : '';
-        const raw = await rawJsonReply(cfg2, sys, user + remind, 6000);
+        // U8-6：JSON 被截断（finish_reason=length）时改用「续写补尾」，不再整段重发
+        const raw = await rawJsonReply(cfg2, sys, user + remind, 6000, { maxAppend: 2 });
         const obj = extractJsonObject(raw);
         const got = (obj && Array.isArray(obj.scenes)) ? obj.scenes : (Array.isArray(obj) ? obj : []);
+        if (obj && !got.length) { arr = []; break; }   // U8-1：JSON 合法但本段无幕（纯设定/附录文字）→ 合法空结果，不重试
         if (!got.length) throw new Error('未返回 scenes 数组');
         arr = got;
       } catch (e) {
         if (String((e && e.message) || e).indexOf('AI_TASK_CANCELLED') === 0) throw e; // 用户取消：立即上抛
+        if (e && e.budget) break;                      // U8-3：请求预算用尽，立即放弃
         if (attempt >= 3) break;
-        await new Promise(r => setTimeout(r, 500 * attempt));
+        // U8-5：退避遵循上游 Retry-After
+        await new Promise(r => setTimeout(r, aiBackoffMs((e && e.status) || 0, attempt, (e && e.retryAfterMs) || 0)));
       }
     }
     return arr;
@@ -2272,8 +2458,8 @@ async function breakdownScenario(cfg, text, settings, opts) {
    * 既保住跨段续写一致性（后一波能看到前一波全部结果），又稳定输出幕序（不因并发完成先后乱序）。
    * 并发度：显式传入优先；未传时按段数自适应——短文本（≤8 段）1 路串行避免浪费，
    * 长文本自动扩到最多 4 路（9~16 段 2 路 / 17~24 段 3 路 / 25+ 段 4 路）。 */
-  const SC_CONC = Math.max(1, Math.min(4,
-    Number(opts && opts.concurrency) || Math.min(4, Math.max(1, Math.ceil(chunks.length / 8)))));
+  const SC_CONC = Math.max(1, Math.min(3,   // U8-5：并发上限 4→3，降低同 Key 限流概率
+    Number(opts && opts.concurrency) || Math.min(3, Math.max(1, Math.ceil(chunks.length / 8)))));
   const workChunk = async (c) => {
     // A-4 补跑：非目标段直接沿用既有结果，不再消耗 token（保持同段切分，幕号不重排）
     if (only && prev && !only.has(c) && Array.isArray(prev[c])) {
@@ -2282,7 +2468,8 @@ async function breakdownScenario(cfg, text, settings, opts) {
     const lastPlot = scenes.length ? sanitizeStr(scenes[scenes.length - 1] && scenes[scenes.length - 1].plot, 300) : '';
     const ctx = buildContinueCtx(c, chunks.length, roll, lastPlot);
     const user = '【团本正文' + (chunks.length === 1 ? '' : ' · 第 ' + (c + 1) + ' / ' + chunks.length + ' 部分') + '】\n' + chunks[c] + ctx;
-    let arr = await tryChunk(user);
+    // U8-7：首块用完整系统提示（建立分幕细则），续块用精简版（一致性由锚点负责）
+    let arr = await tryChunk(user, c === 0 ? sysFull : sysLite);
     // 主块多次失败 → 降粒度切成子块逐个重试，几乎不再整段缺失；子块也失败才计 failed
     if (!arr && chunks[c].length > SC_SUB_CHUNK) {
       const subs = splitByStructure(chunks[c], SC_SUB_CHUNK, SC_SUB_OVERLAP);
@@ -2292,7 +2479,7 @@ async function breakdownScenario(cfg, text, settings, opts) {
         const prevPlot = subScenes.length ? sanitizeStr(subScenes[subScenes.length - 1] && subScenes[subScenes.length - 1].plot, 300) : lastPlot;
         const subUser = '【团本正文 · 第 ' + (c + 1) + ' / ' + chunks.length + ' 部分之 ' + (sIdx + 1) + '】\n' + subs[sIdx]
           + buildContinueCtx(c, chunks.length, roll, prevPlot);
-        const subArr = await tryChunk(subUser);
+        const subArr = await tryChunk(subUser, (c === 0 && sIdx === 0) ? sysFull : sysLite);
         if (subArr) for (const s of subArr) subScenes.push(s);
         else subFailed++;
       }
@@ -2306,10 +2493,11 @@ async function breakdownScenario(cfg, text, settings, opts) {
     const results = await Promise.all(Array.from({ length: end - start }, (_, k) => workChunk(start + k)));
     // 波内按块序归并：保证幕序稳定，且后一波能看到前一波全部结果（滚动锚点一致）
     for (const r of results) {
-      if (r && r.arr && r.arr.length) {
-        for (const s of r.arr) scenes.push(s);
+      if (r && Array.isArray(r.arr)) {
+        // U8-1：r.arr 为空数组（本段合法无幕）也算成功——不重试、不计失败
+        if (r.arr.length) for (const s of r.arr) scenes.push(s);
         chunkScenes[r.c] = r.arr;
-        if (!r.reused) mergeRoll(roll, r.arr);
+        if (!r.reused && r.arr.length) mergeRoll(roll, r.arr);
       } else {
         failed++;
         failedIdx.push(r.c);
@@ -2394,4 +2582,4 @@ async function regenerateScene(cfg, text, scenes, index, opts) {
   return { ok: true, scene: n, usage: usageByMark(mark) };
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, ensureFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, regenerateScene, extractScriptBody, usageLog, usageByMark, healthStats, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, mergeRoll, buildContinueCtx };
+module.exports = { DEFAULT_FIELDS, defaultFields, ensureFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, localRelationCandidates, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, regenerateScene, extractScriptBody, usageLog, usageByMark, healthStats, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, mergeRoll, buildContinueCtx };
