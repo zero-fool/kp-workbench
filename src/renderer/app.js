@@ -956,6 +956,18 @@
     /* B-3 服务商健康度：按模型汇总最近窗口请求数/成功率/平均延迟/最近状态 */
     let health = null;
     try { if (window.api && window.api.healthStats) { const hr = await window.api.healthStats(1); health = (hr && hr.ok) ? hr.health : null; } } catch (_) { health = null; }
+    /* U5-4 用量报表：按任务/日期/模型聚合（主进程一次算好，渲染层只管展示与导出） */
+    let report = null;
+    try { if (window.api && window.api.aiUsageReport) report = await window.api.aiUsageReport(); } catch (_) { report = null; }
+    const uCost = (r) => ((r.promptTokens || 0) / 1e6 * budget.inPrice + (r.completionTokens || 0) / 1e6 * budget.outPrice);
+    const repRows = (dim, rows) => (rows || []).map(r => `<tr>
+        <td style="padding:5px 8px">${esc(r.key || '未知')}</td>
+        <td style="padding:5px 8px">${r.calls}${r.errs ? ` <span class="hint">（败 ${r.errs}${r.timeouts ? ' / 超时 ' + r.timeouts : ''}）</span>` : ''}</td>
+        <td style="white-space:nowrap;padding:5px 8px">${fmtNum(r.promptTokens)} / ${fmtNum(r.completionTokens)} / <b>${fmtNum(r.totalTokens)}</b></td>
+        <td style="white-space:nowrap;padding:5px 8px">${fmtClock(r.msSum)}</td>
+        <td style="white-space:nowrap;padding:5px 8px">${aiMoney(uCost(r))}</td>
+      </tr>`).join('');
+    const repTable = (head, rows) => (rows ? `<table class="tbl" style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr>${head.map(h => `<th style="text-align:left;padding:5px 8px">${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>` : '<div class="hint" style="padding:4px 2px">暂无数据</div>');
     const w = (S.settings && S.settings.aiUsageWindow) || 3600e3;
     /* U2-5：首次打开时按当前配置的模型自动猜一个价格预设，省得用户手填 */
     const budget = aiBudgetCfg();
@@ -1024,6 +1036,19 @@
           </tr>`).join('')}
         </tbody></table>
       </details>` : ''}
+      <details class="ai-budget-card" style="margin-top:8px">
+        <summary>📊 用量报表（按任务 / 按日期 / 按模型）</summary>
+        <div class="note" style="margin:8px 0">对当前用量日志做多维聚合：看哪类任务最烧 token、哪天用得最多。费用按上方单价设置估算；日志最多保留最近 500 条请求。</div>
+        <div class="hint" style="margin:6px 0 2px">按任务类型</div>
+        ${repTable(['任务', '调用', 'token（入/出/总）', '总耗时', '估算费用'], repRows('task', report && report.byTask))}
+        <div class="hint" style="margin:10px 0 2px">按日期（最新在前）</div>
+        ${repTable(['日期', '调用', 'token（入/出/总）', '总耗时', '估算费用'], repRows('day', report && report.byDay))}
+        <div class="hint" style="margin:10px 0 2px">按模型</div>
+        ${repTable(['模型', '调用', 'token（入/出/总）', '总耗时', '估算费用'], repRows('model', report && report.byModel))}
+        <div class="toolbar" style="margin-top:10px">
+          <button onclick="WB.aiUsageExportCsv()">⤓ 导出 CSV（Excel 可直开）</button>
+        </div>
+      </details>
       <div class="hint" style="margin-bottom:6px">最近明细（时间倒序，最多 500 条）：</div>
       <div style="max-height:44vh;overflow:auto;border:1px solid var(--line);border-radius:10px">
         <table class="tbl" style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:5px 8px">时间</th><th style="text-align:left;padding:5px 8px">任务</th><th style="text-align:left;padding:5px 8px">耗时</th><th style="text-align:left;padding:5px 8px">token(入/出/总)</th><th style="text-align:left;padding:5px 8px">状态</th></tr></thead><tbody>${listRows}</tbody></table>
@@ -1037,6 +1062,27 @@
   }
   async function aiUsageSetWindow(ms) { (S.settings.aiUsageWindow = ms); try { if (window.api && window.api.aiUsageReset) await window.api.aiUsageReset(ms === 0 ? 86400e6 : ms); } catch (_) {} persist(); toast('统计时段已切换'); aiOpenUsagePanel(); }
   async function aiUsageResetPanel() { try { if (window.api && window.api.aiUsageReset) await window.api.aiUsageReset(0); } catch (_) {} _aiBudgetWarned.level = 0; aiUsageBadgeRefresh(true); toast('已清零本轮统计'); aiOpenUsagePanel(); }
+  /* U5-4 用量报表 CSV 导出：任务/日期/模型三个维度一表导出，带 BOM，Excel 直接打开不乱码 */
+  async function aiUsageExportCsv() {
+    let rep = null;
+    try { if (window.api && window.api.aiUsageReport) rep = await window.api.aiUsageReport(); } catch (_) { rep = null; }
+    const dims = ['byTask', 'byDay', 'byModel'];
+    if (!rep || !dims.some(d => (rep[d] || []).length)) { toast('暂无用量数据可导出', 'err'); return; }
+    const b = aiBudgetCfg();
+    const cost = (r) => ((r.promptTokens || 0) / 1e6 * (b.inPrice || 0) + (r.completionTokens || 0) / 1e6 * (b.outPrice || 0));
+    const qq = (s) => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
+    const lines = [['维度', '名称', '调用次数', '失败', '超时', '失败估算输入token', '输入token', '输出token', '总token', '总耗时ms', '估算费用(元)'].map(qq).join(',')];
+    const dimName = { byTask: '任务', byDay: '日期', byModel: '模型' };
+    for (const d of dims) for (const r of (rep[d] || [])) {
+      lines.push([dimName[d], r.key, r.calls, r.errs, r.timeouts, r.estPromptTokens, r.promptTokens, r.completionTokens, r.totalTokens, r.msSum, cost(r).toFixed(4)].map(qq).join(','));
+    }
+    lines.push('');
+    lines.push(qq('# 导出时间 ' + new Date().toLocaleString('zh-CN') + '；费用按当前单价设置估算（入 ' + (b.inPrice || 0) + ' / 出 ' + (b.outPrice || 0) + ' 元每百万 token）；用量日志最多保留最近 500 条请求'));
+    const r2 = (window.api && window.api.saveCsv) ? await window.api.saveCsv('ai-usage-report.csv', lines.join('\r\n')) : null;
+    if (r2 && r2.ok) toast('已导出：' + r2.path, 'ok');
+    else if (r2 && r2.canceled) {}
+    else toast('导出失败' + (r2 && r2.error ? '：' + r2.error : ''), 'err');
+  }
   function aiErrText(e) { return eiAIErr(e).msg; }
   function val(rid) { const e = q(rid); return e ? e.value : ''; }
   function fmtBytes(b) { const n = Number(b) || 0; if (n < 1024) return n + ' B'; if (n < 1048576) return (n / 1024).toFixed(1) + ' KB'; if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB'; return (n / 1073741824).toFixed(2) + ' GB'; }
@@ -2659,6 +2705,25 @@
   }
   function paintChat() { refreshChat(); }
   function renderInline(s) { return esc(s).replace(/\n/g, '<br>'); }
+  /* U5-1：流式逐字上屏——把「思考中…」指示器替换为流式文本（主进程已 80ms 节流）；
+   * 最终文本仍以 aiChat 返回的 reply.content 为准（会做人设后缀等后处理）。 */
+  function aiStreamPaint() {
+    const txt = String(S.aiStreamText || '');
+    for (const id of ['chatlog', 'drawerLog']) {
+      const log = document.getElementById(id);
+      if (!log) continue;
+      let el = log.querySelector('.think-ind');
+      if (!el) {
+        if (!txt) continue;
+        log.insertAdjacentHTML('beforeend', '<div class="msg ai think-ind streaming"></div>');
+        el = log.querySelector('.think-ind');
+      }
+      if (!txt) { el.textContent = '思考中…'; continue; }
+      el.classList.add('streaming');
+      el.textContent = txt;
+      log.scrollTop = log.scrollHeight;
+    }
+  }
   async function aiSend(text) {
     if (S.aiBusy) return;
     const t = (typeof text === 'string' && text.length) ? text : ((q('drawerIn') ? q('drawerIn').value : '') || (q('aiIn') ? q('aiIn').value : ''));
@@ -2683,7 +2748,7 @@
     const msg = { role: 'user', content };
     if (atts) { msg.files = atts; msg.fileReq = fileReq; }
     CH.push(msg);
-    S.aiBusy = true; refreshChat();
+    S.aiBusy = true; S.aiStreamText = ''; refreshChat();
     try {
       const r = await window.api.aiChat(governedChat()); // U3-6：只发送裁剪后的历史
       CH.push({ role: 'assistant', content: r.content });
@@ -2691,7 +2756,7 @@
       const er = eiAIErr(e);
       CH.push({ role: 'assistant', content: '【AI 请求失败】' + er.msg + (er.cfg ? '（点上方⚙可直达「AI 配置」）' : '') });
     }
-    S.aiBusy = false; refreshChat();
+    S.aiBusy = false; S.aiStreamText = ''; refreshChat();
     persistChat();
   }
   /* 把「待发送附件 + 用户附加要求」组装成发给 AI 的文本：
@@ -3456,19 +3521,26 @@
     const pasted = (!files.length) ? _impRawVal() : '';
     if (!files.length && !pasted) { toast('请先选择文件或粘贴内容', 'err'); return; }
     closeModal();
-    const merged = { entities: {} }; KINDS.forEach(k => merged.entities[k] = []);
+    const merged = { entities: {}, segs: [] }; KINDS.forEach(k => merged.entities[k] = []);
     try {
       if (files.length) {
         toast('正在 AI 拆分 ' + files.length + ' 个文件…');
-        for (const imp of files) {
+        let segBase = 0; // U5-5：多文件段号错开，原文对照统一编号
+        for (let fi = 0; fi < files.length; fi++) {
+          const imp = files[fi];
           const src = imp.textPath ? { path: imp.textPath, preview: imp.preview || '' } : { preview: imp.preview || '' };
           const r = await runSplit(src, strict);
           if (r && r.entities) for (const k of KINDS) merged.entities[k] = merged.entities[k].concat((r.entities[k] || []));
+          if (r && Array.isArray(r.segs)) {
+            for (const s of r.segs) merged.segs.push({ i: segBase + s.i, len: s.len, text: s.text, file: imp.name || ('文件' + (fi + 1)) });
+            segBase += r.segs.length;
+          }
         }
         S.importFiles = null; S.importFile = null;
       } else {
         const r = await runSplit({ preview: pasted }, strict);
         if (r && r.entities) merged.entities = r.entities;
+        if (r && Array.isArray(r.segs)) merged.segs = r.segs.slice();
       }
       presentSplitPreview(merged, files.length || 1);
     } catch (e) { toast('AI 拆分失败：' + aiErrText(e), 'err'); }
@@ -3481,11 +3553,72 @@
     S.scriptPreview = r; S.splitSource = 'AI 拆分登记';
     const mask = q('modalMask'); const box = q('modalBox');
     box.innerHTML = `<h3>AI 拆分登记 · 请确认</h3>
-      <div class="note">已把${count > 1 ? count + ' 个文件 / ' : ''}导入内容拆解为下方 7 类资料卡。请勾选要写入的条目（默认全选），确认后才写入工作台；与已有同名条目会自动跳过、不会重复。</div>
+      <div class="note">已把${count > 1 ? count + ' 个文件 / ' : ''}导入内容拆解为下方 7 类资料卡。请勾选要写入的条目（默认全选），确认后才写入工作台；与已有同名条目会自动跳过、不会重复。
+      ${r.segs && r.segs.length ? '点条目上的 <b>📍段n</b> 可展开原文对照（实体名在原文中以高亮标出）；「⇄」可把条目改归到其他类别。' : ''}</div>
+      <div id="splitPeek" hidden style="max-height:34vh;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px;font-size:13px;line-height:1.7;white-space:pre-wrap"></div>
       <div id="scriptOut">${previewHTML(r)}</div>
       <div class="foot"><button class="ghost" onclick="WB.closeModal()">取消</button>
+      <button class="ghost" onclick="WB.splitExportSample()">⤓ 导出为评测样本</button>
       <button onclick="WB.commitScript()">✓ 确认写入选中条目</button></div>`;
     mask.hidden = false;
+  }
+  /* U5-5 拆分校对：原文对照 + 来源句高亮。
+   * 高亮是零 token 的本地启发式：在来源段原文中定位实体名（含别名title）出现的位置，
+   * 命中处包 <mark>；未命中则整段原样展示（AI 概括改写找不到原句也属正常）。 */
+  function splitHighlightSeg(text, names) {
+    const ns = (names || []).map(n => String(n || '').trim()).filter(n => n.length >= 2).sort((a, b) => b.length - a.length);
+    let html = '', rest = String(text || '');
+    while (rest.length) {
+      let hit = null, hitAt = -1;
+      for (const n of ns) { const i = rest.indexOf(n); if (i >= 0 && (hitAt < 0 || i < hitAt)) { hit = n; hitAt = i; } }
+      if (!hit) { html += esc(rest); break; }
+      html += esc(rest.slice(0, hitAt)) + '<mark style="background:var(--accent-soft,#ffe9a8);border-radius:3px;padding:0 2px">' + esc(hit) + '</mark>';
+      rest = rest.slice(hitAt + hit.length);
+    }
+    return html;
+  }
+  function splitPeekSeg(n) {
+    const r = S.scriptPreview; const box = q('splitPeek');
+    if (!r || !box) return;
+    const seg = (r.segs || []).find(s => s.i === n);
+    if (!seg) { toast('找不到第 ' + n + ' 段原文', 'err'); return; }
+    // 收集该段的实体名（含 title），供高亮
+    const names = [];
+    for (const k of KINDS) for (const it of (r.entities[k] || [])) {
+      const segs = Array.isArray(it._segs) && it._segs.length ? it._segs : (it._seg ? [it._seg] : []);
+      if (segs.indexOf(n) >= 0) { const nm = it.name || it.title; if (nm) names.push(nm); }
+    }
+    box.hidden = false;
+    box.innerHTML = `<div class="hint" style="margin-bottom:6px">📄 第 ${seg.i} 段 · ${seg.len} 字${seg.file ? ' · 来自「' + esc(seg.file) + '」' : ''}　<button class="ghost mini" onclick="WB.splitPeekClose()">收起</button></div>
+      <div style="white-space:pre-wrap">${splitHighlightSeg(seg.text, names) || '<span class="hint">（空段）</span>'}</div>`;
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  function splitPeekClose() { const box = q('splitPeek'); if (box) box.hidden = true; }
+  /* U5-5 一键改归属：把预览条目从一类移到另一类（如 AI 误判 NPC → 地区），就地重绘预览 */
+  function splitMoveTo(fromKind, idx, toKind) {
+    const r = S.scriptPreview;
+    if (!r || !toKind || toKind === fromKind || !KINDS.includes(toKind)) { paintScriptPreview(r); return; }
+    const arr = r.entities[fromKind] || [];
+    if (idx < 0 || idx >= arr.length) { paintScriptPreview(r); return; }
+    const [it] = arr.splice(idx, 1);
+    (r.entities[toKind] || (r.entities[toKind] = [])).unshift(it);
+    persist(); // 预览数据不落盘，这里只为走统一的保存节流；commit 时才真正写卡
+    paintScriptPreview(r);
+    toast('已把「' + (it.name || it.title || '未命名') + '」改归「' + DATA_TYPE[toKind] + '」', 'ok');
+  }
+  /* U5-5 样本反哺：把本次「原文 + 校对后的期望实体」导出为评测样本 JSON，
+   * 供 tools/ai-eval.js --samples 离线/在线跑分，让每次校对都变成回归资产。 */
+  async function splitExportSample() {
+    const r = S.scriptPreview; if (!r) return;
+    const text = (r.segs || []).map(s => s.text).join('\n\n');
+    if (!text.trim()) { toast('本次拆分没有保留原文（旧任务或空输入），无法导出样本', 'err'); return; }
+    const expect = {};
+    for (const k of KINDS) expect[k] = (r.entities[k] || []).map(x => x.name || x.title || '').filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
+    const sample = { id: 'user-' + new Date().toISOString().slice(0, 19).replace(/[:T-]/g, ''), note: '拆分校对导出（U5-5）', text, expect };
+    const sr = (window.api && window.api.saveText) ? await window.api.saveText('ai-split-sample-' + sample.id + '.json', JSON.stringify(sample, null, 2)) : null;
+    if (sr && sr.ok) toast('样本已导出：' + sr.path + '（可交给 tools/ai-eval.js --samples 跑分）', 'ok');
+    else if (sr && sr.canceled) {}
+    else toast('导出失败', 'err');
   }
   /* 大文件：交给主进程分块 AI 分析，汇总为结构化整理文本写入资料卡 */
   async function analyzeFile(kind, imp) {
@@ -3861,6 +3994,15 @@
           <div class="row"><label>温度 temperature</label><input id="aif_temp" type="number" step="0.1" min="0" max="2" value="${ai.temperature != null ? ai.temperature : 0.6}"></div>
           <div class="row"><label>超时（秒）</label><input id="aif_to" type="number" min="10" value="${ai.timeoutMs != null ? Math.round(ai.timeoutMs / 1000) : 120}"></div>
         </div>
+        <div class="row" style="margin-top:10px"><label>备用模型（容灾，可留空）${helpTip('ai', '主模型重试耗尽后自动切换备用重试一次')}</label>
+          <div class="formgrid">
+            <div class="row"><label>备用 baseUrl</label><input id="aif_fb_base" value="${esc((ai.fb && ai.fb.baseUrl) || '')}" placeholder="可留空，如 https://api.siliconflow.cn/v1"></div>
+            <div class="row"><label>备用 model</label><input id="aif_fb_model" value="${esc((ai.fb && ai.fb.model) || '')}" placeholder="可留空"></div>
+          </div>
+          <div class="keywrap"><input id="aif_fb_key" type="password" value="${esc((ai.fb && ai.fb.apiKey) || '')}" autocomplete="off" placeholder="备用 API Key（三项填齐才启用容灾）">
+            <button class="ghost small" type="button" onclick="WB.toggleFbKey()" title="显示/隐藏密钥">👁</button></div>
+          <div class="hint">主模型网络错误 / 超时 / 限流 / 5xx 时自动换备用端点重试一次；请求次数与费用预算对备用同样生效。</div>
+        </div>
         <div class="foot" style="margin-top:12px">
           <button class="ghost" onclick="WB.aiTestCfg()">测试连通</button>
           <span class="grow"></span>
@@ -3923,6 +4065,9 @@
       longMemory: !!(q('aif_longMemory') && q('aif_longMemory').checked),
       useUserPrefs: (q('aif_useUserPrefs') && q('aif_useUserPrefs').checked) !== false
     });
+    /* U5-2：备用模型（容灾）——三项填齐才保存为有效备用连接 */
+    const fbBase = val('aif_fb_base').trim().replace(/\/+$/, ''), fbModel = val('aif_fb_model').trim(), fbKey = val('aif_fb_key').trim();
+    S.settings.ai.fb = (fbBase && fbModel && fbKey) ? { baseUrl: fbBase, apiKey: fbKey, model: fbModel, timeoutMs: toS * 1000 } : null;
     persist(); toast('AI 连接与行为配置已保存', 'ok'); switchView('aiconf');
   }
 
@@ -4200,6 +4345,10 @@
     const el = q('aif_key'); if (!el) return;
     el.type = (el.type === 'password') ? 'text' : 'password';
   }
+  function toggleFbKey() {   // U5-2：备用模型 Key 显示/隐藏
+    const el = q('aif_fb_key'); if (!el) return;
+    el.type = (el.type === 'password') ? 'text' : 'password';
+  }
 
   /* ========== 记录润色 → 导出 txt ========== */
   function renderPolish() {
@@ -4322,7 +4471,11 @@
   function encData() { if (!S.data.entities) S.data.entities = {}; if (!Array.isArray(S.data.entities.encounters)) S.data.entities.encounters = []; return S.data.entities.encounters; }
   function encCur() { return encData().find(x => x._open) || null; }
   /* 遭遇操作后的重绘入口：开团模式内嵌了遭遇面板，需就地刷新驾驶舱而非切回遭遇视图 */
-  function encRefresh() { if (S.view === 'gm' && typeof renderGM === 'function') renderGM(); else renderEncounter(); }
+  function encRefresh() {
+    if (S.view === 'gm' && typeof renderGM === 'function') renderGM(); else renderEncounter();
+    /* U7-3：遭遇数据变化（回合/血量/状态/令牌绑定）时，若地图画板正开着就同步刷新战斗令牌层 */
+    if (mapCanvas() && S.mapOpenId) mapDraw();
+  }
 
   function renderEncounter() {
     const list = encData();
@@ -4390,6 +4543,7 @@
           <span class="hint">${esc(u.kindLabel || u.kind || '')}</span>
           <span class="grow"></span>
           ${(u.refId && S.data.entities[u.refKind] && S.data.entities[u.refKind].find(x => x.id === u.refId)) ? `<button class="ghost small" onclick="WB.encGoRef('${escJs(u.refKind)}','${escJs(u.refId)}')">查看卡</button>` : ''}
+          <button class="ghost small" onclick="WB.encBindToken('${escJs(e.id)}','${escJs(u.id)}')" title="${u.mkId ? '已绑定地图令牌：地图上显示血条/倒下置灰/回合高亮，点击管理' : '绑定到地图令牌（血条 / 倒下置灰 / 当前行动者高亮）'}">${u.mkId ? '📍 已绑' : '📍 令牌'}</button>
           <button class="ghost small" onclick="WB.encDelUnit('${escJs(e.id)}','${escJs(u.id)}')">✕</button></div>
         <div class="enc-hpbar"><div class="enc-hpfill" style="width:${hpPct}%"></div></div>
         <div class="enc-unit-body">
@@ -4414,6 +4568,7 @@
     let html = `<div class="setcard enc-board">
       <div class="wizard-head"><b>当前遭遇：${esc(e.name || '未命名遭遇')}</b>
         <span class="grow"></span>
+        ${e.mapId ? `<span class="hint" title="该遭遇已与地图联动：绑定单位的令牌会在地图上显示血条/倒下置灰/回合高亮">🗺 ${esc((mapFind(e.mapId) || {}).name || '地图')}<button class="ghost small" onclick="WB.encGoMap('${escJs(e.id)}')" style="margin-left:4px">去地图 ▸</button></span>` : ''}
         <label class="ai-toggle" title="开启后显示回合顺序与当前行动者"><input type="checkbox" id="encFlowOn" ${flowOn ? 'checked' : ''} onchange="WB.encSetFlow('${escJs(e.id)}', this.checked)"> 回合追踪</label>
         ${e.done ? `<b class="enc-badge ${e.done === 'win' ? 'done' : (e.done === 'fail' ? 'fail' : '')}">${e.done === 'win' ? '胜利' : (e.done === 'fail' ? '败北' : '弃置')}</b>` : ''}
         <button class="ghost small" onclick="WB.closeEnc()">收起</button>
@@ -4580,6 +4735,86 @@
     closeModal();
     S.view = 'dash';
     goToEntity(kind, refId);
+  }
+
+  /* ---- U7-3 地图令牌联动：绑定管理 ---- */
+  /* 弹窗：为遭遇单位选择地图与令牌（既有标记或新建） */
+  function encBindToken(encId, unitId) {
+    const e = encData().find(x => x.id === encId); if (!e) return;
+    const u = (e.units || []).find(x => x.id === unitId); if (!u) return;
+    const maps = mapsData();
+    if (!maps.length) { toast('还没有地图。先在「地图」里新建一张，再回来绑定令牌', 'err'); return; }
+    const render = (selMapId) => {
+      const m = mapFind(selMapId);
+      const mkOpts = m ? (m.markers || []).map((mk, i) =>
+        `<option value="${escJs(mk.id)}" ${u.mkId === mk.id ? 'selected' : ''}>${esc(mk.label || '标记' + (i + 1))}（${esc(mapTypeInfo(mk.type)[1])}）</option>`
+      ).join('') : '<option value="">（该地图还没有标记）</option>';
+      const mask = q('modalMask'); const box = q('modalBox');
+      box.innerHTML = `<h3>📍 绑定战斗令牌</h3>
+        <div class="note">把「${esc(u.name || '未命名单位')}」绑到地图令牌上：地图上会显示<b>血条</b>、倒下时<b>置灰</b>、开启回合追踪后<b>高亮当前行动者</b>。可绑到已有标记（如怪物标记、NPC 标记），也可新建一个令牌。</div>
+        <div class="formgrid">
+          <div class="row full"><label>地图</label><select id="encTkMap">${maps.map(mm => `<option value="${escJs(mm.id)}" ${mm.id === selMapId ? 'selected' : ''}>${esc(mm.name)}</option>`).join('')}</select></div>
+          <div class="row full"><label>令牌</label><select id="encTkMk"><option value="new">✚ 新建令牌（放在地图中心附近）</option>${mkOpts}</select></div>
+        </div>
+        <div class="foot">
+          ${u.mkId ? `<button class="danger" onclick="WB.encUnbindToken('${escJs(encId)}','${escJs(unitId)}')">解除绑定</button>` : ''}
+          <span class="grow"></span>
+          <button class="ghost" onclick="WB.closeModal()">取消</button>
+          <button onclick="WB.encSaveToken('${escJs(encId)}','${escJs(unitId)}')">保存绑定</button>
+        </div>`;
+      const sel = q('encTkMap');
+      if (sel) sel.onchange = () => render(sel.value);
+      mask.hidden = false;
+    };
+    render(e.mapId || (maps.some(mm => mm.id === S.mapOpenId) ? S.mapOpenId : maps[0].id));
+  }
+  function encSaveToken(encId, unitId) {
+    const e = encData().find(x => x.id === encId); if (!e) return;
+    const u = (e.units || []).find(x => x.id === unitId); if (!u) return;
+    const mapId = (q('encTkMap') && q('encTkMap').value) || '';
+    const mkChoice = (q('encTkMk') && q('encTkMk').value) || 'new';
+    if (!mapId) { toast('请先选择地图', 'err'); return; }
+    const m = mapFind(mapId); if (!m) { toast('所选地图不存在', 'err'); return; }
+    e.mapId = mapId;
+    let mk = null;
+    if (mkChoice === 'new' || !mkChoice) {
+      /* 新建令牌：地图中心附近排布（每行 5 个，间距 40px），类型按单位来源推断 */
+      const n = (e.units || []).filter(x => x.mkId).length;
+      const type = u.kind === 'mobs' ? 'mob' : (u.kind === 'pcs' || u.kind === 'npcs' ? 'npc' : 'plot');
+      mk = { id: 'mk-' + uid(), type, label: u.name || '单位', note: '遭遇「' + (e.name || '') + '」的战斗令牌', x: Math.round(m.imgW / 2 + (n % 5 - 2) * 40), y: Math.round(m.imgH / 2 + (Math.floor(n / 5) % 5 - 2) * 40) };
+      m.markers.push(mk);
+    } else {
+      mk = (m.markers || []).find(x => x.id === mkChoice) || null;
+      if (!mk) { toast('所选标记不存在，请重选', 'err'); return; }
+      /* 一个令牌只绑一个单位：抢绑时先解除其它单位（含其它遭遇）的同图绑定 */
+      for (const oe of encData()) {
+        if (oe.mapId !== mapId) continue;
+        for (const ou of (oe.units || [])) if (ou !== u && ou.mkId === mk.id) ou.mkId = '';
+      }
+    }
+    u.mkId = mk.id;
+    closeModal();
+    persist(); encRefresh();
+    toast('已绑定令牌「' + (mk.label || '') + '」（地图：' + (m.name || '') + '）', 'ok');
+  }
+  function encUnbindToken(encId, unitId) {
+    const e = encData().find(x => x.id === encId); if (!e) return;
+    const u = (e.units || []).find(x => x.id === unitId); if (!u) return;
+    u.mkId = '';
+    if (!(e.units || []).some(x => x.mkId)) e.mapId = '';
+    closeModal();
+    persist(); encRefresh();
+    toast('已解除令牌绑定', 'ok');
+  }
+  /* 从遭遇面板跳到联动地图画板 */
+  function encGoMap(encId) {
+    const e = encData().find(x => x.id === encId);
+    const m = e && e.mapId ? mapFind(e.mapId) : null;
+    if (!m) { toast('该遭遇尚未绑定地图令牌', 'err'); return; }
+    S.mapOpenId = m.id;
+    S.view = 'mapsboard';
+    document.querySelectorAll('#sidebar .nav').forEach(n => n.classList.toggle('active', n.dataset.view === 'maps'));
+    renderMapBoard(m);
   }
 
   /* ---- 回合控制 ---- */
@@ -7231,6 +7466,19 @@
     }
     return null;
   }
+  /* U7-3 战斗令牌联动：mkId → {u, e}。遭遇 e.mapId 指向地图，单位 u.mkId 指向该图上的标记；
+   * 从遭遇侧单向遍历（遭遇数量少），标记删除时反向清绑（见 mapDelMarker）。 */
+  function mapEncLink(m) {
+    const byMk = new Map();
+    if (!m) return byMk;
+    for (const e of encData()) {
+      if (!e || e.mapId !== m.id) continue;
+      for (const u of (e.units || [])) {
+        if (u && u.mkId) byMk.set(u.mkId, { u, e });
+      }
+    }
+    return byMk;
+  }
   function drawMapLayers(ctx, m, sc_) {
     const sc = sc_ == null ? _map.k : sc_;
     /* 底图绘制在“世界坐标系”（0,0..imgW,imgH）下，与网格/标记/迷雾同源，
@@ -7289,18 +7537,59 @@
       ctx.strokeRect(cx - rx, cy - ry, rx * 2, ry * 2);
       ctx.setLineDash([]);
     }
+    /* U7-3 战斗令牌联动：收集绑定到本地图的遭遇单位（遭遇 e.mapId → 本图，单位 u.mkId → 标记） */
+    const encByMk = mapEncLink(m);
     for (const mk of (m.markers || [])) {
       const t = mapTypeInfo(mk.type);
+      const link = encByMk.get(mk.id);
+      const lu = link ? link.u : null;
+      const le = link ? link.e : null;
+      const down = lu && (((lu.maxHp || 0) > 0 && (lu.curHp || 0) <= 0) || (lu.status || []).indexOf('down') >= 0);
+      const isCur = !!(lu && le && le.flow && le.flow.active && le.cur === lu.id);
       ctx.save();
+      if (down) ctx.globalAlpha = 0.45; // 倒下置灰
       ctx.translate(mk.x, mk.y);
+      /* 当前行动者：金色双环高亮（回合追踪开启时） */
+      if (isCur) {
+        ctx.beginPath(); ctx.arc(0, 0, 19 / sc, 0, Math.PI * 2);
+        ctx.strokeStyle = '#ffd97a'; ctx.lineWidth = 2.5 / sc; ctx.stroke();
+        ctx.beginPath(); ctx.arc(0, 0, 23 / sc, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,217,122,0.45)'; ctx.lineWidth = 1.5 / sc; ctx.stroke();
+      }
       ctx.beginPath(); ctx.arc(0, 0, 12 / sc, 0, Math.PI * 2);
-      ctx.fillStyle = t[2]; ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 2 / sc; ctx.stroke();
+      ctx.fillStyle = down ? '#6a6a6a' : t[2]; ctx.fill();
+      ctx.strokeStyle = isCur ? '#ffd97a' : 'rgba(0,0,0,0.35)'; ctx.lineWidth = 2 / sc; ctx.stroke();
       ctx.fillStyle = '#fff';
       ctx.font = 'bold ' + (13 / sc) + 'px sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(t[1].charAt(0), 0, 1 / sc);
+      ctx.fillText(down ? '✝' : t[1].charAt(0), 0, 1 / sc);
       ctx.restore();
+      /* 血条 + 当前行动者 ▶（倒下也显示血条，直观归零） */
+      if (lu) {
+        const maxHp = lu.maxHp || 0;
+        if (maxHp > 0) {
+          const pct = Math.max(0, Math.min(1, (lu.curHp || 0) / maxHp));
+          const w = 30 / sc, h = 5 / sc, bx = mk.x - w / 2, by = mk.y + 15 / sc;
+          ctx.save();
+          ctx.fillStyle = 'rgba(0,0,0,0.55)';
+          ctx.fillRect(bx - 1 / sc, by - 1 / sc, w + 2 / sc, h + 2 / sc);
+          ctx.fillStyle = pct > 0.5 ? '#4caf6e' : (pct > 0.25 ? '#e0a23d' : '#e05d5d');
+          ctx.fillRect(bx, by, w * pct, h);
+          ctx.fillStyle = 'rgba(255,255,255,0.92)';
+          ctx.font = (9 / sc) + 'px sans-serif';
+          ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+          ctx.fillText(Math.max(0, lu.curHp || 0) + '/' + maxHp, mk.x, by + h + 10 / sc);
+          ctx.restore();
+        }
+        if (isCur) {
+          ctx.save();
+          ctx.fillStyle = '#ffd97a';
+          ctx.font = 'bold ' + (13 / sc) + 'px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('▶', mk.x, mk.y - 20 / sc);
+          ctx.restore();
+        }
+      }
       if (mk.label) { ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.font = (11 / sc) + 'px sans-serif'; ctx.textAlign = 'left'; ctx.fillText(mk.label, mk.x + 16 / sc, mk.y - 10 / sc); }
     }
     /* 迷雾：多边形或椭圆，选中时描边 */
@@ -7619,6 +7908,11 @@
     const mk = m.markers.find(x => x.id === _map.editMk); if (!mk) return;
     if (!(await appConfirm('删除标记', '删除标记「' + (mk.label || '') + '」？'))) return;
     m.markers = m.markers.filter(x => x.id !== mk.id);
+    /* U7-3：删除标记时清掉遭遇侧的令牌绑定，避免悬空 mkId */
+    for (const oe of encData()) {
+      for (const ou of (oe.units || [])) if (ou.mkId === mk.id) ou.mkId = '';
+      if (!(oe.units || []).some(x => x.mkId)) oe.mapId = '';
+    }
     _map.editMk = null; _modalCancel = null;
     closeModal();
     mapPersist(); mapDraw();
@@ -9216,7 +9510,7 @@
     setViewSort, setViewSrc, setViewTpl, editSetTpl,
     aiUpload, aiExportLast, addLongMemory, delLongMemory, saveMemoModal, addModRule, delModRule,
     addUserPref, editUserPref, saveUserPrefModal, delUserPref,
-    aiImportLast, aiTestCfg, saveAIConf, applyAiPreset, polishRun, polishExport, polishExportMd, buildBattleReport, saveAppName, toggleAiKey,
+    aiImportLast, aiTestCfg, saveAIConf, applyAiPreset, polishRun, polishExport, polishExportMd, buildBattleReport, saveAppName, toggleAiKey, toggleFbKey,
     setAiGenType, aiGenForType, globalSearch, setGType, goToEntity,
     importContent, doImport, doImportAndIntegrate, aiIntegrate, aiGenForView, doSplitRegister,
     savePrompts, resetPrompt, promptVersionList, promptCompare, promptRestoreVersion,
@@ -9255,7 +9549,7 @@
     dsRefresh, dsBackupNow, dsOpenFolder, dsExportFull, dsImportFull, dsRestoreBackup, dsRestoreSnapshot,
     navBack, navForward, toggleWizard,
     openAiLedger, aiLandRevert, aiLandRevertAll,
-    aiCancelCurrent, aiAbortAll, aiOpenUsagePanel, aiUsageResetPanel, aiUsageSetWindow,
+    aiCancelCurrent, aiAbortAll, aiOpenUsagePanel, aiUsageResetPanel, aiUsageSetWindow, aiUsageExportCsv,
     aiBudgetSave, aiBudgetPresetApply,
     xrefOpen, xrefGo, consistencyOpen,
     tagJump, tagFilter, tagRenameModal, tagMergeModal, tagMergeInto, addTagGlobal,
@@ -9264,6 +9558,7 @@
     toggleCabinet, cabPick,
     encNew, encOpen, closeEnc, encDel, encSetFlow, encPull, encAddManual, encDelUnit, encHp, encToggleStatus,
     encNext, encPrev, encNextTo, encGoRef, encGoFromCard, encSettle,
+    encBindToken, encSaveToken, encUnbindToken, encGoMap,
     polishLogs, aiWriteScript, saveNarrStyle,
     statsExport, statsCopy,
     runlogRefresh, runlogFilter, runlogPickDay, runlogClearFilter, runlogExport, runlogOpen
@@ -10701,6 +10996,11 @@
     if (window.api && window.api.aiStatus && window.api.aiStatus.on) window.api.aiStatus.on(aiBusySet);
     /* 大文件 AI 分析整理进度：浮动进度条 */
     if (window.api && window.api.onImportProgress) window.api.onImportProgress(importProgressSet);
+    /* U5-1：AI 对话流式增量——逐字上屏（最终文本仍以 aiChat 返回值为准） */
+    if (window.api && window.api.onAiChatDelta) window.api.onAiChatDelta((text) => {
+      S.aiStreamText = String(text || '');
+      if (S.aiBusy) aiStreamPaint();
+    });
     /* AI 取消完成提示：当某任务被取消后广播过来，清掉繁忙态并明确告知，避免误以为还在执行 */
     if (window.api && window.api.aiCancelled && window.api.aiCancelled.on) window.api.aiCancelled.on((v) => {
       const n = (v && v.hit) || 0;

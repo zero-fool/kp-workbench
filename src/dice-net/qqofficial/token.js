@@ -29,6 +29,8 @@ class TokenKeeper {
   }
   botToken() { return this.get().then((t) => `QQBot ${t}`); }
   invalidate() { this.token = null; this.expireAt = 0; }
+  /* U7-2 鉴权到期提醒：当前令牌剩余毫秒数（无令牌时返回 0） */
+  remainingMs(at = this.now()) { return this.token ? Math.max(0, this.expireAt - at) : 0; }
 }
 
 module.exports = { TokenKeeper, TOKEN_URL };

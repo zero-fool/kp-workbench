@@ -795,6 +795,10 @@ button.ghost.small-secondary{opacity:.85}
 .rel-linelen{display:flex;align-items:center;gap:6px;flex:0 0 auto}
 .rel-linelen input[type=range]{width:110px;height:auto;accent-color:var(--accent);padding:0}
 .rel-linelen .hint{min-width:24px;text-align:right}
+/* U5-1：AI 对话流式上屏——打字光标 */
+.think-ind.streaming{white-space:pre-wrap;word-break:break-word}
+.think-ind.streaming::after{content:'▋';margin-left:2px;color:var(--accent);animation:kblink 0.9s steps(2) infinite}
+@keyframes kblink{0%,49%{opacity:1}50%,100%{opacity:0}}
 .rel-edge.off{opacity:.06;pointer-events:none}
 .rel-n-body.off{opacity:.08;pointer-events:none}
 .rel-node .rel-n-hit{pointer-events:none}

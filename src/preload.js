@@ -201,6 +201,8 @@ contextBridge.exposeInMainWorld('api', {
   analyzeImport: (...a) => aiGuard('analyzeImport', () => ipcRenderer.invoke('file:analyzeImport', ...a))(),
   /* 大文件 AI 分析整理进度广播：渲染层用于显示分块/合并进度条 */
   onImportProgress: (cb) => { ipcRenderer.on('import:progress', (_e, v) => cb(v)); },
+  /* U5-1：AI 对话流式增量广播——渲染层逐字上屏用（最终文本仍以 aiChat 的返回值为准） */
+  onAiChatDelta: (cb) => { ipcRenderer.on('ai:chatDelta', (_e, v) => cb(v && v.text || '')); },
   /* AI 忙闲广播：渲染层据此显示/隐藏「AI 处理中」提示（含当前在飞的任务类型） */
   aiStatus: {
     on: (cb) => { ipcRenderer.on('ai:busy', (_e, v) => cb(v)); }
@@ -212,6 +214,7 @@ contextBridge.exposeInMainWorld('api', {
   /* 用量面板：读取/重置本轮 AI 用量统计（token + 耗时） */
   aiUsage: () => ipcRenderer.invoke('ai:usage'),
   aiUsageReset: (bucketMs) => ipcRenderer.invoke('ai:usageReset', bucketMs),
+  aiUsageReport: () => ipcRenderer.invoke('ai:usageReport'),
   /* B-3 服务商健康度 + A-6 单幕重写后刷新每幕要点 txt */
   healthStats: (days) => ipcRenderer.invoke('ai:healthStats', days),
   saveSceneFiles: (scenes) => ipcRenderer.invoke('ai:saveSceneFiles', scenes),
@@ -235,6 +238,7 @@ contextBridge.exposeInMainWorld('api', {
   writeNewFile: (content) => ipcRenderer.invoke('store:writeNewFile', content),
   saveUpload: (name, content) => ipcRenderer.invoke('store:saveUpload', name, content),
   saveText: (filename, content) => ipcRenderer.invoke('store:saveText', filename, content),
+  saveCsv: (filename, content) => ipcRenderer.invoke('store:saveCsv', filename, content),
   openFolder: (p) => ipcRenderer.invoke('store:openPath', p),
   getFullText: (textPath) => ipcRenderer.invoke('file:getFullText', textPath),
   saveMarkdown: (filename, content) => ipcRenderer.invoke('store:saveMarkdown', filename, content),

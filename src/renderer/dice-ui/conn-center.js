@@ -12,12 +12,32 @@
 
   function renderStatusLight(st) {
     if (!st || !st.state) return '<span class="dice-light off">状态未知</span>';
+    let out;
     if (st.lastError || st.reconnects > 0) {
-      return `<span class="dice-light recon">重连中（${st.reconnects}）${st.lastError ? '：' + st.lastError : ''}</span>`;
+      out = `<span class="dice-light recon">重连中（${st.reconnects}）${st.lastError ? '：' + st.lastError : ''}</span>`;
+    } else {
+      out = st.state === 'running'
+        ? '<span class="dice-light on">运行中</span>'
+        : '<span class="dice-light off">已停止</span>';
     }
-    return st.state === 'running'
-      ? '<span class="dice-light on">运行中</span>'
-      : '<span class="dice-light off">已停止</span>';
+    return out + renderOfficialAuth(st);
+  }
+
+  /* U7-2：QQ 官方机器人鉴权到期提醒 + 被动回复窗口/发送指标。
+   * 仅当 status 携带 tokenExpireAt 字段（qqofficial 通道）时附加，其余通道不受影响。 */
+  function renderOfficialAuth(st) {
+    if (st == null || typeof st !== 'object' || !('tokenExpireAt' in st)) return '';
+    const parts = [];
+    if (st.tokenRemainingMs > 0) {
+      const mins = Math.floor(st.tokenRemainingMs / 60000);
+      if (st.tokenRemainingMs < 2 * 60 * 1000) parts.push(`<span class="dice-light recon" title="官方 access_token 即将过期，下次请求会自动刷新；持续失败请检查 appId/clientSecret">鉴权将过期（<${mins || 1} 分钟）</span>`);
+      else parts.push(`<span class="dice-light on" title="官方 access_token 剩余有效期">鉴权 ${mins} 分钟</span>`);
+    } else if (st.state === 'running') {
+      parts.push('<span class="dice-light recon" title="尚未取得 access_token 或已过期，下次请求会自动刷新">鉴权待刷新</span>');
+    }
+    if (st.passiveExpired > 0) parts.push(`<span class="dice-light recon" title="官方限制：用户消息 5 分钟内可被动回复，超窗回复已跳过">被动窗口跳过 ${st.passiveExpired}</span>`);
+    if (st.sendFails > 0) parts.push(`<span class="dice-light recon" title="REST 回发失败次数（401 已自动刷新令牌重试）">发送失败 ${st.sendFails}</span>`);
+    return parts.length ? ' ' + parts.join(' ') : '';
   }
 
   function summarizeStatus(st) {
@@ -157,5 +177,5 @@
     </details>`;
   }
 
-  return { renderStatusLight, renderChannelWizard, summarizeStatus, renderQqDirectPanel };
+  return { renderStatusLight, renderOfficialAuth, renderChannelWizard, summarizeStatus, renderQqDirectPanel };
 });

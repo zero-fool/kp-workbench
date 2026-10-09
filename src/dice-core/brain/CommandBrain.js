@@ -116,17 +116,43 @@ class CommandBrain {
     this.renderer = o.renderer
       || (typeof o.render === 'function' ? { render: o.render } : null)
       || createReplyRenderer({ persona: DEFAULT_PERSONA, templates: DEFAULT_TEMPLATES });
+    /* U7-1：工作台全局默认（前缀/全角/指令别名），可运行时更新并 applyDefaults() 注入已有会话 */
+    this.defaults = (o.defaults && typeof o.defaults === 'object') ? o.defaults : null;
+  }
+  /* U7-1：把全局默认注入所有会话——仅覆盖仍为出厂默认值的字段，群内 .set 显式改过的不动。 */
+  applyDefaults() {
+    const d = this.defaults;
+    if (!d || !this.sessions.listSessions) return;
+    for (const s of this.sessions.listSessions()) {
+      const st = s.settings;
+      if (!st || typeof st !== 'object') continue;
+      if (typeof d.prefix === 'string' && d.prefix && st.prefix === '.') st.prefix = d.prefix;
+      if (d.fullwidth === false && st.fullwidth !== false) st.fullwidth = false;
+      if (d.aliases && typeof d.aliases === 'object') {
+        const merged = Object.assign({}, st.aliases || {});
+        for (const k of Object.keys(d.aliases)) {
+          const v = String(d.aliases[k] || '').trim();
+          if (v) merged[k] = v; else delete merged[k];
+        }
+        st.aliases = merged;
+      }
+    }
+    if (typeof this.sessions.persist === 'function') this.sessions.persist();
   }
   known(name) { return !!getCommand(name); }
   handle(messageIn, ctxData) {
     const raw = String(messageIn.text || '');
-    let parsed = parseCommand(raw, { prefix: '.', fullwidth: true });
+    // U7-1：前缀可配置——先取会话再解析，用会话设置里的前缀/全角开关（缺省仍为 '.'）
+    const session = this.sessions.getSession(sessionIdOf(messageIn));
+    const sPrefix = (session.settings && session.settings.prefix) || '.';
+    const sFullwidth = !(session.settings && session.settings.fullwidth === false);
+    let parsed = parseCommand(raw, { prefix: sPrefix, fullwidth: sFullwidth });
     // Dice-Next 兼容：骰主远程指令允许无前缀直呼（boton / blackqq / whitegroup …）。
     if (!parsed) parsed = parseNoPrefix(raw);
     if (!parsed) return [];
     if (!getCommand(parsed.name)) {
       // 用「去掉前缀后的整段」回退拆分，确保 .ra侦查60 / .en侦查 聆听 这类写法（含空格）也能重切。
-      const body = /^[.。]/.test(raw) ? raw.slice(1) : raw;
+      const body = (raw.startsWith(sPrefix) || raw.startsWith('。')) ? raw.slice(sPrefix.length === raw.slice(0, sPrefix.length).length ? sPrefix.length : 1) : raw;
       const alt = splitAttached(body);
       if (alt && getCommand(alt.name)) parsed = alt;
       // 旧版文案兼容：.strXXX（如 .strRollDice）统一交由 str 指令处理，未登记的键不被吞掉。
@@ -134,7 +160,12 @@ class CommandBrain {
         parsed = { name: 'str', rawArgs: [parsed.name, parsed.rawArgs].filter(Boolean).join(' '), args: [parsed.name, ...(parsed.args || [])] };
       }
     }
-    const session = this.sessions.getSession(sessionIdOf(messageIn));
+    // U7-1：指令别名——session.settings.aliases = { 别名 → 指令名 }；仅当别名不是已注册指令时映射。
+    const aliasMap = session.settings && session.settings.aliases;
+    if (aliasMap && !getCommand(parsed.name) && aliasMap[parsed.name]) {
+      const mapped = String(aliasMap[parsed.name]).trim();
+      if (getCommand(mapped)) parsed = Object.assign({}, parsed, { name: mapped, aliasedFrom: parsed.name });
+    }
     // 测试通道注入会话状态：ctxData.state.sessions[<会话id>] 覆盖该会话字段（开关位等）
     if (ctxData && ctxData.state && ctxData.state.sessions && ctxData.state.sessions[session.id]) {
       Object.assign(session, ctxData.state.sessions[session.id]);

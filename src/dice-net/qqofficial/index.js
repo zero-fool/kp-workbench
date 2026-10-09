@@ -11,6 +11,9 @@ const { TokenKeeper } = require('./token');
 const { normalizeQqEvent, planQqMessages } = require('./normalize');
 
 const INTENTS = (1 << 25) | (1 << 12); // 群/C2C 消息 + 消息审核事件
+/* U7-2 被动回复窗口：官方限制用户消息发出后 5 分钟内可被动回复，超窗后回发必然被拒 */
+const PASSIVE_WINDOW_MS = 5 * 60 * 1000;
+const SEEN_MSG_MAX = 500; // msgId 收到时间记录上限（近似 LRU）
 
 function createQqOfficialAdapter(deps) {
   const cfg = deps.cfg.qqofficial || {};
@@ -18,6 +21,7 @@ function createQqOfficialAdapter(deps) {
   const fetchImpl = cfg.fetchImpl || ((url, init) => fetch(url, init));
   const gwFactory = cfg.wsFactory || ((u) => new WebSocket(u));
   const reconnectMs = cfg.reconnectMs != null ? cfg.reconnectMs : 2000;
+  const nowImpl = cfg.now || (() => Date.now()); // 可注入时钟（测试被动窗口用）
   let state = 'stopped';
   let lastError = null;
   let cb = null;
@@ -30,6 +34,10 @@ function createQqOfficialAdapter(deps) {
   let lastAckAt = 0;
   let lastSeq = null;
   let thisSession = null;
+  // U7-2：被动回复窗口与发送质量指标
+  const seenMsg = new Map(); // msgId -> 收到时间
+  let passiveExpired = 0;    // 因超出被动窗口被跳过的发送次数
+  let sendFails = 0;         // REST 回发失败次数
 
   async function connectGateway(seq = null, sessionId = null) {
     const tok = await keeper.botToken();
@@ -51,7 +59,15 @@ function createQqOfficialAdapter(deps) {
         lastSeq = pkt.s ?? lastSeq;
         if (pkt.t === 'READY') thisSession = pkt.d.session_id;
         const msg = normalizeQqEvent({ t: pkt.t, s: pkt.s, d: pkt.d });
-        if (msg && cb) cb(msg);
+        if (msg) {
+          // U7-2：记录 msgId 收到时间，供被动回复窗口判断（超上限时淘汰最早一条）
+          if (seenMsg.size >= SEEN_MSG_MAX) {
+            const first = seenMsg.keys().next().value;
+            if (first !== undefined) seenMsg.delete(first);
+          }
+          seenMsg.set(msg.id, nowImpl());
+          if (cb) cb(msg);
+        }
       } else if (pkt.op === 11) {
         lastAckAt = Date.now();
       }
@@ -93,17 +109,35 @@ function createQqOfficialAdapter(deps) {
     },
     onInbound(fn) { cb = fn; },
     async send(sessionId, reply) {
+      // U7-2 被动回复窗口：无 msgId（主动消息，官方通道不支持）或超窗 5 分钟时不再发 REST，
+      // 避免每条回复都白打一次接口并刷出 40x 错误。
+      if (reply && reply.msgId) {
+        const seenAt = seenMsg.get(String(reply.msgId));
+        if (seenAt != null && nowImpl() - seenAt > PASSIVE_WINDOW_MS) {
+          passiveExpired += 1;
+          lastError = '被动回复窗口已过（>5 分钟），本次回复已跳过（累计 ' + passiveExpired + ' 次）';
+          return;
+        }
+      }
       const calls = planQqMessages(sessionId, reply, reply.msgId, apiBase);
       for (const c of calls) {
         let token = await keeper.get();
         // 官方 v2 OpenAPI 鉴权头为 QQBot <access_token>（非 Bearer）。
         let res = await fetchImpl(c.url, { method: c.method, headers: { Authorization: `QQBot ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(c.body) });
         if (res.status === 401) { keeper.invalidate(); token = await keeper.get(); res = await fetchImpl(c.url, { method: c.method, headers: { Authorization: `QQBot ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(c.body) }); }
-        if (!res.ok) lastError = `QQ 发送失败 ${res.status}`;
+        if (!res.ok) { sendFails += 1; lastError = `QQ 发送失败 ${res.status}`; }
       }
     },
-    status() { return { state, reconnects, lastError, lastAckAt }; },
+    status() {
+      return {
+        state, reconnects, lastError, lastAckAt,
+        // U7-2：鉴权到期提醒 + 被动窗口/发送指标（连接中心状态灯用）
+        tokenExpireAt: keeper ? keeper.expireAt : 0,
+        tokenRemainingMs: keeper ? keeper.remainingMs(nowImpl()) : 0,
+        passiveExpired, sendFails,
+      };
+    },
   };
 }
 
-module.exports = { createQqOfficialAdapter };
+module.exports = { createQqOfficialAdapter, PASSIVE_WINDOW_MS };

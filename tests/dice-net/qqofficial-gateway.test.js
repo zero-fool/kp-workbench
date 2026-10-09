@@ -26,12 +26,12 @@ test('归一：C2C 消息 → 无 groupId；非消息事件返回 null', () => {
   assert.strictEqual(normalizeQqEvent({ t: 'READY', d: { session_id: 's' } }), null);
 });
 
-test('映射：ReplyOut → 群消息 REST 计划（被动回复带 msg_id）', () => {
+test('映射：ReplyOut → 群消息 REST 计划（被动回复带 msg_id，U7-2 起附 msg_seq）', () => {
   const calls = planQqMessages('qqofficial:555', { sessionId: 'qqofficial:555', segments: [{ type: 'text', text: '结果 12' }] }, 'msg-1');
   assert.deepStrictEqual(calls, [{
     method: 'POST',
     url: 'https://api.sgroup.qq.com/v2/groups/555/messages',
-    body: { content: '结果 12', msg_id: 'msg-1' },
+    body: { content: '结果 12', msg_id: 'msg-1', msg_seq: 1 },
   }]);
 });
 

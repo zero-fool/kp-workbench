@@ -340,7 +340,11 @@ function currentCfg() {
       baseUrl: a.baseUrl, apiKey: decKey(a.apiKey), model: a.model, temperature: a.temperature, timeoutMs: a.timeoutMs, maxTokens: a.maxTokens,
       moderate: flag('moderate', true), modRules: (Array.isArray(a.modRules) && a.modRules.length) ? a.modRules : ai.defaultModRules(),
       // U3-5：带上预算配置，供主进程做「超预算熔断」（limit=0 表示不限）
-      budget: { limit: Number(b.limit) || 0, warn: Number(b.warn) || 80, inPrice: Number(b.inPrice) || 0, outPrice: Number(b.outPrice) || 0 }
+      budget: { limit: Number(b.limit) || 0, warn: Number(b.warn) || 80, inPrice: Number(b.inPrice) || 0, outPrice: Number(b.outPrice) || 0 },
+      // U5-2：备用模型容灾（可选）——主模型重试耗尽后自动切换重试一次，预算仍生效
+      fallback: (a.fb && a.fb.baseUrl && a.fb.apiKey && a.fb.model)
+        ? { baseUrl: a.fb.baseUrl, apiKey: decKey(a.fb.apiKey), model: a.fb.model, timeoutMs: a.fb.timeoutMs }
+        : null
     };
   }
   const a = doc.settings && doc.settings.ai;
@@ -550,6 +554,14 @@ function registerIpc() {
   });
   ipcMain.handle('ai:chat', async (e, messages) => {
     const opts = Object.assign(aiOpFlags(), { settings: doc.settings, loreText: buildLoreText(), memoryText: memoryText(), userPrefsText: userPrefsText(), toolContext: { entities: doc.entities || {}, uploads: recentUploads.slice(-20), relations: doc.relations || { nodes: [], edges: [] } } });
+    /* U5-1：流式增量桥接——主进程把 SSE 增量推给渲染层逐字上屏（80ms 节流；最终文本仍以 reply.content 为准） */
+    let lastSend = 0;
+    opts.onDelta = (_d, full) => {
+      const now = Date.now();
+      if (now - lastSend < 80) return;
+      lastSend = now;
+      try { if (win && win.webContents && !win.webContents.isDestroyed()) win.webContents.send('ai:chatDelta', { text: String(full || '') }); } catch (_) {}
+    };
     const reply = await ai.chat(currentProfile(), messages || [], ai.effectiveFields(doc), aiCfg('chat', 'AI 对话'), worldName(), opts);
     // 记忆自动回写：工作台对话成功 → 写入 chat 场景记忆，供后续对话减少全量上下文阅读
     if (reply && reply.ok && reply.text) {
@@ -1256,6 +1268,17 @@ function registerIpc() {
       return { ok: false, error: String(e) };
     }
   });
+  ipcMain.handle('store:saveCsv', async (e, filename, content) => { // U5-4：CSV 导出（带 BOM，Excel 直开不乱码）
+    if (!win) return { ok: false };
+    const r = await dialog.showSaveDialog(win, { title: '导出 CSV', defaultPath: filename, filters: [{ name: 'CSV 表格', extensions: ['csv'] }] });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    try {
+      fs.writeFileSync(r.filePath, '\uFEFF' + String(content || ''), 'utf8');
+      return { ok: true, path: r.filePath };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  });
   ipcMain.handle('store:saveMarkdown', async (e, filename, content) => {
     if (!win) return { ok: false };
     const r = await dialog.showSaveDialog(win, { title: '导出 Markdown', defaultPath: filename, filters: [{ name: 'Markdown', extensions: ['md'] }] });
@@ -1430,6 +1453,7 @@ function registerIpc() {
   /* ---- AI 用量可见与按类型取消 ---- */
   ipcMain.handle('ai:usage', () => ai.usageLog());
   ipcMain.handle('ai:usageReset', (e, bucketMs) => { ai.resetUsage(bucketMs); return ai.usageLog(); });
+  ipcMain.handle('ai:usageReport', () => ai.usageReport()); // U5-4：按任务/日期/模型聚合，供报表与 CSV 导出
   ipcMain.on('ai:cancel', (e, payload) => {
     const group = (payload && payload.group) || null;
     const n = ai.cancelGroup(group);

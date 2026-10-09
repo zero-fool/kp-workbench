@@ -509,6 +509,36 @@ function usageByMark(mark) {
   }
   return { mark: key, calls, errs, timeouts, estPromptTokens: estPrompt, msSum, promptTokens: prompt, completionTokens: completion, totalTokens: total };
 }
+/* U5-4 用量报表聚合（纯函数，便于离线测试）：
+ * 把用量日志按「任务类型 / 日期 / 模型」三个维度聚合成行，供「用量面板 → 报表」展示与 CSV 导出。
+ * 费用不在这里算：单价配置在渲染层（元/百万 token），行只携带 token 量，费用由展示侧按当前单价估算。 */
+function aggregateUsage(entries) {
+  const mkRow = () => ({ calls: 0, errs: 0, timeouts: 0, estPromptTokens: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, msSum: 0 });
+  const byTask = new Map(), byDay = new Map(), byModel = new Map();
+  function touch(map, key, x) {
+    const k = key || '未知';
+    let row = map.get(k);
+    if (!row) { row = mkRow(); row.key = k; map.set(k, row); }
+    row.calls++; row.msSum += x.ms || 0;
+    if (x.error || x.cancelled) row.errs++;
+    if (x.timeout) row.timeouts++;                       // U8-2 口径一致：超时计入失败侧但单列
+    row.estPromptTokens += x.estPromptTokens || 0;
+    row.promptTokens += x.promptTokens || 0; row.completionTokens += x.completionTokens || 0; row.totalTokens += x.totalTokens || 0;
+  }
+  for (const x of (entries || [])) {
+    const d = new Date(x.at || 0);
+    const day = isFinite(d.getTime())
+      ? d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
+      : '未知';
+    touch(byTask, String(x.label || 'AI'), x);
+    touch(byDay, day, x);
+    touch(byModel, String(x.model || '未配置'), x);
+  }
+  const byTotal = m => [...m.values()].sort((a, b) => (b.totalTokens - a.totalTokens) || (b.calls - a.calls));
+  const byKeyDesc = m => [...m.values()].sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0)); // 日期：最新在前
+  return { byTask: byTotal(byTask), byDay: byKeyDesc(byDay), byModel: byTotal(byModel) };
+}
+function usageReport() { return Object.assign({ since: _usageSince, entries: _usageLog.length }, aggregateUsage(_usageLog)); }
 /* B-3 服务商健康度：按模型汇总最近窗口内的请求数 / 成功率 / 平均延迟 / 最近一次状态。
  * 数据直接取自用量环形日志（每次请求都带 model / ms / error / status），供「AI 配置/用量」页展示。 */
 function healthStats(days) {
@@ -663,7 +693,21 @@ function aiSleep(ms, group) {
   });
 }
 
-async function requestCompletions(cfg, body, timeoutMs) {
+/* U5-2：备用模型容灾——主模型重试耗尽（或命中不可重试错误）后，若配置了备用连接且错误
+ * 属于「网络失败 / 超时 / 5xx / 429 / 401 / 403 / 404」，自动换备用端点再试一次。
+ * 备用连接不再二次切换（防循环）；预算熔断与用户取消不切换（备用也会被同样熔断）。
+ * 主/备都失败时报主模型的错误（通常更具指导性），备用失败记入用量日志可见。 */
+const FALLBACK_STATUSES = new Set([401, 403, 404, 408, 429, 500, 502, 503, 504]);
+function canFallback(err) {
+  if (!err) return false;
+  if (err.budget || err.status && FALLBACK_STATUSES.has(err.status)) return err.status ? true : false;
+  const m = String(err && err.message || err);
+  if (/AI_TASK_CANCELLED|AI_REQUEST_BUDGET|预算/.test(m)) return false;
+  return /请求发送失败|请求超时|响应读取超时|上游返回/.test(m);
+}
+
+/* 重试循环：对可重试错误按指数退避重试 AI_MAX_ATTEMPTS 次 */
+async function requestRetry(cfg, body, timeoutMs) {
   let e = null;
   for (let attempt = 0; attempt < AI_MAX_ATTEMPTS; attempt++) {
     try {
@@ -677,6 +721,26 @@ async function requestCompletions(cfg, body, timeoutMs) {
     }
   }
   throw e;
+}
+
+async function requestCompletions(cfg, body, timeoutMs) {
+  try {
+    return await requestRetry(cfg, body, timeoutMs);
+  } catch (err) {
+    const fb = cfg && cfg.fallback;
+    if (!fb || !fb.baseUrl || !fb.apiKey || !fb.model) throw err;   // 未配置备用
+    if (!canFallback(err)) throw err;
+    /* 备用连接沿用主连接的预算盒/任务标记/并发组，但 key/model/baseUrl 用备用自己的 */
+    const fbCfg = Object.assign({}, cfg, { baseUrl: fb.baseUrl, apiKey: fb.apiKey, model: fb.model, timeoutMs: fb.timeoutMs || cfg.timeoutMs, fallback: null });
+    try {
+      const j = await requestOnce(fbCfg, body, timeoutMs);
+      recordUsage({ label: (cfg.label || 'AI') + '·备用', model: fb.model, mark: cfg.mark, ms: 0, fallback: true, group: cfg.group, estPromptTokens: estBodyTokens(body) });
+      return j;
+    } catch (fbErr) {
+      recordUsage({ label: (cfg.label || 'AI') + '·备用失败', model: fb.model, mark: cfg.mark, ms: 0, error: true, fallback: true, group: cfg.group, estPromptTokens: estBodyTokens(body) });
+      throw err;   // 主错误优先呈现
+    }
+  }
 }
 
 async function requestOnce(cfg, body, timeoutMs) {
@@ -778,6 +842,111 @@ async function apiCall(cfg, system, user) {
   }, cfg.timeoutMs);
   const c = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
   return c;
+}
+
+/* U5-1：SSE 流式请求——逐增量回调 onDelta(delta, fullText)，渲染层逐字上屏。
+ * 端点不支持流式（content-type 非 text/event-stream）时抛 err.noStream=true，
+ * 由调用方回退非流式整段接收；中断时 err.partial 带上已收到的部分。
+ * 预算熔断 / 请求预算 / 取消 / 用量记录与非流式完全一致。 */
+async function streamCompletions(cfg, body, timeoutMs, onDelta) {
+  if (!cfg || !cfg.baseUrl || !cfg.apiKey || !cfg.model) throw new Error('AI 未配置完整（需 baseUrl/apiKey/model）');
+  budgetGuard(cfg);
+  spendRequest(cfg);
+  const url = String(cfg.baseUrl).replace(/\/+$/, '') + '/chat/completions';
+  const ms = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : (cfg.timeoutMs || 120000);
+  const controller = new AbortController();
+  const release = registerRun(cfg.group, controller);
+  const t0 = Date.now();
+  const label = cfg.label || 'AI';
+  const timer = setTimeout(() => controller.abort(), ms);
+  const sbody = Object.assign({}, body, { stream: true });
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.apiKey, 'Accept': 'text/event-stream' },
+      body: JSON.stringify(sbody),
+      signal: controller.signal
+    });
+  } catch (e) {
+    clearTimeout(timer); release();
+    const msNow = Date.now() - t0;
+    if (e && e.name === 'AbortError') {
+      if (controller._userCancel) { recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: msNow, cancelled: true, group: cfg.group }); throw new Error('AI_TASK_CANCELLED 该任务已被取消'); }
+      recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: msNow, error: true, timeout: true, estPromptTokens: estBodyTokens(sbody), group: cfg.group });
+      throw new Error('AI 请求超时（超过 ' + Math.round(ms / 1000) + ' 秒）：连接/发送阶段无响应，请检查网络或调大超时时间');
+    }
+    recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: msNow, error: true, estPromptTokens: estBodyTokens(sbody), group: cfg.group });
+    throw new Error('AI 请求发送失败（上游原因）：' + ((e && e.message) || e));
+  }
+  if (!resp.ok) {
+    clearTimeout(timer); release();
+    recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: Date.now() - t0, error: true, status: resp.status, estPromptTokens: estBodyTokens(sbody), group: cfg.group });
+    let msg = 'AI 上游返回 ' + resp.status + ' ' + (resp.statusText || '');
+    try { const j = await resp.json(); if (j && j.error) msg = String(j.error.message || j.error.code || msg); } catch (_) {}
+    const httpErr = new Error(msg.trim());
+    httpErr.status = resp.status;
+    httpErr.retryAfterMs = parseRetryAfter(resp.headers && resp.headers.get('retry-after'));
+    throw httpErr;
+  }
+  const ctype = String((resp.headers && resp.headers.get('content-type')) || '');
+  if (!/text\/event-stream/i.test(ctype)) {
+    clearTimeout(timer); release();
+    const noStreamErr = new Error('AI 端点不支持流式（SSE），回退整段接收');
+    noStreamErr.noStream = true;
+    throw noStreamErr;
+  }
+  let full = '', finish = '', usage = null, buf = '', done0 = false;
+  const dec = new TextDecoder();
+  try {
+    const reader = resp.body.getReader();
+    while (!done0) {
+      const rd = await reader.read();
+      if (rd.done) break;
+      buf += dec.decode(rd.value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (!data) continue;
+        if (data === '[DONE]') { done0 = true; break; }
+        let j; try { j = JSON.parse(data); } catch (_) { continue; }
+        if (j && j.usage) usage = j.usage;
+        const ch = j && j.choices && j.choices[0];
+        if (!ch) continue;
+        if (ch.finish_reason) finish = ch.finish_reason;
+        const d = ch.delta && ch.delta.content;
+        if (typeof d === 'string' && d) { full += d; if (onDelta) { try { onDelta(d, full); } catch (_) {} } }
+      }
+    }
+  } catch (e) {
+    clearTimeout(timer); release();
+    if (e && e.name === 'AbortError' && controller._userCancel) {
+      recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: Date.now() - t0, cancelled: true, group: cfg.group });
+      throw new Error('AI_TASK_CANCELLED 该任务已被取消');
+    }
+    if (e && e.name === 'AbortError') {
+      recordUsage({ label, model: cfg.model, mark: cfg.mark, ms: Date.now() - t0, error: true, timeout: true, stream: true, estPromptTokens: estBodyTokens(sbody), group: cfg.group });
+      const err = new Error('AI 流式读取超时：已接收 ' + full.length + ' 字后中断，可调大超时或回退非流式');
+      err.partial = full;
+      throw err;
+    }
+    if (full) { const err2 = new Error('AI 流式读取中断：' + ((e && e.message) || e)); err2.partial = full; throw err2; }
+    throw e;
+  }
+  clearTimeout(timer); release();
+  const u = usage || {};
+  recordUsage({
+    label, model: cfg.model, mark: cfg.mark, ms: Date.now() - t0, group: cfg.group,
+    promptTokens: typeof u.prompt_tokens === 'number' ? u.prompt_tokens : undefined,
+    completionTokens: typeof u.completion_tokens === 'number' ? u.completion_tokens : undefined,
+    totalTokens: typeof u.total_tokens === 'number' ? u.total_tokens : undefined,
+    stream: true,
+    estPromptTokens: typeof u.prompt_tokens === 'number' ? undefined : estBodyTokens(sbody)
+  });
+  return { content: full, finish };
 }
 
 /* U8-4：response_format 探测缓存——网关明确报「不支持 JSON 模式」后记住该 endpoint+model，
@@ -1153,6 +1322,39 @@ async function chatComplete(cfg, history, payload, timeoutMs) {
   return full;
 }
 
+/* U5-1：流式对话循环——语义与 chatComplete 一致（触顶续写），但逐增量回调 onDelta；
+ * 端点不支持流式（noStream）或流式读取中断且已有部分内容时，回退非流式整段接收。 */
+async function chatStreamComplete(cfg, history, payload, timeoutMs, onDelta) {
+  const base = { model: cfg.model, messages: history };
+  const contTail = '【续写】你上一条回复因达到长度上限被截断了。请紧接着刚才中断处继续写，不要重复、总结或解释已经写过的内容。';
+  let full = '';
+  let cont = 0;
+  while (cont < MAX_CONT_ITERS) {
+    let r;
+    try { r = await streamCompletions(cfg, Object.assign({}, base), timeoutMs, onDelta); }
+    catch (e) {
+      if (e && e.noStream) {
+        cfg._noStream = true;   // 本会话记住该端点不支持流式，后续直接走整段接收
+        const again = Object.assign({}, payload);
+        return await chatComplete(cfg, history, again, timeoutMs);
+      }
+      if (e && e.partial) { full += e.partial; break; }   // 中断的部分内容仍然保留
+      if (full) break;
+      throw e;
+    }
+    const piece = String(r.content || '');
+    full += piece;
+    if (full.length >= ASSIST_OUT_MAX) break;
+    if (r.finish !== 'length' || !piece) break;
+    cont++;
+    base.messages = base.messages.concat([
+      { role: 'assistant', content: piece.slice(-4000) },
+      { role: 'user', content: contTail }
+    ]);
+  }
+  return full;
+}
+
 async function chat(profile, messages, fields, cfg, world, opts) {
   opts = opts || {};
   const sys = systemForChat(profile, fields, world, opts);
@@ -1169,10 +1371,16 @@ async function chat(profile, messages, fields, cfg, world, opts) {
     return chatWithTools(history.slice(), cfg, toolContextFrom(opts.toolContext), opts.timeoutMs);
   }
   // 普通对话：提高单次输出的 token 上限，并在触顶时自动续写，避免回复被截断
-  const c = await chatComplete(cfg, history, {
+  const payload = {
     temperature: typeof cfg.temperature === 'number' ? cfg.temperature : 0.5,
     max_tokens: cfg.maxTokens || 4000
-  }, opts.timeoutMs || cfg.timeoutMs);
+  };
+  /* U5-1：渲染层要求逐字上屏时走流式；探测过端点不支持（cfg._noStream）则直接整段接收 */
+  if (typeof opts.onDelta === 'function' && !cfg._noStream) {
+    const c = await chatStreamComplete(cfg, history, payload, opts.timeoutMs || cfg.timeoutMs, opts.onDelta);
+    return { content: finalReply(cfg, c), model: cfg.model, streamed: true };
+  }
+  const c = await chatComplete(cfg, history, payload, opts.timeoutMs || cfg.timeoutMs);
   return { content: finalReply(cfg, c), model: cfg.model };
 }
 
@@ -1469,6 +1677,8 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
             // 单段单类上限：长段（24000 字）可能包含较多角色/场景，上限过低会直接丢条目；
             // 跨段已按名称合并，放宽到 80 不至于让结果爆炸，却能少漏人漏场景。
             parsed.entities[k] = list.map(item => normalize(item, fe[k], k)).slice(0, 80);
+            // U5-5 拆分校对：记录来源段（1 起），预览时供「原文对照 / 来源句高亮 / 样本反哺」
+            for (const o of parsed.entities[k]) o._seg = si + 1;
           }
           break;
         } catch (e) {
@@ -1515,7 +1725,12 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
         }
         const dk = dedupKey(k, item);
         if (dk && idxOf[k].has(dk)) {
-          mergeEntity(merged.entities[k][idxOf[k].get(dk)], item); // 同名：合并字段，保留最全信息
+          const tgt = merged.entities[k][idxOf[k].get(dk)];
+          mergeEntity(tgt, item); // 同名：合并字段，保留最全信息
+          // U5-5：跨段同名合并时聚合来源段，预览可跳任一来源段对照
+          const segs0 = Array.isArray(tgt._segs) ? tgt._segs : (tgt._seg ? [tgt._seg] : []);
+          if (item._seg && segs0.indexOf(item._seg) < 0) segs0.push(item._seg);
+          tgt._segs = segs0; delete tgt._seg;
           continue;
         }
         if (dk) idxOf[k].set(dk, merged.entities[k].length);
@@ -1531,7 +1746,16 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
     const keep = [];
     for (const it of merged.entities.npcs) {
       const n = normName(it.name || it.title);
-      if (n && n !== '未命名' && pcsIdx.has(n)) { mergeEntity(merged.entities.pcs[pcsIdx.get(n)], it); continue; }
+      if (n && n !== '未命名' && pcsIdx.has(n)) {
+        const tgt = merged.entities.pcs[pcsIdx.get(n)];
+        mergeEntity(tgt, it);
+        // U5-5：pcs/npcs 归并同样聚合来源段
+        const segs0 = Array.isArray(tgt._segs) ? tgt._segs : (tgt._seg ? [tgt._seg] : []);
+        if (it._seg && segs0.indexOf(it._seg) < 0) segs0.push(it._seg);
+        else if (Array.isArray(it._segs)) for (const s of it._segs) if (segs0.indexOf(s) < 0) segs0.push(s);
+        tgt._segs = segs0; delete tgt._seg;
+        continue;
+      }
       keep.push(it);
     }
     merged.entities.npcs = keep;
@@ -1565,6 +1789,9 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
     });
   }
   if (cancelled) { merged.partial = true; merged.cancelled = true; } // 已取消但有已完成段：返回部分结果
+  // U5-5 拆分校对：回传分段原文（含段号与长度），渲染层预览做「原文对照 / 来源句高亮」；
+  // 仅驻留内存（scriptPreview 不入持久化白名单），确认写入或放弃后即释放。
+  merged.segs = segs.map((s, i) => ({ i: i + 1, len: s.length, text: s }));
   emitProg();
   return merged;
 }
@@ -2582,4 +2809,4 @@ async function regenerateScene(cfg, text, scenes, index, opts) {
   return { ok: true, scene: n, usage: usageByMark(mark) };
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, ensureFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, localRelationCandidates, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, regenerateScene, extractScriptBody, usageLog, usageByMark, healthStats, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, mergeRoll, buildContinueCtx };
+module.exports = { DEFAULT_FIELDS, defaultFields, ensureFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, localRelationCandidates, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, regenerateScene, extractScriptBody, usageLog, usageByMark, aggregateUsage, usageReport, healthStats, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, mergeRoll, buildContinueCtx };
