@@ -135,4 +135,57 @@ P2 批已落实 P2-13，`npm test` 全绿（437 项，含新增 3 项视口虚�
 | P2-13 | [app.js](../src/renderer/app.js) 关系网视口虚拟化：`relViewportRect` 按「屏幕 = 世界×k + t」换算当前视口世界范围（含 `REL_VP_MARGIN=400` 缓冲），`relVpNodeIds` 分桶粗筛+坐标精过滤得可见节点集；`relPaint` 只把视口内节点与两端都在视口内的连线渲染进 SVG（筛选中保持全量，避免过滤目标「看不见」），并记录 `_rel._vpRect`；`relPaintView` 平移/缩放只改 transform，仅当新视口越出已渲染范围才补绘一次——上千节点时 DOM 只驻留可见子集 |
 
 P2 批已落实 P2-17，`npm test` 全绿（358 项回归）：
-| P2-17 | 按视图拆分 [app.js](../src/renderer/app.js)：统计分析 / 运行记录 / 帮助中心 抽为 [views/stats.js](../src/renderer/views/stats.js)、[views/runlog.js](../src/renderer/views/runlog.js)、[views/help.js](../src/renderer/views/help.js)（沿用 changelog.js 的 `window.KPViews` 工厂模式），app.js 仅保留薄代理桩 + 共享常量 `STATS_K`；`hydrateViews` 的 KP 上下文注入 `DATA_TYPE / STATS_K` 供视图水合；新增 [tools/build-renderer.js](../tools/build-renderer.js)（esbuild 按 index.html 声明顺序聚合 11 个脚本为单 bundle，复制 styles.css / assets，重写 index.html 为单 script 引用）→ [npm run build:renderer]；[window.js](../src/main/window.js) 优先加载 [out/renderer/](../out/renderer/index.html)（未构建回退源目录）；`build.files` 增 `out/**/*`；新增 6 项 P2-17 回归 + [build-renderer.test.js](../tests/build-renderer.test.js) 3 项构建链测试 |
+| P2-17 | 按视图拆分 [app.js](../src/renderer/app.js)：统计分析 / 运行记录 / 帮助中心 抽为 [views/stats.js](../src/renderer/views/stats.js)、[views/runlog.js](../src/renderer/views/runlog.js)、[views/help.js](../src/renderer/views/help.js)（沿用 changelog.js 的 `window.KPViews` 工厂模式），app.js 仅保留薄代理桩 + 共享常量 `STATS_K`；`hydrateViews` 的 KP 上下文注入 `DATA_TYPE / STATS_K` 供视图水合；新增 [tools/build-renderer.js](../tools/build-renderer.js)（esbuild 按 index.html 声明顺序聚合 11 个脚本为单 bundle，复制 styles.css / assets，重写 index.html 为单 script 引用）→ [npm run build:renderer]；[window.js](../src/main/window.js) 优先加载 [out/renderer/](../out/renderer/index.html)（未构建回退源目录）；`build.files` 增 `out/**/*`；新增 6 项 P2-17 回归 + [build-renderer.test.js](../tests/build-renderer.test.js) 3 项构建链测试
+
+---
+
+# 第二轮规划（2026-10-09 · U4~U7 批）
+
+> 已按登记约定同步登记至 [优化规划清单.xlsx](KP跑团工作台-优化规划清单.xlsx)「优化规划清单」页（行 47 起）；此处为摘要。现状依据均经代码核对：ai.js 无流式（0 处 stream）、electron-updater 在依赖中未接线、仓库无 .github/workflows、Ollama 本地预设已有、绿色版 zip 约 117MB、Release 无安装版/便携版与 sha256。
+
+## U4 分发与工程化（本批最优先）
+
+| 编号 | 优先级 | 方案 | 解决什么问题 |
+|---|---|---|---|
+| U4-1 | P0 | 主进程接线 electron-updater（GitHub Releases provider）：后台静默检查→提示→下载→重启安装；绿色版降级为打开下载页 | 依赖已在 package.json 但未接线，升级全靠手动比对版本号 |
+| U4-2 | P0 | GitHub Actions CI：push/PR 跑 lint + test + verify + build:renderer；tag 构建绿色版 zip + SHA256SUMS 自动发 Release | 无任何 workflow，测试打包全靠手工，漏测漏包风险随发版节奏上升 |
+| U4-3 | P0 | tag 触发 windows runner 构建 NSIS 安装版与便携版 exe 并附 Release | 本地沙箱 wine 32 位限制出不了 exe，安装版「原地升级不丢数据」落不了地 |
+| U4-4 | P1 | 发布产物 SHA256SUMS.txt + 下载须知校验命令 | 无签名无校验渠道，损坏/替换无法自检 |
+| U4-5 | P2 | 打包瘦身（承接 P2-16）：pdfjs 字体/cmaps 裁剪、xlsx slim、compression maximum | 绿色版 117MB 可预期明显下降 |
+| U4-6 | P2 | 代码签名评估；短期强化 SmartScreen 图文指引 | 未签名，SmartScreen 劝退新用户 |
+
+## U5 AI 能力深化
+
+| 编号 | 优先级 | 方案 | 解决什么问题 |
+|---|---|---|---|
+| U5-1 | P0 | 对话/润色/生成接 SSE 流式逐字上屏；拆分/分幕按段·幕汇报进度；不支持流式的端点自动回退 | 全库 0 处 stream，长任务几十秒到几分钟无进展反馈 |
+| U5-2 | P1 | 备用模型容灾：主模型网络错/5xx/限流自动切换重试一次（预算熔断仍生效） | 单模型抖动即任务失败 |
+| U5-3 | P1 | 拆分质量基准 tools/ai-eval.js：离线 mock 测试集 + --live 真实跑分（准确率/截断率/耗时） | U3 系列优化缺量化尺子，改提示词无从对比 |
+| U5-4 | P2 | 用量报表：按任务类型/时间段聚合 token/费用，CSV 导出 | U3-5 只有实时视角，看不到月度构成 |
+| U5-5 | P2 | 拆分校对工作流：原文-卡片对照、来源句高亮、一键改归属，样本反哺 U5-3 | 拆错只能进卡片手改，长文本核对成本高 |
+
+## U6 数据稳健性
+
+| 编号 | 优先级 | 方案 | 解决什么问题 |
+|---|---|---|---|
+| U6-1 | P0 | 备份体积护栏：单份超阈值告警、总量超限自动清理最旧（保底 3 份），占用在数据管家可见 | P0-14 只做了降频+紧凑化，大档案仍可能吃满磁盘 |
+| U6-2 | P1 | 导出包 manifest（版本/条目数/sha256）+ 导入前校验 | 损坏包静默缺卡或报错难懂 |
+| U6-3 | P2 | 可选 WebDAV 云备份（凭据用户自持，手动/定时推送，不做实时同步） | 数据自持但单机副本是单点，可挂 U1-10 数据管家入口 |
+
+## U7 玩法与生态扩展
+
+| 编号 | 优先级 | 方案 | 解决什么问题 |
+|---|---|---|---|
+| U7-1 | P1 | .kp/.ai 触发词与指令别名可配置 | 触发词硬编码，群内多骰娘易冲突 |
+| U7-2 | P2 | QQ 官方机器人体验补全（被动回复窗口、长回复分片、鉴权到期提醒） | qqofficial 通道已有，官方限制下的细节未打磨 |
+| U7-3 | P2 | 地图令牌联动临场战斗（拖动/血条/倒下置灰/当前行动者高亮） | 地图与战斗模块靠口头对照 |
+| U7-4 | P1 | 便签一键转日志卡（时间戳+来源标记） | 便签是草稿，团后还要手动誊 |
+| U7-5 | P2 | 插件工坊预置 FATE/双十字等模板、.kp 插件包一键导入 | 内置规则仅通用/CoC7/DnD5e |
+
+## 执行顺序建议
+
+1. **P0 批**：U4-2 CI → U4-3 Windows 产物 → U4-1 自动更新 → U6-1 备份护栏 → U5-1 流式输出（工程量大，可跨版本）。
+2. **P1 批**：U4-4、U5-2、U5-3、U6-2、U7-1、U7-4。
+3. **P2 批**：U4-5、U4-6、U5-4、U5-5、U6-3、U7-2、U7-3、U7-5。
+
+另：U2-5（费用估算+预算告警）已由 U3-5 覆盖实现（v3.3.0），清单中状态已改「已完成（已验证）」；旧清单仍待开发的 U1-1/U1-2/U1-6/U1-7/U2-1/U2-2/U2-4/U2-6~U2-9 维持原位不动，与本轮不重复。
