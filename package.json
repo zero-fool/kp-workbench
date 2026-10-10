@@ -16,13 +16,11 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "build": "npm run build:installer",
-    "build:installer": "npm run build:renderer && cross-env RELEASE_TYPE=安装版 electron-builder --win nsis --publish never",
-    "build:update": "npm run build:renderer && cross-env RELEASE_TYPE=安装版 electron-builder --win nsis --publish always",
+    "build": "npm run build:portable && npm run build:green",
     "build:dir": "npm run build:renderer && electron-builder --win dir --publish never",
     "build:dir:release": "npm run build:renderer && cross-env RELEASE_TYPE=正式版 electron-builder --win dir --publish never",
-    "build:dir:test": "npm run build:renderer && cross-env RELEASE_TYPE=测试版 electron-builder --win dir --publish never",
     "build:portable": "npm run build:renderer && cross-env RELEASE_TYPE=便携版 electron-builder --win portable --publish never",
+    "build:green": "npm run build:dir && node tools/package-green.js",
     "publish:github": "bash tools/publish-github.sh"
   },
   "devDependencies": {
@@ -97,16 +95,6 @@
       ],
       "icon": "build/icon.png",
       "signAndEditExecutable": false
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "perMachine": false,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "differentialPackage": true,
-      "shortcutName": "KP跑团工作台",
-      "artifactName": "KP跑团工作台_v${version}_安装版.exe"
     },
     "portable": {
       "artifactName": "KP跑团工作台_v${version}_便携版.exe"

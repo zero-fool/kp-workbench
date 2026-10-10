@@ -110,7 +110,6 @@ KP 跑团工作台把主持人开团要用的一堆零散工具整合进一个�
 | ---- | ---- | ---- |
 | `KP-workbench-vX.Y.Z-green.zip` | **绿色版（推荐）** | 解压即用，免安装、不写注册表、可放 U 盘 |
 | `KP-workbench-vX.Y.Z-portable.exe` | 便携版 | 单文件，双击自解压运行 |
-| `KP-workbench-vX.Y.Z-setup.exe` | 安装版 | 标准安装，支持原地覆盖升级不丢数据 |
 
 绿色版三步：**解压到任意目录 → 双击 `KP跑团工作台.exe` → 首次运行如遇 SmartScreen 选「更多信息 → 仍要运行」**。
 

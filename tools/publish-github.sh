@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # tools/publish-github.sh —— 一键发布到 GitHub Releases
 #
-# 把 dist/ 下的发布产物（绿色版 zip / 便携版 exe / 安装版 exe）按版本号建 Release 并上传为附件。
+# 把 dist/ 下的发布产物（仅绿色版 zip / 便携版 exe）按版本号建 Release 并上传为附件。
+# 注意：发布规定 —— 只产绿色版 + 便携版，不再发布安装版。
 # Release 正文（「更新通告」）由 tools/release-notes.js 依据 src/renderer/app.js 的 CHANGELOG 自动生成，
 # 并附上绿色版下载须知。Release 与附件均已存在的会自动跳过，可重复执行（断点续传），
 # 重复执行时会把已存在 Release 的通告正文刷新为最新内容。
@@ -52,14 +53,12 @@ urlenc() { node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "
 # 附件名统一用 ASCII（GitHub 会把中文附件名规范化成 KP._vX_.exe，导致同类文件撞名）：
 #   绿色版 zip → KP-workbench-vX.Y.Z-green.zip
 #   便携版 exe → KP-workbench-vX.Y.Z-portable.exe
-#   安装版 exe → KP-workbench-vX.Y.Z-setup.exe
 asset_name() {
   local b="$1" v
   v="$(printf '%s' "$b" | sed -nE 's/.*_v([0-9]+\.[0-9]+\.[0-9]+(_[0-9]+)?)_.*/\1/p')"
   case "$b" in
     *_绿色版.zip) printf 'KP-workbench-v%s-green.zip' "$v" ;;
     *_便携版.exe) printf 'KP-workbench-v%s-portable.exe' "$v" ;;
-    *_安装版.exe) printf 'KP-workbench-v%s-setup.exe' "$v" ;;
     *) printf '%s' "$b" ;;
   esac
 }
@@ -76,7 +75,7 @@ while IFS= read -r f; do
   [ -n "$v" ] || continue
   [ -n "$WANT_VERSION" ] && [ "$v" != "$WANT_VERSION" ] && continue
   case " $versions " in *" $v "*) ;; *) versions="$versions $v" ;; esac
-done < <(find "$DIST" -maxdepth 1 -type f \( -name '*_绿色版.zip' -o -name '*_便携版.exe' -o -name '*_安装版.exe' \) | sort)
+done < <(find "$DIST" -maxdepth 1 -type f \( -name '*_绿色版.zip' -o -name '*_便携版.exe' \) | sort)
 
 [ -n "$versions" ] || { echo "没有找到可发布的产物（检查 dist/ 与版本号过滤）"; exit 0; }
 
@@ -102,7 +101,6 @@ for v in $versions; do
     case "$(basename "$f")" in
       *_绿色版.zip) kinds="$kinds green" ;;
       *_便携版.exe) kinds="$kinds portable" ;;
-      *_安装版.exe) kinds="$kinds setup" ;;
     esac
   done
   body="$(node "$ROOT/tools/release-notes.js" "$v" $kinds 2>/dev/null || true)"
@@ -132,7 +130,7 @@ for v in $versions; do
 
   for f in "$DIST"/*_"v$v"_*; do
     [ -f "$f" ] || continue
-    case "$(basename "$f")" in *_绿色版.zip|*_便携版.exe|*_安装版.exe) ;; *) continue ;; esac
+    case "$(basename "$f")" in *_绿色版.zip|*_便携版.exe) ;; *) continue ;; esac
     name="$(basename "$f")"
     aname="$(asset_name "$name")"
     if printf '%s\n' "$have" | grep -Fqx "$aname"; then echo "  已存在，跳过：$aname"; continue; fi

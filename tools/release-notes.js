@@ -52,7 +52,6 @@ function repoSlug() {
 const KINDS = {
   green:    (v) => ['KP-workbench-v' + v + '-green.zip',    '绿色版（推荐）：解压即用，无需安装'],
   portable: (v) => ['KP-workbench-v' + v + '-portable.exe', '便携版：单文件绿色程序，双击即用'],
-  setup:    (v) => ['KP-workbench-v' + v + '-setup.exe',    '安装版：标准安装，支持原地覆盖升级不丢数据'],
 };
 
 function buildBody(entry, kinds, repo) {
