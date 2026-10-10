@@ -32,8 +32,9 @@
 1. 提升版本号：把 `package.json` 的 `version` 升为新版本（例如 `3.1.2` → `3.1.3`）。
    - 版本比较完全依赖 Release 的 tag，**每次发版必须提升版本号**，否则应用认为没有新版本。
    - 同步把 [app.js](src/renderer/app.js) 顶部的 `APP_VERSION = '...'` 改成相同值（`npm test` 会校验二者一致）。
-2. 在 [app.js](src/renderer/app.js) 的 `CHANGELOG` 里补一条本次更新条目——它同时是应用内「更新公告」内容与 Release 正文的来源。
-3. 发布前跑通：`npm test`（含 `tests/updater.test.js`）与 `npm run verify`。
+2. **同步 README 版本徽章**：把 [README.md](README.md) 顶部「最新版本」徽章里的版本号改成一致（`npm test` 会校验 README 徽章、`APP_VERSION`、`package.json` 三处一致，发版千万别漏同步 README）。
+3. 在 [app.js](src/renderer/app.js) 的 `CHANGELOG` 里补一条本次更新条目——它同时是应用内「更新公告」内容与 Release 正文的来源。
+4. 发布前跑通：`npm test`（含 `tests/updater.test.js`）与 `npm run verify`。
 
 ## 4. 构建产物（只出绿色版 + 便携版）
 
