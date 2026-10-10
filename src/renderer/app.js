@@ -9293,8 +9293,33 @@
       const r = await api.export(id);
       if (r && r.ok) { const s = await window.api.saveText(r.id + '.json', r.json); if (!s || !s.ok) toast('导出失败', 'err'); else toast('已导出 ' + r.id + '.json', 'ok'); }
       else toast('导出失败：' + ((r && r.error) || '未知'), 'err');
+    } else if (act === 'import') {
+      /* U7-5：.kp/.json 插件包一键导入（选文件 → 读文本 → 校验安装，坏包报具体校验错误） */
+      const inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = '.kp,.json,application/json';
+      inp.onchange = async () => {
+        const f = inp.files && inp.files[0];
+        if (!f) return;
+        let text = '';
+        try { text = await readPlgText(f); }
+        catch (e) { toast('读取文件失败：' + ((e && e.message) || e), 'err'); return; }
+        const r = await api.import(text);
+        if (r && r.ok) { toast('已导入 ' + r.id + '@' + r.version, 'ok'); dhRenderWorkshop(); }
+        else toast('导入失败：' + ((r && (r.errors || [r.error])) || ['未知']).join('；'), 'err');
+      };
+      inp.click();
+      return;                                   // 文件对话框异步回调，不落到底部统一刷新
     }
     dhRenderWorkshop();
+  }
+  function readPlgText(f) {
+    return new Promise((res, rej) => {
+      const rd = new FileReader();
+      rd.onload = () => res(String(rd.result || ''));
+      rd.onerror = () => rej(new Error('文件读取失败'));
+      rd.readAsText(f, 'utf8');
+    });
   }
 
   /* ---------- 骰娘工作台：分区 5 AI 生成向导 ---------- */

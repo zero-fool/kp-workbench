@@ -38,7 +38,7 @@ test('第一道闸：生成合法包 → 产生草稿，草稿不落盘不生效
   assert.ok(r.draftId);
   assert.equal(w.list().length, 1);
   assert.equal(w.list()[0].state, 'generated');
-  assert.equal(w.host().list().length, 3);   // 只有内置三套，草稿未安装
+  assert.equal(w.host().list().length, 5);   // 只有内置五套，草稿未安装
 });
 
 test('正例：首轮非法 → 结构化回喂修正后仍走通第一道闸', async () => {
@@ -57,7 +57,7 @@ test('反例：生成闸拦截 → 不产生草稿、不触碰宿主', async () 
   assert.equal(r.ok, false);
   assert.ok(r.errors.some(e => e.path === '$.permissions' && e.msg.includes('$.permissions')));
   assert.equal(w.list().length, 0);
-  assert.equal(w.host().list().length, 3);
+  assert.equal(w.host().list().length, 5);
 });
 
 test('正例：试跑 → 每项检定/指令各一条结果，同种子两次结果一致（可复现）', async () => {
@@ -91,7 +91,7 @@ test('正例：试跑后准装 → 进入宿主，状态 installed', async () =>
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.equal(r.id, 'wz-demo');
   assert.ok(w.host().get('wz-demo'));
-  assert.equal(w.host().list().length, 4);               // 3 内置 + 1 用户
+  assert.equal(w.host().list().length, 6);               // 5 内置 + 1 用户
   assert.equal(w.list()[0].state, 'installed');
 });
 

@@ -61,10 +61,10 @@ test('反例：无历史回滚、删内置包均报结构化错误', () => {
   assert.deepEqual(h.remove('ghost'), { ok: false, error: 'NOT_FOUND: ghost 不存在' });
 });
 
-test('正例：内置三套规则与插件同格式互认（同一 validatePlugin 全通过）', () => {
+test('正例：内置规则（通用/CoC7/DnD5e/FATE/双十字）与插件同格式互认（同一 validatePlugin 全通过）', () => {
   const h = mkHost();
   const builtins = h.list().filter(p => p.builtin);
-  assert.equal(builtins.length, 3);
+  assert.equal(builtins.length, 5);
   for (const b of builtins) {
     const pkg = h.get(b.id);
     assert.ok(pkg.manifest && pkg.checks && pkg.cardFields && pkg.templates, b.id + ' 缺字段');

@@ -297,7 +297,8 @@ contextBridge.exposeInMainWorld('api', {
       toggle: (id, enabled) => ipcRenderer.invoke('diceCore:pluginsToggle', id, enabled),
       saveJson: (id, jsonText) => ipcRenderer.invoke('diceCore:pluginsSaveJson', id, jsonText),
       rollback: (id) => ipcRenderer.invoke('diceCore:pluginsRollback', id),
-      export: (id) => ipcRenderer.invoke('diceCore:pluginsExport', id)
+      export: (id) => ipcRenderer.invoke('diceCore:pluginsExport', id),
+      import: (jsonText) => ipcRenderer.invoke('diceCore:pluginsImport', jsonText)   // U7-5：.kp/.json 插件包一键导入
     },
     /* AI 生成向导（分区 5）：第一道闸生成/取消 → 试跑 → 第二道闸安装/丢弃 */
     wizard: {

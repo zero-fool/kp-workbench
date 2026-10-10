@@ -12,7 +12,11 @@
     }[c]));
   }
   function pluginListHTML(plugins) {
-    if (!plugins || !plugins.length) return '<div class="empty">还没有插件。内置三套规则与用户插件都会显示在这里。</div>';
+    /* U7-5：.kp/.json 插件包一键导入工具条（导入动作在 app.js workshopAct 处理） */
+    const toolbar = '<div class="plg-toolbar">' +
+      '<button class="btn sm primary" data-act="import">⤒ 导入 .kp 插件包</button>' +
+      '<span class="hint">支持 .kp / .json 插件包（完整 JSON，含 manifest），安装前过校验器，坏包会被拒。</span></div>';
+    if (!plugins || !plugins.length) return toolbar + '<div class="empty">还没有插件。内置规则与用户插件都会显示在这里。</div>';
     const rows = plugins.map(p => {
       const m = p.manifest || {};
       const tag = p.builtin ? 'plg-tag plg-builtin' : 'plg-tag';
@@ -27,7 +31,7 @@
           <button class="btn sm" data-plg="${esc(m.id)}" data-act="export">⤓ 导出</button></div>
         ${p.warn ? `<div class="plg-warn">${esc(p.warn)}</div>` : ''}</div>`;
     }).join('\n');
-    return `<div class="plg-list">${rows}</div>`;
+    return toolbar + `<div class="plg-list">${rows}</div>`;
   }
   function pluginEditorHTML(plugin) {
     const m = plugin.manifest || {};

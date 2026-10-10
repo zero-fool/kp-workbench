@@ -1527,7 +1527,8 @@ function registerIpc() {
     const r = enabled ? pluginHost.enable(String(id || '')) : pluginHost.disable(String(id || ''));
     return { ok: r.ok, error: r.error || null, id };
   });
-  ipcMain.handle('diceCore:pluginsSaveJson', (e, id, jsonText) => {
+  /* JSON 文本 → 校验 → 安装（编辑保存与 U7-5 .kp/.json 插件包导入共用同一条路径） */
+  const installFromJson = (jsonText) => {
     let pkg;
     try { pkg = JSON.parse(String(jsonText || '')); }
     catch (err) { return { ok: false, errors: ['JSON 解析失败：' + err.message] }; }
@@ -1535,7 +1536,9 @@ function registerIpc() {
     if (!v.ok) return { ok: false, errors: v.errors.map(x => x.msg) };
     const r = pluginHost.install(pkg);              // 同 id 覆盖自动备份 <id>.prev.json
     return r.ok ? { ok: true, id: r.id, version: r.version } : { ok: false, errors: [r.error] };
-  });
+  };
+  ipcMain.handle('diceCore:pluginsSaveJson', (e, id, jsonText) => installFromJson(jsonText));
+  ipcMain.handle('diceCore:pluginsImport', (e, jsonText) => installFromJson(jsonText));
   ipcMain.handle('diceCore:pluginsRollback', (e, id) => pluginHost.rollback(String(id || '')));
   ipcMain.handle('diceCore:pluginsExport', (e, id) => {
     const p = pluginHost.get(String(id || ''));

@@ -161,8 +161,8 @@ P2 批已落实 P2-17，`npm test` 全绿（358 项回归）：
 | U5-1 | P0 | 对话/润色/生成接 SSE 流式逐字上屏；拆分/分幕按段·幕汇报进度；不支持流式的端点自动回退 | 全库 0 处 stream，长任务几十秒到几分钟无进展反馈 |
 | U5-2 | P1 | 备用模型容灾：主模型网络错/5xx/限流自动切换重试一次（预算熔断仍生效） | 单模型抖动即任务失败 |
 | U5-3 | P1 | 拆分质量基准 tools/ai-eval.js：离线 mock 测试集 + --live 真实跑分（准确率/截断率/耗时） | U3 系列优化缺量化尺子，改提示词无从对比 |
-| U5-4 | P2 | 用量报表：按任务类型/时间段聚合 token/费用，CSV 导出 | U3-5 只有实时视角，看不到月度构成 |
-| U5-5 | P2 | 拆分校对工作流：原文-卡片对照、来源句高亮、一键改归属，样本反哺 U5-3 | 拆错只能进卡片手改，长文本核对成本高 |
+| U5-4 | P2 | 用量报表：按任务类型/时间段聚合 token/费用，CSV 导出 | U3-5 只有实时视角，看不到月度构成 |（✅ 已完成）
+| U5-5 | P2 | 拆分校对工作流：原文-卡片对照、来源句高亮、一键改归属，样本反哺 U5-3 | 拆错只能进卡片手改，长文本核对成本高 |（✅ 已完成）
 
 ## U6 数据稳健性
 
@@ -177,10 +177,10 @@ P2 批已落实 P2-17，`npm test` 全绿（358 项回归）：
 | 编号 | 优先级 | 方案 | 解决什么问题 |
 |---|---|---|---|
 | U7-1 | P1 | .kp/.ai 触发词与指令别名可配置 | 触发词硬编码，群内多骰娘易冲突 |
-| U7-2 | P2 | QQ 官方机器人体验补全（被动回复窗口、长回复分片、鉴权到期提醒） | qqofficial 通道已有，官方限制下的细节未打磨 |
-| U7-3 | P2 | 地图令牌联动临场战斗（拖动/血条/倒下置灰/当前行动者高亮） | 地图与战斗模块靠口头对照 |
+| U7-2 | P2 | QQ 官方机器人体验补全（被动回复窗口、长回复分片、鉴权到期提醒） | qqofficial 通道已有，官方限制下的细节未打磨 |（✅ 已完成）
+| U7-3 | P2 | 地图令牌联动临场战斗（拖动/血条/倒下置灰/当前行动者高亮） | 地图与战斗模块靠口头对照 |（✅ 已完成）
 | U7-4 | P1 | 便签一键转日志卡（时间戳+来源标记） | 便签是草稿，团后还要手动誊 |
-| U7-5 | P2 | 插件工坊预置 FATE/双十字等模板、.kp 插件包一键导入 | 内置规则仅通用/CoC7/DnD5e |
+| U7-5 | P2 | 插件工坊预置 FATE/双十字等模板、.kp 插件包一键导入 | 内置规则仅通用/CoC7/DnD5e |（✅ 已完成）
 
 ## 执行顺序建议
 
@@ -219,4 +219,25 @@ P2 批已落实 P2-17，`npm test` 全绿（358 项回归）：
 | U9-5 | 关系提示词清单按类别分组注入（【人物】【地区】…分节），按原文共现相关度排序后每类取 Top N，模型按类型找地点对 |
 
 配套：U3-11/U8-5 相关回归断言同步（分幕并发上限 4→3 为有意降档、空幕不合并）；`npm test` 中 2 项构建链测试仅在缺 esbuild 的沙箱环境失败，与本次改动无关。
+
+---
+
+# U5/U7 批完成记录（2026-10-10）
+
+> U5-4 / U5-5 / U7-2 / U7-3 / U7-5 五项全部完成，已按登记约定同步至 xlsx「优化规划清单」页（E58/E59/E66/E67/E69 标记「已完成（已验证）」）。`npm test` 回归 456/458 通过（2 项失败为沙箱缺 esbuild 的构建链环境测试，与本次改动无关）。
+
+## U5 AI 能力深化（完成）
+
+| 编号 | 落实摘要 |
+|---|---|
+| U5-4 | [app.js](../src/renderer/app.js) AI 健康度页用量报表：`aggregateUsage` 按任务类型/日期/模型三维度聚合 token、错误、超时与耗时（含估算输入 token），CSV 导出；配套 [tests/ai-usage-report.test.js](../tests/ai-usage-report.test.js) |
+| U5-5 | 拆分校对工作流：[app.js](../src/renderer/app.js) 实体记录来源段落，原文对照 + 来源句高亮 + 一键改归属；[tools/ai-eval.js](../tools/ai-eval.js) 新增 `--samples` 加载用户校对样本（文件/目录均可），离线结构检查与 `--live` 跑分统一走 `sampleExpect`，样本反哺 U5-3 基准 |
+
+## U7 玩法与生态扩展（完成）
+
+| 编号 | 落实摘要 |
+|---|---|
+| U7-2 | QQ 官方机器人体验补全：[normalize.js](../src/dice-net/qqofficial/normalize.js) 长回复分片（行边界优先/超长行硬切/单条 2000 字节/最多 5 条，`msg_seq` 递增防重）；[index.js](../src/dice-net/qqofficial/index.js) 被动回复窗口（>5 分钟不再 REST 回发并计数）、`status()` 暴露 token 剩余时间/窗口跳过数/发送失败数；[conn-center.js](../src/renderer/dice-ui/conn-center.js) 状态灯渲染鉴权到期与质量指标；新增 [tests/dice-net/qqofficial-ux.test.js](../tests/dice-net/qqofficial-ux.test.js) |
+| U7-3 | 地图令牌联动临场战斗：[app.js](../src/renderer/app.js) `mapEncLink` 绑定地图标记与遭遇单位，地图绘制血条/倒下置灰/当前行动者金色双环高亮；遭遇面板令牌绑定/改绑/解绑/跳转地图；删除标记联动清理绑定 |
+| U7-5 | 插件工坊预置 FATE/双十字：[builtin/fate.json](../src/dice-core/plugin/builtin/fate.json)（4d3-8 命运骰 + 技能 - 难度六档分档，内置「命运骰/4df」指令）与 [builtin/double-cross.json](../src/dice-core/plugin/builtin/double-cross.json)（骰池 6/10/14，出 10 爆炸 + kh1 取最大，决定的成功/险胜分档），与既有三套同过同一校验器，内置规则增至 5 套；.kp/.json 插件包一键导入：[main.js](../src/main/main.js) `diceCore:pluginsImport`（与编辑保存共用 `installFromJson`）、[workshop.js](../src/renderer/dice-ui/workshop.js) 列表导入工具条、[app.js](../src/renderer/app.js) 文件选择→读文本→校验安装（坏包报具体校验错误）；新增 [tests/plugin-templates.test.js](../tests/plugin-templates.test.js) 6 项 |
 
