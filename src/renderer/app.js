@@ -501,8 +501,14 @@
     const t = document.createElement('div');
     t.className = 'toast ' + (type || '');
     t.textContent = msg;
+    /* 审计 P1-2：错误类提示升级为 alert 语义（assertive），普通提示走 #toasts 容器的 polite live */
+    if (String(type || '').indexOf('err') !== -1) t.setAttribute('role', 'alert');
+    /* 审计 P3：时长自适应——长文案与错误提示停留更久，上限 8 秒 */
+    const ms = String(type || '').indexOf('err') !== -1
+      ? Math.min(8000, 5000 + Math.max(0, msg.length - 20) * 30)
+      : Math.min(8000, 3200 + Math.max(0, msg.length - 24) * 40);
+    setTimeout(() => t.remove(), ms);
     q('toasts').appendChild(t);
-    setTimeout(() => t.remove(), 3200);
   }
   /* AI 错误降级：把底层错误映射成可读原因（附「去配置」直达）。eiAIErr(e) 返回 {msg, config:boolean} */
   function eiAIErr(e) {
@@ -723,8 +729,11 @@
   }, true);
   function aiBusyPaint() {
     const el = q('aiBusy'); if (!el) return;
+    /* 审计 P1-2：label 进 role=status 播报区（仅变化时播报），逐秒跳动的计时走 aria-hidden 免打扰 */
     const txt = q('aiBusyText');
-    if (txt) txt.textContent = _aiLabel + ' · 已用 ' + Math.max(0, Math.round((Date.now() - _aiT0) / 1000)) + ' 秒';
+    if (txt && txt.textContent !== _aiLabel) txt.textContent = _aiLabel;
+    const sec = q('aiBusySec');
+    if (sec) sec.textContent = ' · 已用 ' + Math.max(0, Math.round((Date.now() - _aiT0) / 1000)) + ' 秒';
   }
   /* U1-8 队列可视化：把「进行中 / 排队中」逐项列出来，用户一眼看清还有几项在等、分别是什么。*/
   const AI_GROUP_UI = { chat: '对话类任务', cards: '资料类任务', scenario: '剧本分幕', map: '地图生成', tpl: '模板生成', sys: '连接测试/审查', misc: 'AI 任务' };
@@ -761,6 +770,7 @@
       _aiGroups = Array.isArray(s.groups) ? s.groups.concat() : (_aiGroups.length ? _aiGroups : []);
       if (!_aiTimer) { _aiT0 = Date.now(); _aiTimer = setInterval(aiBusyPaint, 1000); }
       if (el) el.hidden = false;
+      const t0 = q('aiBusyText'); if (t0) t0.textContent = ''; /* 清空再写回，让状态区在「开始处理」时播报一次 */
       aiBusyPaint();
       if (!_aiBtn && _aiLastClickBtn && (Date.now() - _aiLastClickAt) < 900 && _aiLastClickBtn.tagName === 'BUTTON') {
         _aiBtn = _aiLastClickBtn; _aiBtn.disabled = true; _aiBtn.classList.add('ai-running');
@@ -817,7 +827,8 @@
       tx.textContent = (phaseText && body.indexOf(phaseText) !== 0) ? (phaseText + '：' + body) : body;
     }
     if (pct) pct.textContent = (p.percent != null ? p.percent + '%' : ((typeof p.done === 'number' && p.total) ? p.done + ' / ' + p.total : ''));
-    if (bar) bar.style.width = (typeof p.percent === 'number' ? p.percent : 0) + '%';
+    /* 审计 P3：进度条改 transform:scaleX 驱动（transform-origin 左侧），替代触发布局的 width 动画 */
+    if (bar) bar.style.transform = 'scaleX(' + Math.max(0, Math.min(1, (typeof p.percent === 'number' ? p.percent : 0) / 100)) + ')';
     if (tm) {
       const parts = [];
       if (typeof p.elapsedMs === 'number') parts.push('已用 ' + fmtDur(p.elapsedMs));
@@ -1026,7 +1037,7 @@
         <div class="usage-chip"><b>${aiMoney(budgetCost)}</b> 估算花费${budget.limit > 0 ? `<span class="hint"> / 预算 ${aiMoney(budget.limit)}</span>` : ''}</div>
       </div>
       ${budget.limit > 0 ? `<div style="margin-bottom:12px">
-        <div class="ai-budget-bar"><div class="ai-budget-fill ${budgetRatio >= 1 ? 'over' : (budgetRatio >= (Number(budget.warn) || 80) / 100 ? 'warn' : '')}" style="width:${Math.min(100, Math.round(budgetRatio * 100))}%"></div></div>
+        <div class="ai-budget-bar"><div class="ai-budget-fill ${budgetRatio >= 1 ? 'over' : (budgetRatio >= (Number(budget.warn) || 80) / 100 ? 'warn' : '')}" style="transform:scaleX(${Math.max(0, Math.min(1, budgetRatio))})"></div></div>
         <div class="hint" style="margin-top:4px">已用 ${aiMoney(budgetCost)} / ${aiMoney(budget.limit)}（${Math.round(budgetRatio * 100)}%）${budgetRatio >= 1 ? ' · <b style="color:var(--danger)">已超预算</b>' : (budgetRatio >= (Number(budget.warn) || 80) / 100 ? ' · <b style="color:var(--warn)">接近预算</b>' : '')}</div>
       </div>` : ''}
       <details class="ai-budget-card">
@@ -1471,7 +1482,7 @@
         <div class="wz-body"><b>${s.no}. ${s.title}</b><div class="hint">${s.tip}</div></div>${btn}</div>`;
     }).join('');
     return `<div class="setcard wizard" style="margin-top:10px">
-      <div class="wizard-head" onclick="WB.toggleWizard()" style="cursor:pointer;user-select:none">
+      <div class="wizard-head" onclick="WB.toggleWizard()" tabindex="0" role="button" style="cursor:pointer;user-select:none">
         <b>🚀 开团向导</b><span class="hint"> · 按 5 步依次点亮，即可开起一团</span>
         <span class="grow"></span><span class="hint">${collapsed ? '展开 ▸' : '收起 ▾'}</span></div>
       <div id="wizardBody" class="wizard-body" ${collapsed ? 'style="display:none"' : ''}>${stepHTML}${aiOk ? '' : '<div class="hint" style="margin:8px 0 2px">提示：不配置 AI 也能正常开团——建档、掷骰、地图、日志、导出等完全离线可用；AI 仅用于拆分登记 / 生成 / 润色等增强功能。</div>'}</div>
@@ -1515,7 +1526,7 @@
     for (const k of KINDS) for (const id of favIds(k)) {
       const it = (S.data.entities[k] || []).find(x => x.id === id);
       if (!it) continue;
-      favChips.push(`<div class="favchip" onclick="WB.go('${k}');" title="${esc(DATA_TYPE[k])} · ${esc(it.name || '未命名')}"><span class="fc-x" onclick="event.stopPropagation();WB.toggleFav('${k}','${id}')" title="取消收藏">×</span>${esc(it.name || '未命名')}</div>`);
+      favChips.push(`<div class="favchip" onclick="WB.go('${k}');" tabindex="0" role="button" title="${esc(DATA_TYPE[k])} · ${esc(it.name || '未命名')}"><span class="fc-x" onclick="event.stopPropagation();WB.toggleFav('${k}','${id}')" tabindex="0" role="button" title="取消收藏">×</span>${esc(it.name || '未命名')}</div>`);
     }
     if (favChips.length) html += `<div class="setcard" style="margin-top:10px"><div><b style="font-size:13px">★ 常用收藏</b><span class="hint"> · 共 ${favChips.length} 条</span></div><div class="favtiles">${favChips.join('')}</div></div>`;
     html += `<div class="tiles" id="dashTiles">`;
@@ -1539,7 +1550,7 @@
       html += `<div class="setcard" style="margin-top:10px"><div class="wizard-head"><b>⚔ 正在进行的遭遇</b>
         <span class="hint"> · 投骰会自动并入其流水</span><span class="grow"></span>
         <button class="ghost small" onclick="WB.go('encounter')">进入临场战斗 ▸</button></div>
-        <div class="favtiles">${encInActive.map(e => `<div class="favchip" onclick="WB.go('encounter')" title="${esc(e.name || '未命名遭遇')}">⚔ ${esc(e.name || '未命名遭遇')} <span class="fc-x">${(e.units || []).length} 单位</span></div>`).join('')}</div></div>`;
+        <div class="favtiles">${encInActive.map(e => `<div class="favchip" onclick="WB.go('encounter')" tabindex="0" role="button" title="${esc(e.name || '未命名遭遇')}">⚔ ${esc(e.name || '未命名遭遇')} <span class="fc-x">${(e.units || []).length} 单位</span></div>`).join('')}</div></div>`;
     }
     if (!hidden.includes('stats')) html += statsReportHTML();
     contentInner(html);
@@ -1705,7 +1716,7 @@
       const n = (all[k] || []).length;
       total += n;
       if (n > 0 || k === 'pcs') entries.push({ k, n });
-      cards += `<div class="dash-stat dash-click" data-k="${k}" style="--stat-glow:${kindColor[k]}" onclick="WB.go('${k}')">
+      cards += `<div class="dash-stat dash-click" data-k="${k}" style="--stat-glow:${kindColor[k]}" onclick="WB.go('${k}')" tabindex="0" role="button">
         <div class="num">${n}</div><div class="cap"><span class="ccore" style="background:${kindColor[k]}"></span>${DATA_TYPE[k]}</div></div>`;
     }
     /* 分布环：用 stroke-dasharray 分片，简单可靠 */
@@ -1903,7 +1914,7 @@
     const l3 = chips.slice(0, 4).map(t => `<span class="cr-tag">＃${esc(t)}</span>`).join('')
       + (it.source ? `<span class="cr-tag">${esc(it.source)}</span>` : '');
     const fav = isFav(kind, it.id);
-    return `<div class="cab-row${on ? ' on' : ''}" data-id="${esc(it.id)}" onclick="WB.cabPick('${kind}','${escJs(it.id)}')">
+    return `<div class="cab-row${on ? ' on' : ''}" data-id="${esc(it.id)}" onclick="WB.cabPick('${kind}','${escJs(it.id)}')" tabindex="0" role="button">
       <div class="cr-l1"><span class="cr-nm cnm">${esc(name)}</span><span class="cr-fav${fav ? '' : ' dim'}">${fav ? '★' : '☆'}</span></div>
       ${sum ? `<div class="cr-l2">${esc(sum)}</div>` : ''}
       ${l3 ? `<div class="cr-l3">${l3}</div>` : ''}
@@ -2085,7 +2096,7 @@
           /* 参考格局：规则/背景一条 = 一张可折叠速查卡 */
           return `<details class="rcard"${it._open ? ' open' : ''}>
             <summary><span class="rc-chev">▸</span><span class="cnm">${esc(name)}</span>${tplTag}${it.source ? '<span class="ctag">' + esc(it.source) + '</span>' : ''}
-              <span class="fav-star" onclick="event.preventDefault();WB.toggleFav('${kind}','${it.id}')" title="收藏/取消收藏">${isFav(kind, it.id) ? '★' : '☆'}</span>
+              <span class="fav-star" onclick="event.preventDefault();WB.toggleFav('${kind}','${it.id}')" tabindex="0" role="button" title="收藏/取消收藏">${isFav(kind, it.id) ? '★' : '☆'}</span>
               <span class="grow"></span><span class="rc-actions">
                 <button class="ghost" onclick="event.preventDefault();event.stopPropagation();WB.edit('${kind}','${it.id}')">编辑</button>
                 <button class="ghost" onclick="event.preventDefault();event.stopPropagation();WB.dupCard('${kind}','${it.id}')" title="复制">⧉</button>
@@ -2101,7 +2112,7 @@
             ${batchMode ? `<label class="batch-check"><input type="checkbox" data-batch="${esc(it.id)}"${selChecked} onchange="WB.toggleSel('${kind}','${it.id}',this.checked)"></label>` : ''}
             ${isCustomSort ? `<span class="sort-handle" title="按住拖动可排序">⠿</span>` : ''}
             <span class="cnm">${esc(name)}</span>${tplTag}${it.source ? '<span class="ctag">' + esc(it.source) + '</span>' : ''}${xrefBadgeHTML(name, kind, it.id)}
-            <span class="fav-btn" onclick="WB.toggleFav('${kind}','${it.id}')" title="收藏/取消收藏">${favStar}</span>
+            <span class="fav-btn" onclick="WB.toggleFav('${kind}','${it.id}')" tabindex="0" role="button" title="收藏/取消收藏">${favStar}</span>
           </div>
           ${selVals ? `<div class="tags">${selVals}</div>` : ''}
           ${relatedChipsHTML(kind, it)}
@@ -3218,7 +3229,7 @@
   function xrefBadgeHTML(name, selfKind, selfId) {
     const hits = xrefHits(name, selfKind, selfId);
     if (!hits.length) return '';
-    return `<span class="xref-badge" onclick="WB.xrefOpen('${escJs(selfKind)}','${escJs(selfId)}')" title="被 ${hits.length} 处提及，点击查看">⇄ 引用 ${hits.length}</span>`;
+    return `<span class="xref-badge" onclick="WB.xrefOpen('${escJs(selfKind)}','${escJs(selfId)}')" tabindex="0" role="button" title="被 ${hits.length} 处提及，点击查看">⇄ 引用 ${hits.length}</span>`;
   }
   /* ===== U2-3 视图内「相关功能」跳转 =====
    * 卡片上一排快捷入口：关系网定位 / 所属地区 / 相关遭遇，免去回侧栏重新找路径。
@@ -4617,7 +4628,7 @@
         <div class="enc-order">${order.map((id, i) => {
           const u = units.find(x => x.id === id);
           const tag = id === curId ? '<b class="enc-mark">▶</b>' : (i + 1);
-          return `<span class="enc-order-item${id === curId ? ' cur' : ''}" onclick="WB.encNextTo('${escJs(id)}')" title="点击设为当前">${esc(u ? u.name : '—')}</span>`;
+          return `<span class="enc-order-item${id === curId ? ' cur' : ''}" onclick="WB.encNextTo('${escJs(id)}')" tabindex="0" role="button" title="点击设为当前">${esc(u ? u.name : '—')}</span>`;
         }).join('')}</div>
       </div>`;
     }
@@ -5860,6 +5871,90 @@
     q('modalMask').hidden = true; q('confirmMask').hidden = true;
     if (typeof _modalCancel === 'function') { const f = _modalCancel; _modalCancel = null; try { f(); } catch (_) { /* 回滚失败不影响关闭 */ } }
   }
+  /* ================= UI 审计整改（P1-1 / P1-3 / P2-1） =================
+   * ① label 自动关联：全库 <label> 多靠排版邻近对位，读屏用户听到的是无标签输入框。
+   *    运行时自动关联（label 包住控件→本就隐式关联；相邻兄弟→for=；父容器唯一控件→for=），
+   *    并用 MutationObserver 跟上 innerHTML 动态渲染，防抖后补关联。
+   * ② 弹窗焦点圈闭：六类遮罩打开时给内容盒 role=dialog + aria-modal，Tab 循环困在弹层内，
+   *    关闭后焦点回归触发元素；打开时自动聚焦首个可聚焦控件。
+   * ③ 键盘激活：非 button 的 [role=button]（chip/badge/行点击）支持 Enter/Space 触发 click。 */
+  function assocLabels(root) {
+    const scope = root && root.querySelectorAll ? root : document;
+    scope.querySelectorAll('label:not([for])').forEach((lb) => {
+      if (lb.dataset.assocDone) return;
+      lb.dataset.assocDone = '1';
+      let ctl = lb.querySelector('input,select,textarea');
+      if (!ctl) {
+        const nx = lb.nextElementSibling;
+        if (nx && /^(INPUT|SELECT|TEXTAREA)$/.test(nx.tagName)) ctl = nx;
+      }
+      if (!ctl && lb.parentElement) {
+        const cs = lb.parentElement.querySelectorAll('input:not([type="hidden"]),select,textarea');
+        if (cs.length === 1) ctl = cs[0];
+      }
+      if (!ctl) return;
+      if (!ctl.id) ctl.id = 'a11y-auto-' + Math.random().toString(36).slice(2, 8);
+      lb.setAttribute('for', ctl.id);
+    });
+  }
+  let _assocTid = null;
+  const _assocObserver = (typeof MutationObserver === 'function') ? new MutationObserver(() => {
+    if (_assocTid) clearTimeout(_assocTid);
+    _assocTid = setTimeout(() => { _assocTid = null; try { assocLabels(document); } catch (_) { /* 语义增强失败不影响功能 */ } }, 250);
+  }) : null;
+  function a11yWatchStart() {
+    try {
+      assocLabels(document);
+      if (_assocObserver) _assocObserver.observe(document.body, { childList: true, subtree: true });
+    } catch (_) { /* 语义增强失败不影响功能 */ }
+  }
+  /* 弹窗焦点圈闭 */
+  const DIALOG_MASK_IDS = ['modalMask', 'confirmMask', 'onboardMask', 'noteMask', 'paletteMask', 'gSearchMask'];
+  const FOCUSABLE_SEL = 'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+  let _dlgRestore = null;
+  function dialogMasksVisible() {
+    return DIALOG_MASK_IDS.map((id) => q(id)).filter((el) => el && !el.hidden);
+  }
+  function trapDialogTab(e) {
+    const masks = dialogMasksVisible();
+    if (!masks.length) return;
+    const m = masks[masks.length - 1];
+    const f = Array.prototype.filter.call(m.querySelectorAll(FOCUSABLE_SEL), (x) => x.offsetParent !== null || x === document.activeElement);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (!m.contains(document.activeElement)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); return; }
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+  function dialogWatchStart() {
+    if (typeof MutationObserver !== 'function') return;
+    const obs = new MutationObserver(() => {
+      const masks = dialogMasksVisible();
+      if (masks.length) {
+        if (!_dlgRestore) { const a = document.activeElement; _dlgRestore = (a && a.tagName !== 'BODY') ? a : null; }
+        masks.forEach((m) => {
+          const box = m.firstElementChild;
+          if (box && box.tagName === 'DIV') { box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); }
+        });
+        const m = masks[masks.length - 1];
+        const f = Array.prototype.filter.call(m.querySelectorAll(FOCUSABLE_SEL), (x) => x.offsetParent !== null);
+        if (f.length && !m.contains(document.activeElement)) f[0].focus();
+      } else if (_dlgRestore) {
+        if (document.activeElement === document.body || !_dlgRestore.isConnected) { try { _dlgRestore.focus(); } catch (_) { /* 触发元素可能已重建 */ } }
+        _dlgRestore = null;
+      }
+    });
+    DIALOG_MASK_IDS.forEach((id) => { const el = q(id); if (el) obs.observe(el, { attributes: true, attributeFilter: ['hidden'] }); });
+  }
+  /* 非 button 的 [role=button] 键盘激活（Enter/Space → click） */
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') { trapDialogTab(e); return; }
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const t = e.target && e.target.closest ? e.target.closest('[role="button"]') : null;
+    if (!t || t.tagName === 'BUTTON' || t.tagName === 'A') return;
+    e.preventDefault();
+    t.click();
+  });
   /* Electron 桌面端没有 window.prompt（v1.5 起项目已确认），凡“输入后继续”统一走内置弹窗。
    * appPrompt(opts, onOk)：onOk(value)；取消或按遮罩外关闭传 null，确定传输入框原文（未填为 ''）。 */
   let _appPromptCb = null;
@@ -6685,7 +6780,7 @@
       <div class="std-row std-2">
         ${st.pending.length
           ? `<span class="std-pend">未兑现伏笔 ${st.pending.length} 条</span>`
-            + st.pending.slice(0, 8).map(p => `<span class="std-chip" title="第 ${p.scene} 幕 · ${esc(p.title)}：${esc(p.text)}" onclick="WB.scriptJump(${p.scene - 1})">第${p.scene}幕 · ${esc(trunc(p.text, 14))}</span>`).join('')
+            + st.pending.slice(0, 8).map(p => `<span class="std-chip" title="第 ${p.scene} 幕 · ${esc(p.title)}：${esc(p.text)}" onclick="WB.scriptJump(${p.scene - 1})" tabindex="0" role="button">第${p.scene}幕 · ${esc(trunc(p.text, 14))}</span>`).join('')
             + (st.pending.length > 8 ? `<span class="hint">…等共 ${st.pending.length} 条</span>` : '')
           : `<span class="hint">${st.cluesTotal ? '伏笔已全部兑现，可安心推进' : '本剧本未标注线索/伏笔'}</span>`}
         ${pendInCur ? `<span class="hint">· 本幕待兑现 ${pendInCur} 条</span>` : ''}
@@ -6949,7 +7044,7 @@
     h += `<div class="gm-sub">未兑现伏笔 ${st.pending.length} 条</div>`;
     if (st.pending.length) {
       h += `<div class="gm-chips">` + st.pending.slice(0, 20).map(p =>
-        `<span class="gm-chip" title="第 ${p.scene} 幕 · ${esc(p.title)}：${esc(p.text)}" onclick="WB.scriptJump(${p.scene - 1})">第${p.scene}幕 · ${esc(trunc(p.text, 16))}</span>`).join('')
+        `<span class="gm-chip" title="第 ${p.scene} 幕 · ${esc(p.title)}：${esc(p.text)}" onclick="WB.scriptJump(${p.scene - 1})" tabindex="0" role="button">第${p.scene}幕 · ${esc(trunc(p.text, 16))}</span>`).join('')
         + (st.pending.length > 20 ? `<span class="hint">…等共 ${st.pending.length} 条</span>` : '') + `</div>`;
     } else {
       h += `<div class="hint">${st.cluesTotal ? '伏笔已全部兑现，可安心推进。' : '本剧本未标注线索/伏笔。'}</div>`;
@@ -6998,7 +7093,7 @@
       const it = (S.data.entities[k] || []).find(x => x.id === id);
       if (!it) continue;
       const nm = it.name || it.title || '未命名';
-      chips.push(`<span class="gm-chip" onclick="WB.go('${k}')" title="${esc(DATA_TYPE[k])} · ${esc(nm)}">${esc(nm)}<span class="gm-chip-k">${esc(DATA_TYPE[k])}</span></span>`);
+      chips.push(`<span class="gm-chip" onclick="WB.go('${k}')" tabindex="0" role="button" title="${esc(DATA_TYPE[k])} · ${esc(nm)}">${esc(nm)}<span class="gm-chip-k">${esc(DATA_TYPE[k])}</span></span>`);
     }
     return `<section class="gm-card">
       <div class="gm-card-h"><b>★ 常用收藏</b><span class="grow"></span><span class="hint">${chips.length} 条</span></div>
@@ -10471,7 +10566,7 @@
         const a = relGetNode(r, e.from), b = relGetNode(r, e.to);
         const an = a ? (a.label || a.id) : e.from, bn = b ? (b.label || b.id) : e.to;
         const sel = _rel.sel === e.id;
-        h += `<div class="rel-li${sel ? ' sel' : ''}" data-eid="${esc(e.id)}" onclick="WB.relListPick('${escJs(e.id)}')"><b>${esc(an)}</b> <em>➔ ${esc(e.label || '关系')}</em> <b>${esc(bn)}</b></div>`;
+        h += `<div class="rel-li${sel ? ' sel' : ''}" data-eid="${esc(e.id)}" onclick="WB.relListPick('${escJs(e.id)}')" tabindex="0" role="button"><b>${esc(an)}</b> <em>➔ ${esc(e.label || '关系')}</em> <b>${esc(bn)}</b></div>`;
       }
       side.innerHTML = h; side.hidden = false;
       return;
@@ -11318,6 +11413,7 @@
       if (Array.isArray(S.settings.chat)) CH.push(...S.settings.chat.slice(-CH_CAP)); // 恢复侧栏对话历史
       if (!S.settings.theme) S.settings.theme = 'parchment';
       applyTheme(S.settings.theme, true);
+      a11yWatchStart(); dialogWatchStart(); /* UI 审计整改：label 关联 + 弹窗焦点圈闭 */
       applySidebar();
       updateTopProfile(); updateDrawerProfile();
       // 档案操作事件委托：数据放在 data-ar（已转义），避免档案名含引号时破坏内联 onclick

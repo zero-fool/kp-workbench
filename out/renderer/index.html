@@ -245,16 +245,17 @@
 </div>
 
 <!-- 全局「AI 处理中」提示：任意界面调用 AI 时显示，提示勿重复点击 -->
-<div class="ai-busy" id="aiBusy" hidden>
+<div class="ai-busy" id="aiBusy" role="status" hidden>
   <span class="ai-busy-spin"></span>
   <b id="aiBusyText">AI 处理中</b>
+  <span id="aiBusySec" aria-hidden="true"></span>
   <span class="ai-busy-tip">请勿重复点击，完成后自动关闭</span>
   <button class="ghost small" id="aiBusyCancel" onclick="WB.aiCancelCurrent()" title="中止正在进行的 AI 任务，任务类型错误会被终止">✕ 取消任务</button>
   <button class="ghost small" id="aiQueueClear" hidden onclick="WB.aiAbortAll()" title="清空所有排队任务并中止当前任务">清空排队</button>
   <div class="ai-queue" id="aiQueue" hidden></div>
 </div>
 
-<div class="toasts" id="toasts"></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
 
 <!-- 文件拖拽导入遮罩反馈 -->
 <div class="drop-overlay" id="dropOverlay" hidden><div class="drop-box">松开以导入文件</div></div>
