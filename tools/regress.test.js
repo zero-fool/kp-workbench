@@ -1983,7 +1983,7 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     const hasStruct = /function linkSchemaText\(fields\)/.test(aiSrc) && /f\.k \+ ':' \+ f\.l/.test(aiSrc)
       && /【人物抽取】/.test(aiSrc) && /【场地抽取】/.test(aiSrc)
       && /function normName\(s\)/.test(aiSrc) && /function mergeEntity\(dst, src\)/.test(aiSrc)
-      && /mergeEntity\(merged\.entities\[k\]\[idxOf\[k\]\.get\(dk\)\], item\)/.test(aiSrc)
+      && /const tgt = merged\.entities\[k\]\[idxOf\[k\]\.get\(dk\)\]/.test(aiSrc) // U5-5 重构：同名合并先取目标卡再 mergeEntity
       && /n === '未命名'\) \? '' : n/.test(aiSrc); // 无名字段不得塌缩成一张卡
     if (!hasStruct) return '人物/场地拆分优化缺失';
     // 名称归一化：标点/空格/书名号差异应视为同一实体（避免同一场景被拆成两张卡）
@@ -2011,7 +2011,7 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       && /attempt <= 3 && !arr/.test(aiSrc)
       && /function extractScriptBody\(/.test(aiSrc)             // 分幕前先提取剧本正文（清洗总文本）
       && /const t = extractScriptBody\(text\);/.test(aiSrc)
-      && /return \{ scenes: result, failed, failedIdx, chunkScenes, extracted: t, usage: usageByMark\(mark\), chunks: chunks\.length, conc: SC_CONC \};/.test(aiSrc)
+      && /return \{ scenes: result, failed, failedIdx, emptyIdx, chunkScenes, extracted: t, usage: usageByMark\(mark\), chunks: chunks\.length, conc: SC_CONC \};/.test(aiSrc)
       && !/return \{ scenes: result, failed \};/.test(aiSrc)
       /* U3-8 拆分登记增强：段长降为 15000 防长 JSON 截断、重试放宽 token 上限、失败兜底返回部分结果 */
       && /const SEG = 15000, OVERLAP = 250;/.test(aiSrc)
@@ -2071,6 +2071,30 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     if (cleaned.includes('村民 A')) return '剧本正文提取未去除人物名与冒号间的多余空格';
     if (/\n{3,}/.test(cleaned)) return '剧本正文提取未压缩连续空行';
     if (cleaned.startsWith('\uFEFF') || cleaned.startsWith('　')) return '剧本正文提取未剔除行首不可见字符/全角空格';
+    return true;
+  });
+  check('U3-9 长文本空结果质量闸：实体信号预检 + 空结果定向纠偏重试 + 空段透明记录 + 续块分幕细则恢复', () => {
+    const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    const ai = require(path.join(__dirname, '..', 'src', 'main', 'ai.js'));
+    if (typeof ai.hasEntitySignals !== 'function') return 'hasEntitySignals 未导出';
+    // 结构：信号预检 + 拆分登记/分幕两条链路都过闸 + 纠偏尾注 + 空段透明记录
+    const hasStruct = /function hasEntitySignals\(s\)/.test(aiSrc)
+      && /hasEntitySignals\(seg\)/.test(aiSrc)                       // 拆分登记：按段预检
+      && /hasEntitySignals\(segText\)/.test(aiSrc)                   // 分幕：tryChunk 内预检
+      && /hasEntitySignals\(chunks\[c\]\)/.test(aiSrc) && /hasEntitySignals\(subs\[sIdx\]\)/.test(aiSrc) // 主块/降粒度子块都传参
+      && /sawEmpty \? EMPTY_SEG_NUDGE : ''/.test(aiSrc) && /sawEmpty \? EMPTY_SCENE_NUDGE : ''/.test(aiSrc)
+      && /emptyIdx\.push\(si\)/.test(aiSrc)                          // 拆分登记空段记录
+      && /merged\.emptyIdx = emptyIdx\.slice\(\)/.test(aiSrc)        // 透明回传
+      && /type: '空段说明'/.test(aiSrc)
+      && /else if \(!r\.reused\) emptyIdx\.push\(r\.c\)/.test(aiSrc); // 分幕空块记录
+    if (!hasStruct) return '空结果质量闸缺失';
+    // 续块分幕细则恢复：完整版与精简版系统提示都必须含「一幕 = 一个完整的剧情节点」核心细则
+    if ((aiSrc.match(/一幕 = 一个完整的剧情节点/g) || []).length < 2) return '续块精简提示丢失分幕核心细则';
+    if (!aiSrc.slice(aiSrc.indexOf('sceneSysPromptLite')).includes('【分幕要求】')) return '精简版系统提示缺【分幕要求】';
+    // 行为：信号判据（零 token 本地启发式）
+    if (ai.hasEntitySignals('目录\n第一章 出发……3\n第二章 抵达……18\n附录 设定摘要……55')) return '目录/附录段不应命中实体信号';
+    if (!ai.hasEntitySignals('「老码头」老张低声说道，众人走进酒馆。')) return '对话/称呼/场景转换应命中实体信号';
+    if (!ai.hasEntitySignals('叙'.repeat(6000))) return '长叙事段应命中实体信号';
     return true;
   });
   check('U3-10 分幕要点逐幕落盘 txt：saveSceneFiles 每幕一文件 + sceneDir/sceneFiles 回传 + 打开文件夹入口', () => {

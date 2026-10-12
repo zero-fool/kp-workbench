@@ -1586,6 +1586,25 @@ function mergeEntity(dst, src) {
   return dst;
 }
 
+/* U3-9 空结果质量闸：判断片段是否「几乎必然含有可提取实体」——纯本地启发式、零 token 成本。
+ * 背景：U8-1 把「合法空结果」直接接受不再重试，治好了重试风暴，却让模型对长叙事段的
+ * 偷懒空回复蒙混过关——拆分登记与分幕在长文本上大面积静默丢内容。
+ * 空结果只有对「确实无内容」的段（目录/附录/纯设定罗列）才合法；本函数给出廉价判据：
+ * 命中任一信号 → 该段空结果可疑，必须定向纠偏重试一次（仍空才接受）。 */
+function hasEntitySignals(s) {
+  const t = String(s || '');
+  if (t.length >= 6000) return true; // 长叙事段几乎必有可提取内容
+  if ((t.match(/[「『【][^」』】]{1,24}[」』】]/g) || []).length >= 2) return true; // 引号称呼/强调名
+  if ((t.match(/[\u4e00-\u9fa5](说|道|问|喊|答|骂|吼|叫道|笑道|低声)/g) || []).length >= 3) return true; // 对话动作
+  if ((t.match(/(来到|走进|抵达|进入|离开|赶往|返回|逃到|冲向)[\u4e00-\u9fa5]{0,12}(馆|店|厅|室|房|楼|塔|桥|镇|村|城|港|湾|码头|教堂|寺庙|学校|学院|医院|营地|基地|研究所|实验室|废墟|森林|山洞|洞穴|地下室|阁楼|走廊|广场|大门|住宅|公寓|别墅|酒馆|旅店)/g) || []).length >= 1) return true; // 场景转换
+  return false;
+}
+
+/* U3-9：空结果定向纠偏尾注——只在「空结果 + 实体信号命中」时追加一次，
+ * 用一次额外请求换回被偷懒吞掉的内容；不回到「整段 3 次重试」的旧风暴。 */
+const EMPTY_SEG_NUDGE = '\n【空结果纠偏】你上一次对本段返回了全空结果。请注意：本段包含剧情叙事、人物对话或场景转换描写，几乎必然含有可提取实体——请逐句仔细检查：凡出现名字或可明确指认的角色各建一条（只出现一两次的配角也不要漏）、每个可辨识的地点/场景建 regions、事件与线索建 logs；确实通篇没有任何实体时才允许返回全空。';
+const EMPTY_SCENE_NUDGE = '\n【空结果纠偏】你上一次对本块返回了空 scenes。请注意：本块包含剧情叙事、人物对话或场景转换描写，几乎必然可以分幕——请按分幕要求把剧情推进的自然节点拆成幕（一幕 = 一个完整的剧情节点）；确实为纯设定/目录/附录文字时才允许返回空数组。';
+
 async function parseScript(text, profile, fields, cfg, existing, opts) {
   opts = opts || {};
   const prompts = effectivePrompts(opts.settings);
@@ -1612,6 +1631,7 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
   const segParsed = new Array(segs.length);
   const errors = [];
   const rejected = [];
+  const emptyIdx = []; // U3-9：接受为「合法空」的段落下标（透明记录，供用户针对性补拆）
   const t0 = Date.now();
   let done = 0;
   let cancelled = false;
@@ -1650,11 +1670,14 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
       }, strict) + excludeNote;
       let lastErr = null;
       let parsed = null;
+      let sawEmpty = false; // U3-9：上一次尝试返回了「合法但全空」的结果
       // U3-4 补充：单段最多重试 3 次（仅在失败时触发，正常解析不产生额外请求），
       // 尽量让长文本「传一次就拆完整」，避免个别段落偶发坏 JSON 而需重传整份。
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          const remind = (attempt > 1) ? '\n【要求纠正】你上一次的回复没有返回可解析的 JSON 对象。请只输出一个 JSON 对象（字段含 entities），不要输出任何解释文字、Markdown 代码块或包围标记；若输出过长会被截断，请务必紧凑地给出完整字段。' : '';
+          // U3-9：sawEmpty 时叠加「空结果纠偏」尾注（定向要求模型逐句复查，不许再偷懒交空）
+          const remind = ((attempt > 1) ? '\n【要求纠正】你上一次的回复没有返回可解析的 JSON 对象。请只输出一个 JSON 对象（字段含 entities），不要输出任何解释文字、Markdown 代码块或包围标记；若输出过长会被截断，请务必紧凑地给出完整字段。' : '')
+            + (sawEmpty ? EMPTY_SEG_NUDGE : '');
           // 剧本拆解输出量大，用更高 token 上限，避免完整 JSON 被截断成残缺对象；重试时再放宽上限
           // U8-6：JSON 被截断（finish_reason=length）时改用「续写补尾」，不再整段重发重计全额输出
           const c = stripWrap(await rawJsonReply(cfg, sys, userBase + remind, attempt > 1 ? 12000 : 10000, { maxAppend: 2 }));
@@ -1664,10 +1687,14 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
           for (const k of kinds) if (!Array.isArray(ent[k])) ent[k] = [];
           const empty = kinds.every(k => !Array.isArray(ent[k]) || !ent[k].length);
           if (empty) {
-            // U8-1：空段是合法结果（过渡章节/纯叙事段模型本就识别不出实体），
-            // 直接接受空结果，不再 throw 触发 3 次整段重试白烧 token
+            // U8-1：空段是合法结果（目录/附录/纯设定罗列段本就识别不出实体），
+            // 不再 throw 触发整段 3 次重试白烧 token；
+            // U3-9 质量闸：含实体信号的长叙事段返回空几乎必是模型偷懒——
+            // 仅在首次尝试时定向纠偏重试一次（仍空才接受），兼顾质量与成本。
+            if (attempt === 1 && hasEntitySignals(seg)) { sawEmpty = true; continue; }
             parsed = { entities: {}, updates: Array.isArray(j && j.updates) ? j.updates : [], empty: true };
             for (const k of kinds) parsed.entities[k] = [];
+            emptyIdx.push(si);
             break;
           }
           const fe = effectiveFields(fields);
@@ -1786,6 +1813,15 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
     merged.updates.push({
       type: '分段解析告警',
       note: '有 ' + errors.length + ' / ' + segs.length + ' 段未能解析（' + errors.slice(0, 6).join('；') + (errors.length > 6 ? ' 等' : '') + '），结果可能不完整；可只对上述段落的内容重新拆分一次，无需重传整份文本。'
+    });
+  }
+  /* U3-9 空段透明记录：接受为「合法空」的段落列出来——这些段落已经过实体信号预检与
+   * 定向纠偏复核，大概率确为目录/附录/纯设定；但给出补救路径，用户可把对应部分单独再拆一次。 */
+  if (!cancelled && emptyIdx.length) {
+    merged.emptyIdx = emptyIdx.slice();
+    merged.updates.push({
+      type: '空段说明',
+      note: '有 ' + emptyIdx.length + ' / ' + segs.length + ' 段未识别出实体（含叙事/对话信号的段落已自动做过一次纠偏复核，确认为目录、附录或纯设定类内容）。若你确认其中某些段落应有可提取内容，可把对应部分单独粘贴后重新拆分一次。'
     });
   }
   if (cancelled) { merged.partial = true; merged.cancelled = true; } // 已取消但有已完成段：返回部分结果
@@ -2493,14 +2529,18 @@ function sceneSysPrompt() {
     + '6) 本段通常拆 3~8 幕：只输出本段正文对应的幕，内容超出本段时不要硬塞；若「续写要求」给出前文已分好的幕与设定，不要重复它们，人物/地点/线索的名称与事实必须与其保持一致，不得改名、遗漏或自相矛盾。';
 }
 
-/* U8-7：续块精简系统提示——只保留 JSON schema、输出约束与一致性要求（完整版 ~800 字 → ~350 字）。
- * 首块仍用完整版（建立分幕细则）；中后段的细则由首块确立、跨块一致性由「续写要求」锚点负责。 */
+/* U8-7：续块精简系统提示——保留 JSON schema、输出约束与「分幕要求」核心细则（完整版 ~800 字 → ~550 字）。
+ * 原精简到 ~350 字时砍掉了「一幕=完整剧情节点 / title 具体 / plot 200~400 字」等关键细则，
+ * 中后段幕质量明显劣化（U3-9 教训：token 省在锚点与正文复用上，不省在细则上——细则决定了产出下限）。 */
 function sceneSysPromptLite() {
   return '你是资深 TRPG 主持人（KP）的剧本拆解助手。把给定片段继续拆成幕（scenes），严格输出一个 JSON 对象：'
-    + '{"scenes":[{"title":"幕标题(具体且可区分)","location":["地点"],"time":"大概时间","characters":[{"name":"人物","role":"身份(可空)"}],"plot":"剧情经过 200~400 字","clues":["线索"],"props":["道具"],"note":"承接提示(可空)"}]}。\n'
-    + '要求：一幕=一个完整剧情节点，不机械等分；plot 忠于原文顺序、不加戏；'
-    + '只列本段明确提及的地点/人物/线索，没有给空数组；'
-    + '名称与「续写要求」中已确立的保持一致，不重复已分好的幕；只输出 JSON，无任何解释。';
+    + '{"scenes":[{"title":"幕标题(具体且可区分)","location":["地点"],"time":"大概时间","characters":[{"name":"人物","role":"身份(可空)"}],"plot":"剧情经过","clues":["线索"],"props":["道具"],"note":"承接提示(可空)"}]}。\n'
+    + '【分幕要求】\n'
+    + '1) 一幕 = 一个完整的剧情节点（进入新场景、发生关键事件、冲突或转折）；不要把一段文字机械等分，同一场景内连续的对话与行动算作同一幕。\n'
+    + '2) title 要具体、彼此可区分（如「废弃教堂·初见执事」）；禁止出现多个都叫「探索」「战斗」「对话」的幕。\n'
+    + '3) plot 按原文顺序叙述，保留关键动作、玩家决定与台词摘要，200~400 字；不得加入原文没有的剧情。\n'
+    + '4) location/characters 只列本段明确提及的地点与人物，没有的内容给空数组；'
+    + '名称与「续写要求」中已确立的保持一致，不重复已分好的幕；只输出 JSON，无任何解释文字。';
 }
 function normalizeScene(it, idx) {
   const s = (it && typeof it === 'object') ? it : {};
@@ -2653,21 +2693,31 @@ async function breakdownScenario(cfg, text, settings, opts) {
   const scenes = [];
   let failed = 0;
   const failedIdx = [];
+  const emptyIdx = []; // U3-9：接受为「合法空」的块下标（透明记录）
   const chunkScenes = [];
   const roll = { chars: [], locs: [], clues: [], titles: [] };
   // 补跑模式：先用既有成功段回填一致性锚点（人物/地点/线索/标题），再仅对失败段发起 AI
   if (only && prev) for (const g of prev) if (Array.isArray(g)) mergeRoll(roll, g);
-  /* 对一段正文调用 AI 产出幕；返回 null 表示多次尝试后仍失败（[] 为合法空结果）。用户取消立即上抛。 */
-  const tryChunk = async (user, sys) => {
+  /* 对一段正文调用 AI 产出幕；返回 null 表示多次尝试后仍失败（[] 为合法空结果）。用户取消立即上抛。
+   * U3-9：segText 供空结果质量闸做实体信号预检——含剧情信号的块返回空须定向纠偏重试一次。 */
+  const tryChunk = async (user, sys, segText) => {
     let arr = null;
+    let sawEmpty = false; // U3-9：上一次尝试返回了「合法但空 scenes」
     for (let attempt = 1; attempt <= 3 && !arr; attempt++) {
       try {
-        const remind = attempt > 1 ? '\n【要求纠正】你上一次没有返回可解析的 JSON。请只输出一个 JSON 对象（含 scenes 数组），紧凑完整，不要解释文字或代码块。' : '';
+        // U3-9：sawEmpty 时叠加「空结果纠偏」尾注
+        const remind = (attempt > 1 ? '\n【要求纠正】你上一次没有返回可解析的 JSON。请只输出一个 JSON 对象（含 scenes 数组），紧凑完整，不要解释文字或代码块。' : '')
+          + (sawEmpty ? EMPTY_SCENE_NUDGE : '');
         // U8-6：JSON 被截断（finish_reason=length）时改用「续写补尾」，不再整段重发
         const raw = await rawJsonReply(cfg2, sys, user + remind, 6000, { maxAppend: 2 });
         const obj = extractJsonObject(raw);
         const got = (obj && Array.isArray(obj.scenes)) ? obj.scenes : (Array.isArray(obj) ? obj : []);
-        if (obj && !got.length) { arr = []; break; }   // U8-1：JSON 合法但本段无幕（纯设定/附录文字）→ 合法空结果，不重试
+        if (obj && !got.length) {
+          // U8-1：JSON 合法但本段无幕（纯设定/附录文字）→ 合法空结果，不重试；
+          // U3-9 质量闸：含剧情信号的块先定向纠偏重试一次，仍空才接受为合法空。
+          if (attempt === 1 && hasEntitySignals(segText)) { sawEmpty = true; continue; }
+          arr = []; break;
+        }
         if (!got.length) throw new Error('未返回 scenes 数组');
         arr = got;
       } catch (e) {
@@ -2696,7 +2746,7 @@ async function breakdownScenario(cfg, text, settings, opts) {
     const ctx = buildContinueCtx(c, chunks.length, roll, lastPlot);
     const user = '【团本正文' + (chunks.length === 1 ? '' : ' · 第 ' + (c + 1) + ' / ' + chunks.length + ' 部分') + '】\n' + chunks[c] + ctx;
     // U8-7：首块用完整系统提示（建立分幕细则），续块用精简版（一致性由锚点负责）
-    let arr = await tryChunk(user, c === 0 ? sysFull : sysLite);
+    let arr = await tryChunk(user, c === 0 ? sysFull : sysLite, chunks[c]);
     // 主块多次失败 → 降粒度切成子块逐个重试，几乎不再整段缺失；子块也失败才计 failed
     if (!arr && chunks[c].length > SC_SUB_CHUNK) {
       const subs = splitByStructure(chunks[c], SC_SUB_CHUNK, SC_SUB_OVERLAP);
@@ -2706,7 +2756,7 @@ async function breakdownScenario(cfg, text, settings, opts) {
         const prevPlot = subScenes.length ? sanitizeStr(subScenes[subScenes.length - 1] && subScenes[subScenes.length - 1].plot, 300) : lastPlot;
         const subUser = '【团本正文 · 第 ' + (c + 1) + ' / ' + chunks.length + ' 部分之 ' + (sIdx + 1) + '】\n' + subs[sIdx]
           + buildContinueCtx(c, chunks.length, roll, prevPlot);
-        const subArr = await tryChunk(subUser, (c === 0 && sIdx === 0) ? sysFull : sysLite);
+        const subArr = await tryChunk(subUser, (c === 0 && sIdx === 0) ? sysFull : sysLite, subs[sIdx]);
         if (subArr) for (const s of subArr) subScenes.push(s);
         else subFailed++;
       }
@@ -2721,8 +2771,10 @@ async function breakdownScenario(cfg, text, settings, opts) {
     // 波内按块序归并：保证幕序稳定，且后一波能看到前一波全部结果（滚动锚点一致）
     for (const r of results) {
       if (r && Array.isArray(r.arr)) {
-        // U8-1：r.arr 为空数组（本段合法无幕）也算成功——不重试、不计失败
+        // U8-1：r.arr 为空数组（本段合法无幕）也算成功——不重试、不计失败；
+        // U3-9：空块记入 emptyIdx（能走到这里说明已通过实体信号纠偏复核）
         if (r.arr.length) for (const s of r.arr) scenes.push(s);
+        else if (!r.reused) emptyIdx.push(r.c);
         chunkScenes[r.c] = r.arr;
         if (!r.reused && r.arr.length) mergeRoll(roll, r.arr);
       } else {
@@ -2751,7 +2803,7 @@ async function breakdownScenario(cfg, text, settings, opts) {
     n.index = ++idx;
     result.push(n);
   }
-  return { scenes: result, failed, failedIdx, chunkScenes, extracted: t, usage: usageByMark(mark), chunks: chunks.length, conc: SC_CONC };
+  return { scenes: result, failed, failedIdx, emptyIdx, chunkScenes, extracted: t, usage: usageByMark(mark), chunks: chunks.length, conc: SC_CONC };
 }
 
 /* A-6 单幕重生成：只让 AI 重写指定的一幕，其余幕不动（版本化对比 + 按幕调用）。
@@ -2809,4 +2861,4 @@ async function regenerateScene(cfg, text, scenes, index, opts) {
   return { ok: true, scene: n, usage: usageByMark(mark) };
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, ensureFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, localRelationCandidates, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, regenerateScene, extractScriptBody, usageLog, usageByMark, aggregateUsage, usageReport, healthStats, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, mergeRoll, buildContinueCtx };
+module.exports = { DEFAULT_FIELDS, defaultFields, ensureFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, localRelationCandidates, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, regenerateScene, extractScriptBody, usageLog, usageByMark, aggregateUsage, usageReport, healthStats, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, hasEntitySignals, mergeRoll, buildContinueCtx };
