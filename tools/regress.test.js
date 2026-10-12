@@ -2121,6 +2121,10 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     if (!Number.isNaN(cpBad.size) || !Number.isNaN(cpBad.overlap)) return '分块参数越界未回退默认';
     const cpEmpty = ai.aiChunkParams({ aiChunkSize: '', aiChunkOverlap: '' });
     if (!Number.isNaN(cpEmpty.size) || !Number.isNaN(cpEmpty.overlap)) return '留空应表示用默认';
+    /* U3-12：分块长度上限 24000→48000——旧上限以上的合法值应放行，超新上限仍回退默认 */
+    if (ai.aiChunkParams({ aiChunkSize: 30000 }).size !== 30000) return '分块长度 30000 应在上限内生效（U3-12 放宽到 48000）';
+    if (ai.aiChunkParams({ aiChunkSize: 48000 }).size !== 48000) return '分块长度上限 48000 应生效';
+    if (!Number.isNaN(ai.aiChunkParams({ aiChunkSize: 60000 }).size)) return '分块长度 60000 超上限应回退默认';
     if (!/chunkP\.size\) \? chunkP\.size : 15000/.test(aiSrc) || !/chunkP\.size\) \? chunkP\.size : SC_CHUNK/.test(aiSrc)) return '拆分/分幕两条链路未接入可调分块参数';
     if (!/\(only && prev\) \? \{ size: NaN, overlap: NaN \}/.test(aiSrc)) return '补跑模式未强制沿用默认分块参数（段边界对齐）';
     // ③ 纠偏提示按世界观微调：两条链路的纠偏尾注都拼装当前团名

@@ -1619,7 +1619,9 @@ function hasNarrativeSignals(s) {
 }
 
 /* U3-11 迭代：分块参数可调——设置里可微调「分块长度 / 相邻块重叠」，留空或越界用各链路默认。
- * 返回 NaN 表示「用默认」（不能用 0 区分：0 是重叠的合法值）。 */
+ * 返回 NaN 表示「用默认」（不能用 0 区分：0 是重叠的合法值）。
+ * U3-12：分块长度上限 24000→48000——更长分块可减少请求次数；但单次请求 token 随之增大，
+ * 需模型上下文窗口足够（中文按 1 字≈1 token 估算，48000 字≈4.8 万 token，主流 64K+ 模型可承受）。 */
 function aiChunkParams(settings) {
   const s = settings || {};
   const pick = (v, lo, hi) => {
@@ -1627,7 +1629,7 @@ function aiChunkParams(settings) {
     const n = Math.round(Number(v));
     return (n >= lo && n <= hi) ? n : NaN;
   };
-  return { size: pick(s.aiChunkSize, 6000, 24000), overlap: pick(s.aiChunkOverlap, 0, 1000) };
+  return { size: pick(s.aiChunkSize, 6000, 48000), overlap: pick(s.aiChunkOverlap, 0, 1000) };
 }
 
 async function parseScript(text, profile, fields, cfg, existing, opts) {

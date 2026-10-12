@@ -5137,8 +5137,8 @@
       const aiChunkSize = (S.settings && S.settings.aiChunkSize) || '';
       const aiChunkOvl = (S.settings && S.settings.aiChunkOverlap) || '';
       h += `<div class="setcard"><h4>AI 长文本解析参数（可选，一般无需调整）</h4>
-        <div class="row"><label>分块长度（字符，6000~24000；留空用默认）</label>
-          <input id="setAiChunkSize" type="number" min="6000" max="24000" value="${esc(aiChunkSize)}" placeholder="默认 15000（拆分登记）/ 12000（剧本分幕）"></div>
+        <div class="row"><label>分块长度（字符，6000~48000；留空用默认）</label>
+          <input id="setAiChunkSize" type="number" min="6000" max="48000" value="${esc(aiChunkSize)}" placeholder="默认 15000（拆分登记）/ 12000（剧本分幕）"></div>
         <div class="row"><label>相邻块重叠（字符，0~1000；留空用默认）</label>
           <input id="setAiChunkOverlap" type="number" min="0" max="1000" value="${esc(aiChunkOvl)}" placeholder="默认 250（拆分登记）/ 200（剧本分幕）"></div>
         <label class="toggle-row" style="gap:10px;margin-top:10px">
@@ -5146,7 +5146,7 @@
           <span><b>纯设定文本自动跳过分幕</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">较长的文本若完全检测不到剧情叙事（人物对话、场景推进），分幕必然产出空幕——直接跳过并说明原因，避免整篇白跑耗时耗 token；关闭则始终尝试分幕。</span></span></label>
         <div style="margin-top:10px"><button onclick="WB.saveAiChunkParams()">保存解析参数</button>
           <button class="ghost" onclick="WB.saveAiChunkParams(true)">恢复默认</button>
-          <span class="hint" style="margin-left:8px">影响「AI 拆分登记」与「剧本分幕」的分块方式；补跑缺失段时始终沿用默认参数，保证分段边界对齐。</span></div></div>`;
+          <span class="hint" style="margin-left:8px">影响「AI 拆分登记」与「剧本分幕」的分块方式；补跑缺失段时始终沿用默认参数，保证分段边界对齐。分块调大可减少请求次数，但单次请求 token 随之增大，建议模型上下文窗口 ≥ 分块长度 + 1 万 token（中文按 1 字≈1 token 估算）。</span></div></div>`;
       h += `<div class="setcard"><h4>看板布局</h4><div style="display:flex;flex-wrap:wrap;gap:10px">`;
       for (const [k, l] of tiles) {
         const hid = hiddens.includes(k);
