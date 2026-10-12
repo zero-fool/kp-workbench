@@ -1974,7 +1974,9 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
   });
   check('U3-4 模组解析省 token：分段 15000/重叠 250 + 后续段轻量 schema', () => {
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
-    return /const SEG = 15000, OVERLAP = 250;/.test(aiSrc)
+    /* U3-11：分段/重叠默认值不变，改为经 aiChunkParams 可调（留空/越界回落默认） */
+    return /const SEG = Number\.isFinite\(chunkP\.size\) \? chunkP\.size : 15000;/.test(aiSrc)
+      && /const OVERLAP = Number\.isFinite\(chunkP\.overlap\) \? chunkP\.overlap : 250;/.test(aiSrc)
       && /linkSchemaText\(effectiveFields\(fields\) \|\| DEFAULT_FIELDS\)/.test(aiSrc) ? true : '解析分段/schema 未优化';
   });
   check('U3-7 人物/场地拆分质量：后续段带中文标签 + 抽取规则 + 同名按归一化名称合并字段', () => {
@@ -2000,7 +2002,9 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
     const ai = require(path.join(__dirname, '..', 'src', 'main', 'ai.js'));
     const structural = /const SC_CHUNK = 12000;/.test(aiSrc)
-      && /const chunks = splitByStructure\(t, SC_CHUNK, SC_OVERLAP\);/.test(aiSrc)
+      /* U3-11：分块参数可调——默认仍为 SC_CHUNK/SC_OVERLAP，经 chunkP 覆盖；补跑强制默认保证段边界对齐 */
+      && /Number\.isFinite\(chunkP\.size\) \? chunkP\.size : SC_CHUNK/.test(aiSrc)
+      && /Number\.isFinite\(chunkP\.overlap\) \? chunkP\.overlap : SC_OVERLAP/.test(aiSrc)
       && !/chunkTextByLen\(/.test(aiSrc)                       // 旧定长硬切已移除
       && /【续写要求】/.test(aiSrc)
       && /function mergeRoll\(/.test(aiSrc)                     // 跨段滚动锚点（人物/地点/线索/标题回传）
@@ -2014,7 +2018,8 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       && /return \{ scenes: result, failed, failedIdx, emptyIdx, chunkScenes, extracted: t, usage: usageByMark\(mark\), chunks: chunks\.length, conc: SC_CONC \};/.test(aiSrc)
       && !/return \{ scenes: result, failed \};/.test(aiSrc)
       /* U3-8 拆分登记增强：段长降为 15000 防长 JSON 截断、重试放宽 token 上限、失败兜底返回部分结果 */
-      && /const SEG = 15000, OVERLAP = 250;/.test(aiSrc)
+      /* U3-11：段长/重叠改为经 aiChunkParams 可调，默认值不变 */
+      && /const SEG = Number\.isFinite\(chunkP\.size\) \? chunkP\.size : 15000;/.test(aiSrc)
       && /attempt > 1 \? 12000 : 10000/.test(aiSrc)
       && /type: '拆分失败告警'/.test(aiSrc)
       && !/throw new Error\('AI 拆分登记在重试后仍失败'/.test(aiSrc)
@@ -2081,8 +2086,8 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     const hasStruct = /function hasEntitySignals\(s\)/.test(aiSrc)
       && /hasEntitySignals\(seg\)/.test(aiSrc)                       // 拆分登记：按段预检
       && /hasEntitySignals\(segText\)/.test(aiSrc)                   // 分幕：tryChunk 内预检
-      && /hasEntitySignals\(chunks\[c\]\)/.test(aiSrc) && /hasEntitySignals\(subs\[sIdx\]\)/.test(aiSrc) // 主块/降粒度子块都传参
-      && /sawEmpty \? EMPTY_SEG_NUDGE : ''/.test(aiSrc) && /sawEmpty \? EMPTY_SCENE_NUDGE : ''/.test(aiSrc)
+      && /tryChunk\([^)]*chunks\[c\]\)/.test(aiSrc) && /tryChunk\([^;]*subs\[sIdx\]\)/.test(aiSrc) // 主块/降粒度子块都传段文本（U3-8 重构后经 segText 形参进入预检）
+      && /sawEmpty \? segNudge : ''/.test(aiSrc) && /sawEmpty \? sceneNudge : ''/.test(aiSrc)   /* U3-11：纠偏尾注支持世界观微调（segNudge/sceneNudge 由常量拼装） */
       && /emptyIdx\.push\(si\)/.test(aiSrc)                          // 拆分登记空段记录
       && /merged\.emptyIdx = emptyIdx\.slice\(\)/.test(aiSrc)        // 透明回传
       && /type: '空段说明'/.test(aiSrc)
@@ -2095,6 +2100,36 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     if (ai.hasEntitySignals('目录\n第一章 出发……3\n第二章 抵达……18\n附录 设定摘要……55')) return '目录/附录段不应命中实体信号';
     if (!ai.hasEntitySignals('「老码头」老张低声说道，众人走进酒馆。')) return '对话/称呼/场景转换应命中实体信号';
     if (!ai.hasEntitySignals('叙'.repeat(6000))) return '长叙事段应命中实体信号';
+    return true;
+  });
+  check('U3-11 长文本优化迭代：纯设定自动跳过分幕 + 分块参数可调 + 世界观纠偏微调 + 空段复核入口', () => {
+    const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    const ai = require(path.join(__dirname, '..', 'src', 'main', 'ai.js'));
+    // ① 纯设定类长文自动跳过分幕：叙事信号判据 + 跳过分支（补跑不跳过 + 设置开关）
+    if (typeof ai.hasNarrativeSignals !== 'function') return 'hasNarrativeSignals 未导出';
+    if (!/!only && t\.length >= 4000/.test(aiSrc) || !/!hasNarrativeSignals\(t\)/.test(aiSrc)) return '纯设定类长文自动跳过分幕分支缺失';
+    if (!/aiSceneAutoSkip !== false/.test(aiSrc)) return '自动跳过缺少设置开关（用户覆盖路径）';
+    // 行为：纯设定/规则文本不命中叙事信号（可跳过）；对话/场景文本命中；非中文一律视为有叙事（宁多花 token 不误跳）
+    if (ai.hasNarrativeSignals('目录\n第一章 设定总表……3\n【武器】长剑：1d6。\n【护甲】皮甲：+1。\n附录 名称对照……55')) return '纯设定/规则文本不应命中叙事信号';
+    if (!ai.hasNarrativeSignals('老张低声说道：「出发。」众人走进酒馆。')) return '对话/场景文本应命中叙事信号';
+    if (!ai.hasNarrativeSignals('"Get out," he said, walking into the tavern.')) return '非中文文本不应触发跳过';
+    // ② 分块参数可调：设置读取 + 越界回退默认（NaN）+ 两条链路接入 + 补跑强制默认（段边界对齐）
+    if (typeof ai.aiChunkParams !== 'function') return 'aiChunkParams 未导出';
+    const cp = ai.aiChunkParams({ aiChunkSize: 9999, aiChunkOverlap: 300 });
+    if (cp.size !== 9999 || cp.overlap !== 300) return '分块参数未按设置生效';
+    const cpBad = ai.aiChunkParams({ aiChunkSize: 999, aiChunkOverlap: 5000 });
+    if (!Number.isNaN(cpBad.size) || !Number.isNaN(cpBad.overlap)) return '分块参数越界未回退默认';
+    const cpEmpty = ai.aiChunkParams({ aiChunkSize: '', aiChunkOverlap: '' });
+    if (!Number.isNaN(cpEmpty.size) || !Number.isNaN(cpEmpty.overlap)) return '留空应表示用默认';
+    if (!/chunkP\.size\) \? chunkP\.size : 15000/.test(aiSrc) || !/chunkP\.size\) \? chunkP\.size : SC_CHUNK/.test(aiSrc)) return '拆分/分幕两条链路未接入可调分块参数';
+    if (!/\(only && prev\) \? \{ size: NaN, overlap: NaN \}/.test(aiSrc)) return '补跑模式未强制沿用默认分块参数（段边界对齐）';
+    // ③ 纠偏提示按世界观微调：两条链路的纠偏尾注都拼装当前团名
+    if (!aiSrc.includes('当前团世界观：《')) return '纠偏提示未按世界观微调';
+    // ④ 空段复核入口：主进程回传 emptyIdx + 渲染层空段提示/复核按钮 + 设置页参数卡片
+    if (!/emptyIdx: Array\.isArray\(r\.emptyIdx\) \? r\.emptyIdx : \[\]/.test(mainSrc)) return '主进程未回传 emptyIdx';
+    if (!/WB\.scriptRecheck\(\)/.test(src) || !/async function scriptRecheck\(\)/.test(src) || !/复核空段/.test(src)) return '渲染层空段复核入口缺失';
+    if (!/emptyIdx: r\.emptyIdx \|\| \[\]/.test(src)) return '分幕结果未存储空段下标';
+    if (!/setAiChunkSize/.test(src) || !/saveAiChunkParams/.test(src) || !/setAiSceneAutoSkip/.test(src)) return '设置页解析参数入口缺失';
     return true;
   });
   check('U3-10 分幕要点逐幕落盘 txt：saveSceneFiles 每幕一文件 + sceneDir/sceneFiles 回传 + 打开文件夹入口', () => {

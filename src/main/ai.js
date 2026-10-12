@@ -1605,6 +1605,31 @@ function hasEntitySignals(s) {
 const EMPTY_SEG_NUDGE = '\n【空结果纠偏】你上一次对本段返回了全空结果。请注意：本段包含剧情叙事、人物对话或场景转换描写，几乎必然含有可提取实体——请逐句仔细检查：凡出现名字或可明确指认的角色各建一条（只出现一两次的配角也不要漏）、每个可辨识的地点/场景建 regions、事件与线索建 logs；确实通篇没有任何实体时才允许返回全空。';
 const EMPTY_SCENE_NUDGE = '\n【空结果纠偏】你上一次对本块返回了空 scenes。请注意：本块包含剧情叙事、人物对话或场景转换描写，几乎必然可以分幕——请按分幕要求把剧情推进的自然节点拆成幕（一幕 = 一个完整的剧情节点）；确实为纯设定/目录/附录文字时才允许返回空数组。';
 
+/* U3-11 迭代：叙事信号判据——与 hasEntitySignals 的区别是不带「长即有内容」捷径，专用于
+ * 「纯设定类长文自动跳过分幕」：全文连一条叙事信号都没有时，分幕必然产出空幕，直接跳过 AI 调用。
+ * 判据刻意放宽（命中即有叙事）：误报只是「不跳过、照常分幕」（安全），漏报才是「错跳过」（危险）。
+ * 非中文文本一律视为有叙事——本判据全是中文启发式，宁多花 token 也不误跳过外文文本。 */
+function hasNarrativeSignals(s) {
+  const t = String(s || '');
+  if (!/[\u4e00-\u9fa5]/.test(t)) return true;
+  if (/[「『“][^」』”]{1,32}[」』”]/.test(t)) return true;   // 对话/称呼引号
+  if (/[\u4e00-\u9fa5](说|道|问|喊|答|骂|吼|叫|笑道|低声|问道|回答|开口|嘀咕|喃喃)/.test(t)) return true; // 对话动作
+  if (/(来到|走进|抵达|进入|离开|赶往|返回|逃到|冲向|一路上|次日|当天夜里|与此同时)/.test(t)) return true; // 场景推进
+  return false;
+}
+
+/* U3-11 迭代：分块参数可调——设置里可微调「分块长度 / 相邻块重叠」，留空或越界用各链路默认。
+ * 返回 NaN 表示「用默认」（不能用 0 区分：0 是重叠的合法值）。 */
+function aiChunkParams(settings) {
+  const s = settings || {};
+  const pick = (v, lo, hi) => {
+    if (v === undefined || v === null || String(v).trim() === '') return NaN;
+    const n = Math.round(Number(v));
+    return (n >= lo && n <= hi) ? n : NaN;
+  };
+  return { size: pick(s.aiChunkSize, 6000, 24000), overlap: pick(s.aiChunkOverlap, 0, 1000) };
+}
+
 async function parseScript(text, profile, fields, cfg, existing, opts) {
   opts = opts || {};
   const prompts = effectivePrompts(opts.settings);
@@ -1613,7 +1638,11 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
   const EXISTING = existing || {};
   const full = String(text || '');
   // U1-16：结构感知切分 + 受控并行分段（并发 3~5，取代逐段串行）
-  const SEG = 15000, OVERLAP = 250;   // U3-8：段长 24000→15000、重叠 300→250，单段输出更短，降低长 JSON 被截断/坏 JSON 概率
+  // U3-11 迭代：分块参数可调（设置留空用默认）；U3-8：段长 24000→15000、重叠 300→250，
+  // 单段输出更短，降低长 JSON 被截断/坏 JSON 概率
+  const chunkP = aiChunkParams(opts.settings);
+  const SEG = Number.isFinite(chunkP.size) ? chunkP.size : 15000;
+  const OVERLAP = Number.isFinite(chunkP.overlap) ? chunkP.overlap : 250;
   const CONC = Math.max(1, Math.min(3, Number(opts.concurrency) || 2));   // U8-5：默认并发 3→2、上限 5→3，降低同 Key 限流概率
   const onProg = typeof opts.onProgress === 'function' ? opts.onProgress : null; // U1-15：进度回调
   const nameFilter = (opts.settings && opts.settings.nameFilter) || null;        // U1-18：自定义过滤词
@@ -1624,6 +1653,10 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
     ? '\n【特别注意】本次是解析团本/剧本：人物卡(PC)为玩家扮演的角色，不属于剧情实体。请勿生成/拆分出 pcs 类别，也不要引用或新增任何玩家人物卡，只识别 NPC 及其他类别。'
     : '';
   const FILTER_KINDS = opts.excludePC === true ? { npcs: 1 } : { pcs: 1, npcs: 1 };
+  // U3-11 迭代：纠偏提示按世界观微调——附上当前团名，帮助模型判断实体归属与命名边界
+  const worldName = (opts.settings && opts.settings.appName) || '';
+  const segNudge = EMPTY_SEG_NUDGE
+    + (worldName ? '\n（当前团世界观：《' + worldName + '》；实体与地点的判断请贴合该世界设定，但名称必须来自原文）' : '');
   const segs = splitByStructure(full, SEG, OVERLAP);
   // U8-3：任务级请求次数预算（box 引用共享，克隆 cfg 不影响计数）——分段数×2 + 6 次兜底，防止重试风暴滚雪球
   const reqCap = segs.length * 2 + 6;
@@ -1677,7 +1710,7 @@ async function parseScript(text, profile, fields, cfg, existing, opts) {
         try {
           // U3-9：sawEmpty 时叠加「空结果纠偏」尾注（定向要求模型逐句复查，不许再偷懒交空）
           const remind = ((attempt > 1) ? '\n【要求纠正】你上一次的回复没有返回可解析的 JSON 对象。请只输出一个 JSON 对象（字段含 entities），不要输出任何解释文字、Markdown 代码块或包围标记；若输出过长会被截断，请务必紧凑地给出完整字段。' : '')
-            + (sawEmpty ? EMPTY_SEG_NUDGE : '');
+            + (sawEmpty ? segNudge : '');
           // 剧本拆解输出量大，用更高 token 上限，避免完整 JSON 被截断成残缺对象；重试时再放宽上限
           // U8-6：JSON 被截断（finish_reason=length）时改用「续写补尾」，不再整段重发重计全额输出
           const c = stripWrap(await rawJsonReply(cfg, sys, userBase + remind, attempt > 1 ? 12000 : 10000, { maxAppend: 2 }));
@@ -2661,14 +2694,26 @@ async function breakdownScenario(cfg, text, settings, opts) {
   if (!t) return { scenes: [], failed: 0, failedIdx: [], chunkScenes: [], extracted: '', usage: usageByMark(mark) };
   const sysFull = sceneSysPrompt();
   const sysLite = sceneSysPromptLite();   // U8-7：续块精简系统提示
-  // 按章节/段落/句子边界切分（而非定长硬切），避免把一幕从中间截断；少量重叠用于承接，重复的边界幕由结尾去重合并。
-  const chunks = splitByStructure(t, SC_CHUNK, SC_OVERLAP);
-  // U8-3：任务级请求次数预算（box 引用共享）——块数×2 + 6 次兜底，防重试风暴滚雪球
-  const reqCap = chunks.length * 2 + 6;
-  cfg2.budgetBox = { left: reqCap, cap: reqCap };
   // A-4 补跑：onlyChunks = 需要重跑的下标集，prevChunkScenes = 既有各段场景（未失败段直接复用，不耗 token）
   const only = (opts && Array.isArray(opts.onlyChunks)) ? new Set(opts.onlyChunks) : null;
   const prev = (opts && Array.isArray(opts.prevChunkScenes)) ? opts.prevChunkScenes : null;
+  // U3-11 迭代：纯设定类长文自动跳过分幕——全文（≥4000 字）连一条叙事信号都没有时，分幕几乎必然
+  // 产出空幕，直接给出明确说明并跳过 AI 调用，省下整次任务的 token 与等待；补跑模式不跳过，
+  // 设置 aiSceneAutoSkip=false 可关闭（保留旧流程）。
+  if (!only && t.length >= 4000 && settings && settings.aiSceneAutoSkip !== false && !hasNarrativeSignals(t)) {
+    throw new Error('已自动跳过 AI 分幕：全文 ' + t.length + ' 字未检测到剧情叙事信号（人物对话、场景推进等），看起来是设定/规则/目录类内容，无需分幕。'
+      + '如需提取其中的规则与设定条目，请用「AI 拆分登记」；如你确认文中确有剧情，可在「设置 → AI 长文本解析参数」关闭「纯设定文本自动跳过分幕」后重试。');
+  }
+  // U3-11 迭代：分块参数可调（设置留空用默认）；补跑模式强制沿用默认参数——
+  // 分段边界必须与首次分幕完全一致，否则既有幕无法对位复用。
+  const chunkP = (only && prev) ? { size: NaN, overlap: NaN } : aiChunkParams(settings);
+  // 按章节/段落/句子边界切分（而非定长硬切），避免把一幕从中间截断；少量重叠用于承接，重复的边界幕由结尾去重合并。
+  const chunks = splitByStructure(t,
+    Number.isFinite(chunkP.size) ? chunkP.size : SC_CHUNK,
+    Number.isFinite(chunkP.overlap) ? chunkP.overlap : SC_OVERLAP);
+  // U8-3：任务级请求次数预算（box 引用共享）——块数×2 + 6 次兜底，防重试风暴滚雪球
+  const reqCap = chunks.length * 2 + 6;
+  cfg2.budgetBox = { left: reqCap, cap: reqCap };
   const onProg = typeof opts.onProgress === 'function' ? opts.onProgress : null;
   const t0 = Date.now();
   const emit = (done, idx) => {
@@ -2691,6 +2736,10 @@ async function breakdownScenario(cfg, text, settings, opts) {
   };
   emit(0, 0);
   const scenes = [];
+  // U3-11 迭代：纠偏提示按世界观微调——附上当前团名，帮助模型贴合世界设定判断剧情节点
+  const worldName = (settings && settings.appName) || '';
+  const sceneNudge = EMPTY_SCENE_NUDGE
+    + (worldName ? '\n（当前团世界观：《' + worldName + '》；分幕与命名请贴合该世界设定，但剧情必须来自原文）' : '');
   let failed = 0;
   const failedIdx = [];
   const emptyIdx = []; // U3-9：接受为「合法空」的块下标（透明记录）
@@ -2707,7 +2756,7 @@ async function breakdownScenario(cfg, text, settings, opts) {
       try {
         // U3-9：sawEmpty 时叠加「空结果纠偏」尾注
         const remind = (attempt > 1 ? '\n【要求纠正】你上一次没有返回可解析的 JSON。请只输出一个 JSON 对象（含 scenes 数组），紧凑完整，不要解释文字或代码块。' : '')
-          + (sawEmpty ? EMPTY_SCENE_NUDGE : '');
+          + (sawEmpty ? sceneNudge : '');
         // U8-6：JSON 被截断（finish_reason=length）时改用「续写补尾」，不再整段重发
         const raw = await rawJsonReply(cfg2, sys, user + remind, 6000, { maxAppend: 2 });
         const obj = extractJsonObject(raw);
@@ -2861,4 +2910,4 @@ async function regenerateScene(cfg, text, scenes, index, opts) {
   return { ok: true, scene: n, usage: usageByMark(mark) };
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, ensureFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, localRelationCandidates, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, regenerateScene, extractScriptBody, usageLog, usageByMark, aggregateUsage, usageReport, healthStats, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, hasEntitySignals, mergeRoll, buildContinueCtx };
+module.exports = { DEFAULT_FIELDS, defaultFields, ensureFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, localRelationCandidates, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, regenerateScene, extractScriptBody, usageLog, usageByMark, aggregateUsage, usageReport, healthStats, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, hasEntitySignals, hasNarrativeSignals, aiChunkParams, mergeRoll, buildContinueCtx };

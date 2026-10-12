@@ -5134,6 +5134,19 @@
         <textarea id="setNarrStyle" rows="3" placeholder="例：克苏鲁冷冽悬疑·第三人称·环境细节丰富但不过度堆砌；对白含蓄留白；允许适度黑暗但避免无意义猎奇。">${esc(narr)}</textarea></div>
         <div style="margin-top:10px"><button onclick="WB.saveNarrStyle()">保存叙事风格</button>
           <span class="hint" style="margin-left:8px">保存后注入每次 AI 对话与润色的上下文，作为最高优先级偏好。</span></div></div>`;
+      const aiChunkSize = (S.settings && S.settings.aiChunkSize) || '';
+      const aiChunkOvl = (S.settings && S.settings.aiChunkOverlap) || '';
+      h += `<div class="setcard"><h4>AI 长文本解析参数（可选，一般无需调整）</h4>
+        <div class="row"><label>分块长度（字符，6000~24000；留空用默认）</label>
+          <input id="setAiChunkSize" type="number" min="6000" max="24000" value="${esc(aiChunkSize)}" placeholder="默认 15000（拆分登记）/ 12000（剧本分幕）"></div>
+        <div class="row"><label>相邻块重叠（字符，0~1000；留空用默认）</label>
+          <input id="setAiChunkOverlap" type="number" min="0" max="1000" value="${esc(aiChunkOvl)}" placeholder="默认 250（拆分登记）/ 200（剧本分幕）"></div>
+        <label class="toggle-row" style="gap:10px;margin-top:10px">
+          <input type="checkbox" ${(S.settings && S.settings.aiSceneAutoSkip !== false) ? 'checked' : ''} onchange="WB.setAiSceneAutoSkip(this.checked)">
+          <span><b>纯设定文本自动跳过分幕</b><br><span class="hint" style="color:var(--ink-faint);font-size:12px">较长的文本若完全检测不到剧情叙事（人物对话、场景推进），分幕必然产出空幕——直接跳过并说明原因，避免整篇白跑耗时耗 token；关闭则始终尝试分幕。</span></span></label>
+        <div style="margin-top:10px"><button onclick="WB.saveAiChunkParams()">保存解析参数</button>
+          <button class="ghost" onclick="WB.saveAiChunkParams(true)">恢复默认</button>
+          <span class="hint" style="margin-left:8px">影响「AI 拆分登记」与「剧本分幕」的分块方式；补跑缺失段时始终沿用默认参数，保证分段边界对齐。</span></div></div>`;
       h += `<div class="setcard"><h4>看板布局</h4><div style="display:flex;flex-wrap:wrap;gap:10px">`;
       for (const [k, l] of tiles) {
         const hid = hiddens.includes(k);
@@ -5582,6 +5595,18 @@
   function saveNarrStyle() {
     S.settings.narrStyle = (q('setNarrStyle') ? q('setNarrStyle').value : '').trim();
     persist(); toast('叙事风格已保存，将注入后续 AI 对话与润色', 'ok');
+  }
+  /* U3-11 迭代：AI 长文本解析参数（分块长度/重叠 + 纯设定跳过开关）。留空=用默认（ai.js 端 clamp）。 */
+  function saveAiChunkParams(reset) {
+    if (reset) { if (q('setAiChunkSize')) q('setAiChunkSize').value = ''; if (q('setAiChunkOverlap')) q('setAiChunkOverlap').value = ''; }
+    S.settings.aiChunkSize = (val('setAiChunkSize') || '').trim();
+    S.settings.aiChunkOverlap = (val('setAiChunkOverlap') || '').trim();
+    persist();
+    toast(reset ? '已恢复默认解析参数' : 'AI 解析参数已保存，下次解析/分幕生效', 'ok');
+  }
+  function setAiSceneAutoSkip(on) {
+    S.settings.aiSceneAutoSkip = !!on;
+    persist();
   }
   let html = '';
   let editFieldKind = 'pcs';
@@ -6680,6 +6705,9 @@
     if (Array.isArray(script.failedIdx) && script.failedIdx.length) {
       head += `<div class="hint" style="margin:6px 0 0;font-size:12px">⚠️ 有 ${script.failedIdx.length} 段未成功解析，结果可能不完整。 <button class="ghost small" onclick="WB.scriptRerun()" title="只让 AI 重跑未解析的段，其余幕直接沿用、不重复消耗">补跑缺失段</button></div>`;
     }
+    if (Array.isArray(script.emptyIdx) && script.emptyIdx.length) {
+      head += `<div class="hint" style="margin:6px 0 0;font-size:12px">ℹ️ 有 ${script.emptyIdx.length} 段未分出幕（多为目录/附录/纯设定内容，已自动纠偏复核过一次）。 <button class="ghost small" onclick="WB.scriptRecheck()" title="若你确认这些段落应有剧情，可让 AI 对这些段强制再分一次（其余幕直接沿用）">复核空段</button></div>`;
+    }
     if (Array.isArray(script.versions) && script.versions.length) {
       head += `<div class="hint" style="margin:6px 0 0;font-size:12px">📚 已归档 ${script.versions.length} 个历史版本 <button class="ghost small" onclick="WB.scriptVersions()" title="与当前分幕并排对比，随时回看旧稿">对比版本</button></div>`;
     }
@@ -7034,7 +7062,7 @@
       S.rawScript = {
         scenes, overview: { characters: chars.slice(0, 40) },
         extractedPath: r.extractedPath || null, sceneDir: r.sceneDir || null, sceneFiles: r.sceneFiles || [],
-        failedIdx: r.failedIdx || [], chunkScenes: r.chunkScenes || [],
+        failedIdx: r.failedIdx || [], emptyIdx: r.emptyIdx || [], chunkScenes: r.chunkScenes || [],
         versions, vAt: Date.now()
       };
       S.rawShow = 'script';
@@ -7236,12 +7264,49 @@
       if (!r || !r.ok) { toast((r && r.error) || '补跑失败', 'err'); return; }
       const scenes = (r.scenes || []).filter(s => s && s.title);
       if (!scenes.length) { toast('补跑未返回结果，请重试', 'err'); return; }
-      await scriptApplyScenes(scenes, { failedIdx: r.failedIdx || [], chunkScenes: r.chunkScenes || [] });
+      await scriptApplyScenes(scenes, { failedIdx: r.failedIdx || [], emptyIdx: r.emptyIdx || [], chunkScenes: r.chunkScenes || [] });
       const cost = scriptCostTxt(r.usage);
       if (r.failed) toast('补跑完成：现有 ' + scenes.length + ' 幕，仍有 ' + r.failed + ' 段未能解析，可再次补跑' + cost, 'ok');
       else toast('补跑完成：缺失段已补上，共 ' + scenes.length + ' 幕（未改动原剧情）' + cost, 'ok');
     } catch (e) {
       toast('补跑失败：' + ((e && e.message) || e), 'err');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+  /* U3-11 空段复核入口：对「合法空」的段落（多为目录/附录/纯设定，已自动纠偏复核过一次）
+   * 强制再分一次幕——其余幕直接复用既有结果不耗 token；仍为空的段保持空段记录。 */
+  async function scriptRecheck() {
+    const script = S.rawScript;
+    const emptyIdx = (script && Array.isArray(script.emptyIdx)) ? script.emptyIdx : [];
+    if (!emptyIdx.length) { toast('没有需要复核的空段', 'ok'); return; }
+    let src = S.rawText || '';
+    if (script.extractedPath && window.api.getFullText) {
+      try {
+        const full = await window.api.getFullText(script.extractedPath);
+        if (full && full.ok && typeof full.text === 'string' && full.text.trim()) src = full.text;
+      } catch (_) {}
+    }
+    if (!src || !src.trim()) { toast('缺少剧本正文，请重新分幕', 'err'); return; }
+    const btn = q('rawScriptBtn'); if (btn) btn.disabled = true;
+    const conc = (S.settings && S.settings.rawSceneConc) || '';
+    toast('正在复核 ' + emptyIdx.length + ' 段空段（其余幕直接沿用，不重复消耗）…');
+    try {
+      const r = await window.api.breakdownScenario({ text: src, onlyChunks: emptyIdx, prevChunkScenes: script.chunkScenes || [], concurrency: conc || undefined });
+      if (!r || !r.ok) { toast((r && r.error) || '复核失败', 'err'); return; }
+      const scenes = (r.scenes || []).filter(s => s && s.title);
+      const stillEmpty = (r.emptyIdx && r.emptyIdx.length) ? r.emptyIdx.length : 0;
+      const cost = scriptCostTxt(r.usage);
+      if (!scenes.length) {
+        await scriptApplyScenes(script.scenes || [], { failedIdx: r.failedIdx || [], emptyIdx: r.emptyIdx || [], chunkScenes: r.chunkScenes || [] });
+        toast('复核完成：这些段落确认为无剧情内容（空段保留记录）' + cost, 'ok');
+        return;
+      }
+      await scriptApplyScenes(scenes, { failedIdx: r.failedIdx || [], emptyIdx: r.emptyIdx || [], chunkScenes: r.chunkScenes || [] });
+      const gained = scenes.length - ((script.scenes && script.scenes.length) || 0);
+      toast('复核完成：新增 ' + gained + ' 幕' + (stillEmpty ? ('，仍有 ' + stillEmpty + ' 段为空段') : '，空段已全部消除') + cost, 'ok');
+    } catch (e) {
+      toast('复核失败：' + ((e && e.message) || e), 'err');
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -9575,7 +9640,7 @@
     relToggleAll, relApplyOps, relSetLineLen,
     rawInput, rawClear, rawSuggest, rawExport, removePendFile, clearPendFiles,
     rawScriptBreak, rawShowTxt, rawShowSug, rawShowScript, rawExportScript, openScriptFolder, rawSetConc,
-    scriptRerun, sceneRegen, sceneAccept, scriptVersions, sceneCompareVersion,
+    scriptRerun, scriptRecheck, sceneRegen, sceneAccept, scriptVersions, sceneCompareVersion,
     scriptStatusCycle, scriptGoto, scriptToggleClue, scriptNoteSet, scriptReset, scriptChecklist, scriptJump,
     gmEnter, gmExit, toggleGmMode, gmSceneGo, gmRoll,
     plotSummary, commitPlotPoints, storySuggest, dismissChatHint,
@@ -9598,7 +9663,7 @@
     encNew, encOpen, closeEnc, encDel, encSetFlow, encPull, encAddManual, encDelUnit, encHp, encToggleStatus,
     encNext, encPrev, encNextTo, encGoRef, encGoFromCard, encSettle,
     encBindToken, encSaveToken, encUnbindToken, encGoMap,
-    polishLogs, aiWriteScript, saveNarrStyle,
+    polishLogs, aiWriteScript, saveNarrStyle, saveAiChunkParams, setAiSceneAutoSkip,
     statsExport, statsCopy,
     runlogRefresh, runlogFilter, runlogPickDay, runlogClearFilter, runlogExport, runlogOpen
   });

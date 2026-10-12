@@ -686,6 +686,7 @@ function registerIpc() {
       return {
         ok: true, scenes: r.scenes, failed: r.failed,
         failedIdx: Array.isArray(r.failedIdx) ? r.failedIdx : [],
+        emptyIdx: Array.isArray(r.emptyIdx) ? r.emptyIdx : [],   // U3-11：空段下标回传，渲染层提供复核入口
         chunkScenes: Array.isArray(r.chunkScenes) ? r.chunkScenes : [],
         chunks: Number(r.chunks) || 0, conc: Number(r.conc) || 1,
         usage: r.usage || { calls: 0, errs: 0, msSum: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 },
