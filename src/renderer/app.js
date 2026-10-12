@@ -16,8 +16,16 @@
   const KINDS = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
   const TPL_KINDS = ['pcs', 'npcs', 'mobs']; // 仅「卡片类」实体支持切换模板（模板改变显示字段集）
   const THEMES = [['ember', '残火纪·暗黑'], ['parchment', '现代卷宗'], ['lite', '极简浅色'], ['neon', '赛博霓虹'], ['dusk', '暮光护眼']];
-  const APP_VERSION = '3.3.1';
+  const APP_VERSION = '3.4.0';
   const CHANGELOG = [
+    { version: '3.4.0', date: '2026-10-12', type: '正式版·长文本解析优化', items: [
+      '长文本空结果质量闸：AI 拆分/分幕前先做实体信号预检，空结果触发一次带上下文的定向纠偏重试，仍未产出的段落透明记录为「空段」——不再整批静默丢内容，长模组分幕与取卡质量恢复稳定。',
+      '纯设定类长文自动跳过分幕：较长的文本若完全检测不到剧情叙事（人物对话、场景推进），分幕必然产出空幕——自动跳过并说明原因，不再白跑耗时耗 token；可在设置里关闭，强制重新分幕（补跑）时也不跳过。',
+      '分块解析参数可调：设置页新增「AI 长文本解析参数」——分块长度与相邻块重叠均可自定义（留空用默认），影响「AI 拆分登记」与「剧本分幕」；补跑缺失段始终沿用默认参数，保证分段边界对齐。',
+      '分块长度上限放宽至 48000 字符：更长的分块可减少请求次数、加快整体解析；设置页同步标注模型上下文窗口要求（建议 ≥ 分块长度 + 1 万 token）。',
+      '空结果纠偏按团微调：AI 拆分/分幕的纠偏提示会带上当前团名与世界观背景，纠偏更贴合本团内容。',
+      '分幕视图新增「复核空段」入口：对未分出幕的段落可一键强制再分一次（仅空段重新请求，其余幕直接复用，不额外消耗 token）。',
+    ]},
     { version: '3.3.1', date: '2026-10-09', type: '正式版·AI 提示词优化与插件生态扩展', items: [
       'AI 提示词瘦身，拆分/分幕成本大幅下降：拆分登记与剧本分幕的系统提示、锚点注入大幅精简并复用提示词模板，不再把大段重复指令随每个分段反复重发；配合「空结果合法化（不因空结果重试）」「失败段续写替代整段重发」，此前长文本拆分/分幕对比沙盒测试 token 消耗放大近 20 倍的问题得到治理。',
       'AI 稳定性增强：主模型失败自动切换备用模型重试（预算熔断与用户手动取消时不切换，切换记录进用量日志）；任务级请求次数预算帽防止重试风暴，JSON 模式探测结果缓存复用，请求并发自动降档与 429 退避强化。',
@@ -9641,6 +9649,7 @@
     rawInput, rawClear, rawSuggest, rawExport, removePendFile, clearPendFiles,
     rawScriptBreak, rawShowTxt, rawShowSug, rawShowScript, rawExportScript, openScriptFolder, rawSetConc,
     scriptRerun, scriptRecheck, sceneRegen, sceneAccept, scriptVersions, sceneCompareVersion,
+    splitExportSample, splitPeekClose,
     scriptStatusCycle, scriptGoto, scriptToggleClue, scriptNoteSet, scriptReset, scriptChecklist, scriptJump,
     gmEnter, gmExit, toggleGmMode, gmSceneGo, gmRoll,
     plotSummary, commitPlotPoints, storySuggest, dismissChatHint,
