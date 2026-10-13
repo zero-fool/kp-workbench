@@ -2,8 +2,10 @@
 /* 分区 3 指令日志视图模型。纯函数，可被 node:test 直接验证；实时面板 createLogPanel 供 app.js 复用。
  * UMD：Node 用 require 测试，浏览器用 window.DiceUIConnLog。 */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.DiceUIConnLog = factory();
+  /* 工厂只调用一次，双通道赋值（修复 esbuild 注入 module shim 后浏览器全局未挂载的问题） */
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (root && typeof root === 'object') root.DiceUIConnLog = api;
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 

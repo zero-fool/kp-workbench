@@ -5,8 +5,12 @@
  * 主推「QQ 直连登入」：用户在软件内扫码或填账号密码即可登入 QQ，无需自备 OneBot 协议端；
  * OneBot 11 / QQ 官方机器人收进「高级（可选）」，留给自备中转或官方开放平台的老用户。 */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.DiceUIConnCenter = factory();
+  /* 工厂只调用一次，module.exports 与浏览器全局双通道赋值。
+   * 修复：esbuild 打包会为 CJS 模块注入局部 module shim，使 UMD 判断误走 Node 分支，
+   * 浏览器全局从未挂载 → 工作台分区静默空白。双赋值在三种环境（Node require / 打包 / 原生 script）下均正确。 */
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (root && typeof root === 'object') root.DiceUIConnCenter = api;
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 

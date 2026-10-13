@@ -3,8 +3,10 @@
  * 字段名白名单：persona.name|style|prefix、templates.<已知键>（防原型污染）。
  * UMD：Node 用 require 测试，浏览器用 window.DiceUIReplyEditor。 */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.DiceUIReplyEditor = factory();
+  /* 工厂只调用一次，双通道赋值（修复 esbuild 注入 module shim 后浏览器全局未挂载的问题） */
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (root && typeof root === 'object') root.DiceUIReplyEditor = api;
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 

@@ -2,8 +2,10 @@
 // 双环境：node:test 走 module.exports；renderer 走 <script> 挂 window.DiceUI
 // 注意：wizard.js 同样挂 window.DiceUI，两者必须「合并」而非覆盖（否则后加载者会抹掉前者的方法）。
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.DiceUI = Object.assign(root.DiceUI || {}, factory());
+  /* 工厂只调用一次，双通道赋值（修复 esbuild 注入 module shim 后浏览器全局未挂载的问题） */
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (root && typeof root === 'object') root.DiceUI = Object.assign(root.DiceUI || {}, api);
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
   function esc(s) {

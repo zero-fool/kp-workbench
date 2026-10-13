@@ -2172,6 +2172,47 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       && /正文共 ' \+ r\.chunks \+ ' 段/.test(src);
     return (okAuto && okMain && okUi) ? true : '分幕提速补全缺失';
   });
+  check('BUGFIX 骰娘工作台六分区空白：UMD 双通道挂载——esbuild 打包后浏览器全局必须就位', () => {
+    /* 根因：esbuild 打包 CJS 模块时注入局部 module shim，UMD 判断 typeof module==='object'&&module.exports
+     * 恒为真 → 全部走 Node 分支 → window.DiceUIxxx 从未挂载 → 工作台 2/3/4/5/6 分区静默空白。
+     * 防复发：与 build-renderer.js 同款 esbuild 设置（IIFE+minify）打包每个 dice-ui 模块，
+     * 在模拟浏览器沙箱（仅注入 self）中评估，断言浏览器全局挂载；同时校验 Node require 路径仍可用。 */
+    const esbuild = require('esbuild');
+    const vm = require('vm');
+    const pairs = [
+      ['conn-center.js', 'DiceUIConnCenter'],
+      ['conn-log.js', 'DiceUIConnLog'],
+      ['reply-editor.js', 'DiceUIReplyEditor'],
+      ['sim-chat.js', 'DiceUISimChat'],
+      ['workshop.js', 'DiceUI'],
+      ['wizard.js', 'DiceUI'],
+    ];
+    for (const [file, globalName] of pairs) {
+      const built = esbuild.buildSync({
+        stdin: { contents: `import './src/renderer/dice-ui/${file}';`, resolveDir: path.join(__dirname, '..'), sourcefile: 'entry.js' },
+        bundle: true, format: 'iife', minify: true, logLevel: 'silent', write: false
+      }).outputFiles[0].text;
+      const sandbox = { self: {}, console };
+      try { vm.runInNewContext(built, sandbox); } catch (e) { return `${file} 打包产物执行失败：${e.message}`; }
+      if (!sandbox.self[globalName] || typeof sandbox.self[globalName] !== 'object') {
+        return `${file} 打包后未挂载 self.${globalName}（UMD 误走 Node 分支，工作台空白根因复发）`;
+      }
+      const mod = require(path.join(__dirname, '..', 'src', 'renderer', 'dice-ui', file));
+      if (!mod || typeof mod !== 'object') return `${file} Node require 路径失效`;
+    }
+    /* workshop+wizard 共享 DiceUI 命名空间：合并式挂载，方法必须共存不覆盖 */
+    const merged = esbuild.buildSync({
+      stdin: { contents: "import './src/renderer/dice-ui/workshop.js';import './src/renderer/dice-ui/wizard.js';", resolveDir: path.join(__dirname, '..'), sourcefile: 'entry.js' },
+      bundle: true, format: 'iife', minify: true, logLevel: 'silent', write: false
+    }).outputFiles[0].text;
+    const sb = { self: {}, console };
+    vm.runInNewContext(merged, sb);
+    const d = sb.self.DiceUI || {};
+    if (typeof d.pluginListHTML !== 'function' || typeof d.wizardViewHTML !== 'function') {
+      return 'workshop/wizard 合并挂载缺失：DiceUI.pluginListHTML 或 wizardViewHTML 不存在';
+    }
+    return true;
+  });
   check('U3-9 进度条结束即消失 + 分幕进度可见：解析/拆分/分幕均发 done 终止信号', () => {
     const okDone = /text: '解析完成'/.test(mainSrc) && /text: '拆分完成'/.test(mainSrc) && /text: '分幕完成'/.test(mainSrc);
     const okScene = /phase: 'scene'/.test(aiSrc2) && /scene: '剧本分幕'/.test(src);
