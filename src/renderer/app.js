@@ -16,8 +16,18 @@
   const KINDS = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
   const TPL_KINDS = ['pcs', 'npcs', 'mobs']; // 仅「卡片类」实体支持切换模板（模板改变显示字段集）
   const THEMES = [['ember', '残火纪·暗黑'], ['parchment', '现代卷宗'], ['lite', '极简浅色'], ['neon', '赛博霓虹'], ['dusk', '暮光护眼']];
-  const APP_VERSION = '3.3.4';
+  const APP_VERSION = '3.3.5';
   const CHANGELOG = [
+    { version: '3.3.5', date: '2026-10-13', type: '正式版·AI 骰娘对话引擎（对齐 Dice-Next Chat，小项更新）', items: [
+      'AI 骰娘对话引擎（触发体系）：新增「骰娘专属 AI 对话」区块——被 @ 必回（无视冷却）、关键词必回（逗号/换行分隔）、待机插话概率、上下文轮数、单条字数上限、每群冷却秒数均可配置；群消息据此自动回应，工作台测试通道同样生效。',
+      '回复修饰与白名单：回复可自动 @ 发送者、可一键禁 emoji、可维护自定义过滤词（命中即滤除）；AI 白名单按群号/QQ 号限定可用范围（只管 AI 对话与群记忆，润色翻译不受限），空白名单时界面明确警示无人可用。',
+      '人设中枢：骰娘人设留空即用内置默认，支持自定义 System prompt 并一键「恢复默认人设（Load default）」回填。',
+      '群记忆·滚动摘要：按「近期原文保留轮数」攒够聊天记录才调用摘要模型，自动把旧摘要与新增原文合并成新摘要，调用失败保留旧摘要不覆盖；摘要模型可单独指定，摘要库支持查看与清空。',
+      '长期记忆·向量检索：开启后自动从聊天沉淀长期事实入库，回复前按 Embedding 相似度检索 Top-K 条注入上下文（相似度阈值、每群事实上限可调）；未配置 Embedding 时自动退化为关键词匹配、不阻塞主流程；事实库支持查看与清空。',
+      '工具调用：模型可调用本地真骰引擎 roll_dice（禁止编造点数）、draw_deck 抽牌、get_attr 读卡、search_help 帮助检索；写卡 set_attr 与执行指令 run_command 默认关闭、需显式开启；最大工具轮数可调，最后一轮强制文本回复，防止模型无限调用工具。',
+      '图像识别：配置多模态 Vision 模型后，群消息图片按「每条图片上限」随消息送入识别（直链模式直接用图片 URL），识别提示词可自定义；未配置 Vision 模型时图片自动忽略、纯文本照常。',
+      '横切联通：AI 回复统一过发送节流闸（不绕过防风控），会话 .set ai off 时 AI 对话一并停用，用量计入「AI 中枢」模型卡片统计；摘要与事实抽取均按攒批限频，控成本。',
+    ]},
     { version: '3.3.4', date: '2026-10-13', type: '正式版·骰娘共存与群级开关（小项更新）', items: [
       'QQ 直连默认平板协议（aPad），登录不再挤掉手机官方 QQ：官方允许「手机 + 平板」同时在线互不挤踢；仅当手动选择 android 移动端协议时才与手机 QQ 互踢，QQ 直连面板按生效协议明确提示共存关系。',
       '群级骰娘开关：.bot on|off|status 按群/私聊开关骰娘（关闭后普通消息静默，仅放行重新开启指令）；骰主可远程 boton/botoff <群号> 开关任意群；AI 骰娘回复同样受会话级开关控制；工作台会话目录里也可直接改。',
@@ -4186,9 +4196,14 @@
         <div class="setcard"><h4>使用说明</h4>
           <div class="note">插话与附带表情依赖「AI 功能开关」中的<b>随机插话</b>与<b>表情包</b>开关：对应开关关闭时，即使概率非零也不会生效。收集到的表情在「表情包库」里管理。</div>
         </div>
+      </div>
+      <div class="dh-card" style="margin-top:14px">
+        <h4 style="margin:2px 0 10px">AI 骰娘对话引擎（对齐 Dice-Next AI · Chat）</h4>
+        <div id="dice-ai-chat"></div>
       </div>`;
     contentInner(html);
     paintDiceAiChat();
+    paintDiceAiChatPanel();
   }
   function paintDiceAiChat() {
     const box = q('diceAiChatProbs'); if (!box) return;
@@ -4555,7 +4570,7 @@
         + aiChatArea('vision', 'prompt', v.prompt, '识别提示词（留空用默认）', 2, '请先描述图片内容，再结合对话语境回应'))}
       <div class="dh-note" style="margin-top:8px">与「群聊 AI 行为」（表情/插话概率）独立并存：本区块负责「让骰娘开口对话」的完整链路——触发、记忆、工具、修饰；插话表情等增强仍在「群聊 AI 行为」与「骰娘 AI 功能开关」里配置。所有 AI 回复统一过发送节流闸，用量计入上方模型卡片。</div>`;
   }
-  function paintDiceAiChat() {
+  function paintDiceAiChatPanel() {
     const box = q('dice-ai-chat'); if (!box) return;
     box.innerHTML = diceAiChatPanelHTML();
   }
