@@ -4446,6 +4446,168 @@
     toast(ok ? ('模型「' + m.name + '」连通成功（' + (rep.latencyMs || 0) + 'ms）') : ('连通失败：' + ((rep && rep.error) || '无响应')), ok ? 'ok' : 'err');
   };
 
+  /* ---------- 骰娘 AI 对话配置（批次二 U9-5~U9-12，对齐 Dice-Next AI · Chat 六大块）----------
+   * 触发体系 / 回复修饰 / 人设中枢 / 群记忆摘要 / 长期记忆向量 / 工具调用 / 白名单 / 图像识别。
+   * 配置本体存 settings.dice.aiChat（渲染层即改即存，主进程 normalizeChatCfg 兜底规范化）；
+   * 摘要库/事实库本体在主进程（store dice:ai-chat-mem），此处只读视图 + 清空。 */
+  function diceAiChatData() {
+    if (!S.settings.dice) S.settings.dice = {};
+    const c = S.settings.dice.aiChat || (S.settings.dice.aiChat = {});
+    const sec = (k, def) => {
+      if (!c[k] || typeof c[k] !== 'object') c[k] = {};
+      for (const j of Object.keys(def)) if (c[k][j] === undefined) c[k][j] = def[j];
+    };
+    sec('trigger', { atReply: true, keywords: [], idleProb: 0, contextRounds: 6, maxLen: 500, cooldownSec: 60 });
+    sec('decor', { atSender: false, noEmoji: false, filterWords: [] });
+    if (typeof c.persona !== 'string') c.persona = '';
+    sec('summary', { model: '', keepRounds: 10, maxChars: 300, prompt: '' });
+    sec('memory', { enabled: false, embedModel: '', extractModel: '', topK: 3, threshold: 0.5, maxFactsPerGroup: 100, extractPrompt: '' });
+    sec('tools', { rollDice: true, drawDeck: true, getAttr: true, setAttr: false, runCommand: false, searchHelp: true, maxRounds: 3 });
+    sec('whitelist', { enabled: false, groups: [], users: [] });
+    sec('vision', { model: '', maxImages: 1, directUrl: true, prompt: '' });
+    return c;
+  }
+  /* 通用控件：onchange 即改即存（section 为空表示顶层字段） */
+  function aiChatChk(section, key, v, label, hint) {
+    const path = section ? `'${section}','${key}'` : `'', '${key}'`;
+    return `<label class="ai-toggle" ${hint ? `title="${esc(hint)}"` : ''}><input type="checkbox" ${v ? 'checked' : ''} onchange="WB.diceAiChatPatch(${path}, this.checked)"> ${esc(label)}</label>`;
+  }
+  function aiChatNum(section, key, v, label, min, max, step) {
+    const path = section ? `'${section}','${key}'` : `'', '${key}'`;
+    return `<div style="flex:1;min-width:120px"><label style="font-size:12px">${esc(label)}</label>
+      <input type="number" min="${min}" max="${max}" step="${step || 1}" value="${Number(v) || 0}" onchange="WB.diceAiChatPatch(${path}, Number(this.value))"></div>`;
+  }
+  function aiChatTxt(section, key, v, label, ph, wide) {
+    const path = section ? `'${section}','${key}'` : `'', '${key}'`;
+    return `<div style="${wide ? 'flex:2' : 'flex:1'};min-width:150px"><label style="font-size:12px">${esc(label)}</label>
+      <input value="${esc(v || '')}" placeholder="${esc(ph || '')}" onchange="WB.diceAiChatPatch(${path}, this.value)"></div>`;
+  }
+  function aiChatArea(section, key, v, label, rows, ph) {
+    const path = section ? `'${section}','${key}'` : `'', '${key}'`;
+    return `<div style="width:100%"><label style="font-size:12px">${esc(label)}</label>
+      <textarea rows="${rows}" style="width:100%" placeholder="${esc(ph || '')}" onchange="WB.diceAiChatPatch(${path}, this.value)">${esc(v || '')}</textarea></div>`;
+  }
+  /* 列表字段（关键词/过滤词/白名单）：textarea 输入，onchange 按「换行或逗号」切成数组存 */
+  function aiChatListText(section, key, v, label, ph, rows, sep) {
+    return `<div style="width:100%"><label style="font-size:12px">${esc(label)}</label>
+      <textarea rows="${rows || 2}" style="width:100%" placeholder="${esc(ph || '')}" onchange="WB.diceAiChatList('${section}','${key}', this.value)">${esc((v || []).join(sep || '\n'))}</textarea></div>`;
+  }
+  function diceAiChatPanelHTML() {
+    const c = diceAiChatData();
+    const t = c.trigger, d = c.decor, s = c.summary, m = c.memory, tl = c.tools, wl = c.whitelist, v = c.vision;
+    const hubReady = !!diceAiActiveCfg();
+    const emptyWlWarn = wl.enabled && !wl.groups.length && !wl.users.length;
+    const grp = (title, body, extra) => `<details class="diceai"><summary class="dsec" style="cursor:pointer;list-style:none">${title}${extra || ''}</summary><div class="airow" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px">${body}</div></details>`;
+    return `
+      <div class="hint" style="margin-bottom:8px;color:${hubReady ? 'var(--ok)' : 'var(--warn)'}">${hubReady
+        ? '对话引擎就绪：当前生效模型为「' + esc((diceAiActiveCfg() || {}).model || '') + '」——群消息按下方触发体系自动回应（工作台测试通道同样生效）'
+        : '尚未配置模型：请先在上方「模型卡片」添加并启用模型，对话引擎才会开始工作'}</div>
+      ${grp('🎯 触发体系（U9-5）',
+        aiChatChk('trigger', 'atReply', t.atReply, '@必回（无视冷却）', '被 @ 时必回，冷却与待机概率都不影响')
+        + aiChatListText('trigger', 'keywords', t.keywords, '关键词必回（逗号或换行分隔）', '如：骰娘,来个跑团', 2, '，')
+        + aiChatNum('trigger', 'idleProb', t.idleProb, '待机插话概率 0-100', 0, 100)
+        + aiChatNum('trigger', 'contextRounds', t.contextRounds, '上下文轮数', 1, 30)
+        + aiChatNum('trigger', 'maxLen', t.maxLen, '单条字数上限', 20, 2000)
+        + aiChatNum('trigger', 'cooldownSec', t.cooldownSec, '每群冷却（秒）', 0, 3600))}
+      ${grp('✨ 回复修饰（U9-6）',
+        aiChatChk('decor', 'atSender', d.atSender, '回复时 @ 发送者')
+        + aiChatChk('decor', 'noEmoji', d.noEmoji, '禁 emoji')
+        + aiChatListText('decor', 'filterWords', d.filterWords, '自定义过滤词（每行一个，命中即滤除）', '不想让骰娘说的词', 2))}
+      ${grp('🎭 人设中枢（U9-7）<span class="hint" style="font-weight:400">留空用内置默认骰娘人设</span>',
+        aiChatArea('', 'persona', c.persona, '人设 / System prompt', 4, '自定义骰娘人设（性格、口吻、世界观都行）')
+        + `<div class="toolbar"><button class="ghost" onclick="WB.diceAiChatLoadDefaultPersona()">↺ 恢复默认人设（Load default）</button></div>`)}
+      ${grp('📚 群记忆·滚动摘要（U9-8）<span class="hint" style="font-weight:400">攒够原文折批才调用模型，控成本</span>',
+        aiChatTxt('summary', 'model', s.model, '摘要模型名（空=当前聊天模型）', '如 deepseek-chat', true)
+        + aiChatNum('summary', 'keepRounds', s.keepRounds, '近期原文保留轮数', 2, 50)
+        + aiChatNum('summary', 'maxChars', s.maxChars, '摘要字数上限', 60, 2000)
+        + aiChatArea('summary', 'prompt', s.prompt, '摘要提示词（留空用默认）', 3, '自定义摘要要求')
+        + `<div class="toolbar"><button class="ghost" onclick="WB.diceAiChatView('summary')">👁 查看摘要库</button>
+             <button class="ghost" onclick="WB.diceAiChatClear('summary')">🗑 清空摘要库</button></div>
+           <pre id="aichat_memview_summary" style="width:100%;max-height:160px;overflow:auto;font-size:12px;white-space:pre-wrap;background:var(--bg-soft);padding:8px;border-radius:6px"></pre>`)}
+      ${grp('🧠 长期记忆·向量检索（U9-9）',
+        aiChatChk('memory', 'enabled', m.enabled, '启用长期记忆', '对话沉淀事实入库，回复前按相似度检索注入')
+        + aiChatTxt('memory', 'embedModel', m.embedModel, '嵌入模型名（Embedding）', '如 text-embedding-3-small（连接复用上方）', true)
+        + aiChatTxt('memory', 'extractModel', m.extractModel, '事实抽取模型名', '留空=当前聊天模型', true)
+        + aiChatNum('memory', 'topK', m.topK, '检索 Top-K', 1, 10)
+        + aiChatNum('memory', 'threshold', m.threshold, '相似度阈值 0-1', 0, 1, 0.05)
+        + aiChatNum('memory', 'maxFactsPerGroup', m.maxFactsPerGroup, '每群事实上限', 10, 1000)
+        + aiChatArea('memory', 'extractPrompt', m.extractPrompt, '抽取提示词（留空用默认）', 3, '自定义事实抽取要求')
+        + `<div class="toolbar"><button class="ghost" onclick="WB.diceAiChatView('facts')">👁 查看事实库</button>
+             <button class="ghost" onclick="WB.diceAiChatClear('facts')">🗑 清空事实库</button></div>
+           <pre id="aichat_memview_facts" style="width:100%;max-height:160px;overflow:auto;font-size:12px;white-space:pre-wrap;background:var(--bg-soft);padding:8px;border-radius:6px"></pre>`)}
+      ${grp('🔧 工具调用（U9-10）<span class="hint" style="font-weight:400">每轮工具额外一次模型请求；最后一轮强制文本回复</span>',
+        aiChatChk('tools', 'rollDice', tl.rollDice, 'roll_dice 真骰引擎', '模型必须调用本地骰引擎出点数，禁止编造')
+        + aiChatChk('tools', 'drawDeck', tl.drawDeck, 'draw_deck 抽牌')
+        + aiChatChk('tools', 'getAttr', tl.getAttr, 'get_attr 读卡')
+        + aiChatChk('tools', 'setAttr', tl.setAttr, 'set_attr 写卡（默认关）')
+        + aiChatChk('tools', 'runCommand', tl.runCommand, 'run_command 执行指令（默认关）', '以发送者身份执行，按发送者权限校验')
+        + aiChatChk('tools', 'searchHelp', tl.searchHelp, 'search_help 帮助检索')
+        + aiChatNum('tools', 'maxRounds', tl.maxRounds, '最大工具轮数', 1, 8))}
+      ${grp('🛡 AI 白名单（U9-11）<span class="hint" style="font-weight:400">只管 AI 对话/群记忆；润色翻译不受限</span>',
+        aiChatChk('whitelist', 'enabled', wl.enabled, '启用白名单', '开启后仅名单内的群/用户可触发 AI 对话')
+        + (emptyWlWarn ? '<div class="hint" style="width:100%;color:var(--warn)">⚠️ 白名单为空：当前无人可触发 AI 对话（连群主发 .ai 也被拒）</div>' : '')
+        + aiChatListText('whitelist', 'groups', wl.groups, '群白名单（每行一个群号）', '123456789', 2)
+        + aiChatListText('whitelist', 'users', wl.users, '用户白名单（每行一个 QQ 号）', '10001', 2))}
+      ${grp('🖼 图像识别（U9-12）<span class="hint" style="font-weight:400">需多模态模型；未配置 Vision 模型时图片被忽略</span>',
+        aiChatTxt('vision', 'model', v.model, 'Vision 模型名（留空=不识别图片）', '如 gpt-4o / qwen-vl-plus', true)
+        + aiChatNum('vision', 'maxImages', v.maxImages, '每条消息图片上限', 1, 5)
+        + aiChatChk('vision', 'directUrl', v.directUrl, '直链模式', '实时消息直接用图片 URL（QQ 直连/OneBot 均可取到直链）')
+        + aiChatArea('vision', 'prompt', v.prompt, '识别提示词（留空用默认）', 2, '请先描述图片内容，再结合对话语境回应'))}
+      <div class="dh-note" style="margin-top:8px">与「群聊 AI 行为」（表情/插话概率）独立并存：本区块负责「让骰娘开口对话」的完整链路——触发、记忆、工具、修饰；插话表情等增强仍在「群聊 AI 行为」与「骰娘 AI 功能开关」里配置。所有 AI 回复统一过发送节流闸，用量计入上方模型卡片。</div>`;
+  }
+  function paintDiceAiChat() {
+    const box = q('dice-ai-chat'); if (!box) return;
+    box.innerHTML = diceAiChatPanelHTML();
+  }
+  window.WB.diceAiChatPatch = function (section, key, value) {
+    const c = diceAiChatData();
+    if (section) c[section][key] = value;
+    else c[key] = value;
+    persist();
+  };
+  /* 列表字段（关键词/过滤词/白名单）：textarea 每行一条 → 数组 */
+  window.WB.diceAiChatList = function (section, key, value) {
+    const c = diceAiChatData();
+    c[section][key] = String(value || '').split(/\r?\n|[,，]/).map((z) => z.trim()).filter(Boolean);
+    persist();
+  };
+  window.WB.diceAiChatLoadDefaultPersona = async function () {
+    /* Load default：把内置默认人设回填编辑框（Dice-Next 同语义） */
+    const api = dwApi();
+    let def = '';
+    try {
+      if (api && api.diceAiChat) def = String((await api.diceAiChat.defaults()).defaultPersona || '');
+    } catch (_) {}
+    if (!def) def = '你是跑团群里的「骰娘」：一位元气、幽默、说话简短的骰子机器人少女。平时陪玩家闲聊、接梗、回应跑团话题；有人掷骰或问规则时，简要说明即可，不整段复述规则书。回复保持一两句话，口语化、有情绪、偶尔调皮，不刷屏、不抢主持人的活；不知道的事就坦白说不知道。';
+    const c = diceAiChatData();
+    c.persona = def;
+    persist(); paintDiceAiChat();
+    toast('已回填内置默认人设', 'ok');
+  };
+  window.WB.diceAiChatView = async function (kind) {
+    const el = document.getElementById('aichat_memview_' + kind); if (!el) return;
+    const api = dwApi();
+    if (!api || !api.diceAiChat) { el.textContent = '（当前环境未暴露记忆库接口）'; return; }
+    el.textContent = '读取中…';
+    try {
+      const rep = await api.diceAiChat.memView();
+      const rows = (rep && rep[kind === 'summary' ? 'summary' : 'facts']) || [];
+      el.textContent = rows.length ? rows.map((r) => kind === 'summary'
+        ? `【${r.group}】${r.chars}字 · ${new Date(r.updatedAt).toLocaleString('zh-CN')}\n${r.text}`
+        : `【${r.group}】${r.count}条\n${(r.items || []).map((f) => '- ' + f.text).join('\n')}`
+      ).join('\n\n') : '（空：还没有沉淀的记忆）';
+    } catch (e) { el.textContent = '读取失败：' + ((e && e.message) || e); }
+  };
+  window.WB.diceAiChatClear = async function (kind) {
+    const name = kind === 'summary' ? '滚动摘要库' : '长期记忆事实库';
+    const yes = await appConfirm('清空' + name, '将清空全部群的' + name + '，此操作不可撤销。');
+    if (!yes) return;
+    const api = dwApi();
+    if (api && api.diceAiChat) { try { await api.diceAiChat.memClear(kind, ''); } catch (_) {} }
+    toast('已清空' + name, 'ok');
+    try { WB.diceAiChatView(kind); } catch (_) {}
+  };
+
   /* 骰娘 AI 设置 → 表情包库 */
   function renderDiceMeme() {
     const html = `<div class="page-title"><h2>表情包库</h2>

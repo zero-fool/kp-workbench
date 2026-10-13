@@ -77,20 +77,64 @@ function postJson(url, headers, body, timeoutMs, outerSignal) {
   });
 }
 
+/* 消息透传（批次二 U9-10/U9-12）：兼容多模态数组 content、assistant.tool_calls、tool 结果消息。
+ * 白名单式复制，防止调用方把无关字段塞进请求体。 */
+function sanitizeMessages(messages) {
+  const out = [];
+  for (const m of messages || []) {
+    if (!m || typeof m.role !== 'string') continue;
+    if (!['system', 'user', 'assistant', 'tool'].includes(m.role)) continue;
+    const item = { role: m.role, content: m.content === undefined || m.content == null ? '' : m.content };
+    if (Array.isArray(m.tool_calls) && m.tool_calls.length) item.tool_calls = m.tool_calls;
+    if (m.role === 'tool' && m.tool_call_id) item.tool_call_id = String(m.tool_call_id);
+    if (m.name) item.name = String(m.name).slice(0, 64);
+    out.push(item);
+  }
+  return out;
+}
+
 async function chatRaw(cfg, messages, opts = {}) {
   const c = normalizeCfg(cfg);
   if (!c.base) throw new Error('骰娘 AI 尚未配置（请在「AI 中枢」配置模型并启用）');
-  const msgs = (messages || [])
-    .filter((m) => m && (m.role === 'system' || m.role === 'user' || m.role === 'assistant'))
-    .map((m) => ({ role: m.role, content: String(m.content == null ? '' : m.content) }));
+  const msgs = sanitizeMessages(messages);
   if (!msgs.length) throw new Error('无有效消息可发送');
-  const body = JSON.stringify({ model: c.model, messages: msgs, ...(cfg && cfg.params ? { ...cfg.params } : {}) });
+  const body = JSON.stringify({
+    model: c.model, messages: msgs,
+    ...(cfg && cfg.params ? { ...cfg.params } : {}),
+    // U9-10 工具调用：tools/tool_choice 由调用侧按功能开关组装后经 opts 下发
+    ...(opts.tools && opts.tools.length ? { tools: opts.tools, tool_choice: opts.toolChoice || 'auto' } : {}),
+  });
   const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) };
   if (c.apiKey) headers['Authorization'] = 'Bearer ' + c.apiKey;
   const u = new URL(c.base + '/chat/completions');
   const json = await postJson(u.toString(), headers, body, c.timeoutMs, opts.signal);
-  const text = (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '';
-  return { ok: true, text: String(text), model: c.model, usage: json.usage || null };
+  const msg0 = (json.choices && json.choices[0] && json.choices[0].message) || {};
+  const text = msg0.content || '';
+  // U9-10：模型发起的工具调用原样回传（runToolLoop 执行后回喂）
+  const toolCalls = Array.isArray(msg0.tool_calls)
+    ? msg0.tool_calls.map((t) => ({
+        id: String(t.id || 'call_' + Math.random().toString(36).slice(2, 10)),
+        type: 'function',
+        function: { name: String(t.function && t.function.name || ''), arguments: String(t.function && t.function.arguments || '{}') },
+      }))
+    : null;
+  return { ok: true, text: String(text), toolCalls, model: c.model, usage: json.usage || null };
+}
+
+/* U9-9 长期记忆向量检索：OpenAI 兼容 /embeddings，一次批量输入返回向量数组。 */
+async function embeddingsRaw(cfg, input, opts = {}) {
+  const c = normalizeCfg(cfg);
+  if (!c.base) throw new Error('Embedding 接口未配置（复用 AI 中枢聊天连接）');
+  const arr = (Array.isArray(input) ? input : [input]).map((x) => String(x == null ? '' : x)).filter(Boolean);
+  if (!arr.length) throw new Error('无有效 embedding 输入');
+  const body = JSON.stringify({ model: c.model, input: arr });
+  const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) };
+  if (c.apiKey) headers['Authorization'] = 'Bearer ' + c.apiKey;
+  const u = new URL(c.base + '/embeddings');
+  const json = await postJson(u.toString(), headers, body, c.timeoutMs, opts.signal);
+  const rows = (json.data || []).map((d) => (d && Array.isArray(d.embedding)) ? d.embedding : null).filter(Boolean);
+  if (!rows.length) throw new Error('Embedding 返回为空');
+  return { ok: true, vecs: rows, model: c.model, usage: json.usage || null };
 }
 
 /* 把错误翻译成用户能看懂的短句（不改语义，只做归类）。 */
@@ -134,4 +178,4 @@ async function probe(cfg) {
   }
 }
 
-module.exports = { chatRaw, chat, probe, normalizeCfg };
+module.exports = { chatRaw, chat, probe, embeddingsRaw, sanitizeMessages, normalizeCfg };

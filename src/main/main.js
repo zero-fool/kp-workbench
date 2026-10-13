@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const diceAiTransport = require('./dice-ai-transport');   // 骰娘专用 AI 传输层（与工作台 AI 完全独立）
 const aiHub = require('./dice-ai-hub');                    // U9：AI 中枢（总开关/多模型/请求参数/用量）
+const aiChatCore = require('./dice-ai-chat');              // U9-5~U9-12：AI 对话配置与触发/修饰/工具核心
 
 /* 数据目录策略（关键：升级/重装不丢数据）：
  * 便携版(自解压)：保留 EXE 旁 data/（数据随包即走）。
@@ -149,6 +150,8 @@ function bootData() {
           }
           /* U9：AI 中枢（U9-1 总开关 / U9-3 请求参数 / U9-2 多模型）。旧 aiPort 保持原样作为回退。 */
           d.aiHub = aiHub.normalizeHub(d.aiHub);
+          /* U9-5~U9-12：AI 对话配置（触发体系/修饰/人设/摘要/记忆/工具/白名单/Vision）。 */
+          d.aiChat = aiChatCore.normalizeChatCfg(d.aiChat);
         }
         /* 提示词中枢：settings.prompts.master(总提示词，每次 AI 运行都会注入) + settings.prompts.scenes(各场景覆盖) */
         {
@@ -446,6 +449,8 @@ function registerIpc() {
           }
           ns.dice.aiHub = aiHub.normalizeHub(ns.dice.aiHub);
         }
+        /* U9-5~U9-12：AI 对话配置规范化回写（无密钥字段，无需加密） */
+        if (ns.dice && ns.dice.aiChat !== undefined) ns.dice.aiChat = aiChatCore.normalizeChatCfg(ns.dice.aiChat);
         doc.settings = ns;
       }
       if (p.audit !== undefined) doc.audit = p.audit;
@@ -1813,6 +1818,44 @@ function registerIpc() {
   ipcMain.handle('diceSessions:send', (e, id, text) => diceWorkbench.sessionSend(id, text));
   // 发送观测（U8-8）：发送侧节流指标，供连接中心展示
   ipcMain.handle('diceNet:sendMetrics', () => diceWorkbench.sendGateMetrics());
+
+  /* ---- 骰娘 AI 对话引擎（批次二 U9-5~U9-12）----
+   * 监听 hub 消息事件：@必回 / 关键词必回 / 待机插话 + 六工具 + 群记忆摘要 + 事实向量检索。
+   * 横切约束：会话 ai 开关联动（U9-16）· 回复经适配器 send（send-gate 已包，U9-17）·
+   * 用量回写 AI 中枢模型卡片（U9-18，复用 diceAI.recordUsage）。 */
+  const { createAiChatEngine } = require('./dice-ai-chat-runtime');
+  const aiChatEngine = createAiChatEngine({
+    store: diceStorePort,
+    hub: diceWorkbench.hub,
+    brain: diceWorkbench.hub.brain,
+    chatRaw: (cfg, msgs, opts) => diceAiTransport.chatRaw(cfg, msgs, opts),
+    embeddingsRaw: (cfg, input, opts) => diceAiTransport.embeddingsRaw(cfg, input, opts),
+    getCfg() {
+      const d = (doc.settings && doc.settings.dice) || {};
+      const cfg = aiChatCore.normalizeChatCfg(d.aiChat);
+      const hubCfg = diceAiCfg();   // 中枢优先回退旧 aiPort；null = 引擎静默（U9-1 总开关/超限熔断兜底）
+      let botId = '', botName = '骰娘';
+      try {
+        const st = diceWorkbench.adapters.map((a) => a.status()).find((s) => s && s.state === 'running' && s.uin);
+        if (st) { botId = String(st.uin); botName = String(st.nickname || '骰娘'); }
+      } catch (_) {}
+      return { cfg, hubCfg, botId, botName };
+    },
+    recordUsage: diceAI.recordUsage,
+    log: (kind, ...rest) => { try { runlog.warn('AI chat ' + kind, { info: rest.map(String).join(' | ').slice(0, 300) }); } catch (_) {} },
+  });
+  diceWorkbench.hub.onEvent((ev) => {
+    if (!ev || ev.type !== 'message' || !ev.message) return;
+    const m = ev.message;
+    const ch = (diceWorkbench.adapters || []).find((a) => a && a.id === m.channel);
+    if (!ch) return;
+    aiChatEngine.onMessage(m, ch).catch(() => {});
+  });
+  /* AI 对话配置 IPC：摘要库/事实库 View·Clear（U9-8/U9-9）+ 默认值回填（U9-7 Load default） */
+  ipcMain.handle('diceAiChat:memView', () => aiChatEngine.memView());
+  ipcMain.handle('diceAiChat:memClear', (e, kind, groupId) => aiChatEngine.memClear(String(kind || ''), groupId ? String(groupId) : ''));
+  ipcMain.handle('diceAiChat:defaults', () => Object.assign(aiChatCore.normalizeChatCfg(null), { defaultPersona: aiChatCore.DEFAULT_CHAT_PERSONA }));
+
   // 退出前回收（与 before-quit 里 global.diceNetAdapters 一致，此处仅挂一次）
   global.__diceWorkbenchDispose = () => diceWorkbench.dispose();
 }

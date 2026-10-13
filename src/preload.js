@@ -339,6 +339,13 @@ contextBridge.exposeInMainWorld('api', {
     diceAiHub: {
       test: (model) => ipcRenderer.invoke('diceAiHub:test', model || {})
     },
+    /* AI 对话配置（批次二 U9-5~U9-12）：摘要库/事实库 View·Clear + 默认人设回填
+     * （配置本体读取与保存走 store 的 settings.dice.aiChat） */
+    diceAiChat: {
+      memView: () => ipcRenderer.invoke('diceAiChat:memView'),
+      memClear: (kind, groupId) => ipcRenderer.invoke('diceAiChat:memClear', kind, groupId),
+      defaults: () => ipcRenderer.invoke('diceAiChat:defaults')
+    },
     /* QQ 直连登入：软件内扫码 / 账密直接登入 QQ，无需 OneBot 协议端中转。
      * login(opts) 的 opts = { mode:'qr'|'password', uin, password }；登录过程状态经 onQqEvent 持续推送。 */
     diceQq: {
