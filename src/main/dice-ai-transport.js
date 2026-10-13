@@ -79,18 +79,18 @@ function postJson(url, headers, body, timeoutMs, outerSignal) {
 
 async function chatRaw(cfg, messages, opts = {}) {
   const c = normalizeCfg(cfg);
-  if (!c.base) throw new Error('骰娘 AI 尚未配置（请在「骰娘」面板启用独立 AI 端口并填写接口地址）');
+  if (!c.base) throw new Error('骰娘 AI 尚未配置（请在「AI 中枢」配置模型并启用）');
   const msgs = (messages || [])
     .filter((m) => m && (m.role === 'system' || m.role === 'user' || m.role === 'assistant'))
     .map((m) => ({ role: m.role, content: String(m.content == null ? '' : m.content) }));
   if (!msgs.length) throw new Error('无有效消息可发送');
-  const body = JSON.stringify({ model: c.model, messages: msgs });
+  const body = JSON.stringify({ model: c.model, messages: msgs, ...(cfg && cfg.params ? { ...cfg.params } : {}) });
   const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) };
   if (c.apiKey) headers['Authorization'] = 'Bearer ' + c.apiKey;
   const u = new URL(c.base + '/chat/completions');
   const json = await postJson(u.toString(), headers, body, c.timeoutMs, opts.signal);
   const text = (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '';
-  return { ok: true, text: String(text), model: c.model };
+  return { ok: true, text: String(text), model: c.model, usage: json.usage || null };
 }
 
 /* 把错误翻译成用户能看懂的短句（不改语义，只做归类）。 */
@@ -116,4 +116,22 @@ async function chat(cfg, messages, opts = {}) {
   }
 }
 
-module.exports = { chatRaw, chat, normalizeCfg };
+/* U9-4 模型连通测试：max_tokens=1 的最小请求，返回延迟与模型名；不写任何统计。 */
+async function probe(cfg) {
+  const c = normalizeCfg(cfg);
+  if (!c.base) return { ok: false, error: '接口地址为空' };
+  const body = JSON.stringify({ model: c.model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1, temperature: 0 });
+  const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) };
+  if (c.apiKey) headers['Authorization'] = 'Bearer ' + c.apiKey;
+  const started = Date.now();
+  try {
+    const u = new URL(c.base + '/chat/completions');
+    const json = await postJson(u.toString(), headers, body, Math.min(c.timeoutMs, 20000), null);
+    const text = (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '';
+    return { ok: true, latencyMs: Date.now() - started, model: c.model, sample: String(text).slice(0, 20) };
+  } catch (e) {
+    return { ok: false, latencyMs: Date.now() - started, model: c.model, error: humanError(e) };
+  }
+}
+
+module.exports = { chatRaw, chat, probe, normalizeCfg };

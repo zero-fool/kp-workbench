@@ -335,6 +335,10 @@ contextBridge.exposeInMainWorld('api', {
       delete: (id) => ipcRenderer.invoke('diceSessions:delete', id),
       send: (id, text) => ipcRenderer.invoke('diceSessions:send', id, text)
     },
+    /* AI 中枢（U9）：模型连通测试（配置读取与保存走 store:getAll / store:save 的 settings.dice.aiHub） */
+    diceAiHub: {
+      test: (model) => ipcRenderer.invoke('diceAiHub:test', model || {})
+    },
     /* QQ 直连登入：软件内扫码 / 账密直接登入 QQ，无需 OneBot 协议端中转。
      * login(opts) 的 opts = { mode:'qr'|'password', uin, password }；登录过程状态经 onQqEvent 持续推送。 */
     diceQq: {

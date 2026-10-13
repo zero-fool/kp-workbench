@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog, safeStorage } = require('ele
 const fs = require('fs');
 const path = require('path');
 const diceAiTransport = require('./dice-ai-transport');   // 骰娘专用 AI 传输层（与工作台 AI 完全独立）
+const aiHub = require('./dice-ai-hub');                    // U9：AI 中枢（总开关/多模型/请求参数/用量）
 
 /* 数据目录策略（关键：升级/重装不丢数据）：
  * 便携版(自解压)：保留 EXE 旁 data/（数据随包即走）。
@@ -146,6 +147,8 @@ function bootData() {
             if (!d.aiPort.base && a.baseUrl) d.aiPort = { enabled: true, base: a.baseUrl, key: a.apiKey, model: a.model, timeoutMs: a.timeoutMs };
             d.aiPortMigrated = true;
           }
+          /* U9：AI 中枢（U9-1 总开关 / U9-3 请求参数 / U9-2 多模型）。旧 aiPort 保持原样作为回退。 */
+          d.aiHub = aiHub.normalizeHub(d.aiHub);
         }
         /* 提示词中枢：settings.prompts.master(总提示词，每次 AI 运行都会注入) + settings.prompts.scenes(各场景覆盖) */
         {
@@ -323,12 +326,23 @@ function hardenAiKeyIfNeeded() {
     p.encrypted = p.key.indexOf(ENC_PREFIX) === 0;
     changed = true;
   }
+  /* U9：AI 中枢模型 Key 一并加密落盘 */
+  const hub = doc.settings && doc.settings.dice && doc.settings.dice.aiHub;
+  for (const m of (hub && Array.isArray(hub.models) ? hub.models : [])) {
+    if (m && m.key && String(m.key).indexOf(ENC_PREFIX) !== 0) {
+      m.key = encKey(m.key) || m.key;
+      changed = true;
+    }
+  }
   return changed;
 }
 function decryptSettingsClone() {
   const st = JSON.parse(JSON.stringify(doc.settings || {}));
   if (st.ai && st.ai.apiKey) st.ai.apiKey = decKey(st.ai.apiKey);
   if (st.dice && st.dice.aiPort && st.dice.aiPort.key) st.dice.aiPort.key = decKey(st.dice.aiPort.key);
+  if (st.dice && st.dice.aiHub && Array.isArray(st.dice.aiHub.models)) {
+    for (const m of st.dice.aiHub.models) if (m && m.key) m.key = decKey(m.key);
+  }
   return st;
 }
 
@@ -355,12 +369,14 @@ function currentCfg() {
   throw new Error('尚未配置 AI 连接（请到「AI 配置」填写接口地址 / 密钥 / 模型）');
 }
 
-/* 骰娘 AI 开关：只读 settings.dice.aiSwitches，工作台 settings.ai 完全不参与。 */
+/* 骰娘 AI 开关：只读 settings.dice.aiSwitches + aiHub.masterOn，工作台 settings.ai 完全不参与。 */
 function diceAiSwitches() {
   const s = (doc.settings && doc.settings.dice && doc.settings.dice.aiSwitches) || {};
+  const hub = (doc.settings && doc.settings.dice && doc.settings.dice.aiHub) || {};
   const feat = s.features || {};
   return {
     enabled: s.enabled !== false,
+    masterOn: hub.masterOn !== false,   // U9-1：AI 中枢总开关（缺省开）
     features: {
       dice: feat.dice !== false, optimize: feat.optimize !== false, interject: feat.interject === true,
       meme: feat.meme !== false, kpAdvice: feat.kpAdvice !== false
@@ -370,9 +386,16 @@ function diceAiSwitches() {
     optimizePrompt: typeof s.optimizePrompt === 'string' ? s.optimizePrompt : ''
   };
 }
-/* 骰娘 AI 连接：只读 settings.dice.aiPort；未启用或未填地址返回 null（绝不回退工作台 AI）。 */
+/* 骰娘 AI 连接：优先 AI 中枢首个启用模型（U9-2，含请求参数），回退旧 aiPort；
+ * 总开关关闭（U9-1）或全部模型超限熔断时返回 null（绝不回退工作台 AI）。 */
 function diceAiCfg() {
-  const p = (doc.settings && doc.settings.dice && doc.settings.dice.aiPort) || {};
+  const d = (doc.settings && doc.settings.dice) || {};
+  const hub = aiHub.normalizeHub(d.aiHub);
+  if (hub.masterOn) {
+    const m = hub.models.find((x) => x.enabled && x.baseUrl && !aiHub.overLimit(x));
+    if (m) return aiHub.modelCfg(m, { params: hub.params });
+  }
+  const p = d.aiPort || {};
   if (!p.enabled || !p.base) return null;
   return {
     baseUrl: p.base, apiKey: decKey(p.key), model: p.model || 'gpt-3.5-turbo',
@@ -416,6 +439,13 @@ function registerIpc() {
         if (ns.ai) { const kk = decKey(inKey); ns.ai.apiKey = encKey(kk) || kk; ns.ai.encrypted = ns.ai.apiKey.indexOf(ENC_PREFIX) === 0; }
         const inPortKey = ns.dice && ns.dice.aiPort && ns.dice.aiPort.key;
         if (ns.dice && ns.dice.aiPort && inPortKey !== undefined) { const kk = decKey(inPortKey); ns.dice.aiPort.key = encKey(kk) || kk; ns.dice.aiPort.encrypted = ns.dice.aiPort.key.indexOf(ENC_PREFIX) === 0; }
+        /* U9：AI 中枢模型 Key 加密回写（渲染层传来的是明文） */
+        if (ns.dice && ns.dice.aiHub && Array.isArray(ns.dice.aiHub.models)) {
+          for (const m of ns.dice.aiHub.models) {
+            if (m && m.key !== undefined) { const kk = decKey(m.key); m.key = encKey(kk) || kk; }
+          }
+          ns.dice.aiHub = aiHub.normalizeHub(ns.dice.aiHub);
+        }
         doc.settings = ns;
       }
       if (p.audit !== undefined) doc.audit = p.audit;
@@ -1667,6 +1697,7 @@ function registerIpc() {
       const cfg = diceAiCfg();        // 未配置独立端口 → null，短路，绝不回退工作台 AI
       return {
         enabled: sw.enabled && sw.features[feature] !== false,
+        masterOff: !sw.masterOn,      // U9-1：总开关关闭 → .ai 指令给出明确指引
         cfg,
         buildSystem(f) {
           // 该 feature 对应的提示词中枢场景：dice→dice / optimize→optimize / interject→interject；其余回退 dice 场景
@@ -1684,6 +1715,20 @@ function registerIpc() {
           promptHub.appendMemory(dataDir, scene, content);
         }
       };
+    },
+    // U9-2：AI 中枢用量回写——把 usage 累加到对应模型卡片 stats 并落盘（含费用估算与超限标记）
+    recordUsage(modelId, usage) {
+      try {
+        const d = doc.settings && doc.settings.dice;
+        const hub = aiHub.normalizeHub(d && d.aiHub);
+        const m = hub.models.find((x) => x.id === String(modelId));
+        if (!m) return;
+        m.stats = aiHub.applyUsage(m, usage);
+        const lim = aiHub.overLimit(m);
+        if (lim) runlog.warn('AI 中枢模型达到用量上限', { model: m.name, limit: lim });
+        d.aiHub = hub;
+        store.save(doc);
+      } catch (_) {}
     }
   });
   /* ---- KP 建议（批次5）：聚合当前对局上下文，经 dice-ai 走 kpAdvice 开关生成建议，
@@ -1718,6 +1763,12 @@ function registerIpc() {
   });
   ipcMain.handle('diceKpAdvice:suggest', (e, opts) => kpAdvice.suggest(opts || {}));
   ipcMain.handle('diceKpAdvice:enabled', () => kpAdvice.enabled());
+  /* U9-4：AI 中枢模型连通测试（主进程发请求，渲染层无网络能力） */
+  ipcMain.handle('diceAiHub:test', async (e, model) => {
+    const m = aiHub.normalizeModel(model || {});
+    if (!m.baseUrl) return { ok: false, error: '接口地址为空' };
+    return diceAiTransport.probe({ baseUrl: m.baseUrl, apiKey: decKey(m.key), model: m.model });
+  });
   const transformReplies = createTransformReplies({
     aiBridge: diceAI,
     memes: memeStore,

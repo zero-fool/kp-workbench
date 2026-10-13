@@ -1447,6 +1447,7 @@
     else if (view === 'dicehost') renderDiceHost();
     else if (view === 'dicework') renderDiceWork();
     else if (view === 'diceai') renderDiceAI();
+    else if (view === 'diceaihub') renderDiceAiHub();
     else if (view === 'diceaichat') renderDiceAIChat();
     else if (view === 'dicememe') renderDiceMeme();
     else if (view === 'stats') renderStats();
@@ -4217,6 +4218,234 @@
     } catch (e) { toast('保存失败：' + (e && e.message || e), 'err'); }
   };
 
+  /* ---------- 骰娘 AI 中枢（分区 8 / U9-1~U9-4）：总开关 / 多模型卡片 / 请求参数 / 连通测试 ----------
+   * 对齐 Dice-Next AI 面板 Models 页：中枢有启用模型时优先生效（并下发请求参数默认值），
+   * 无启用模型或全部超限时自动回退旧「独立 AI 端口」，既有用户零感知；
+   * 中枢总开关（masterOn）关闭则骰娘全部 AI 短路（.ai 指令给出明确提示）。
+   * 数据：settings.dice.aiHub = { masterOn, params, models:[...] }，key 明文驻内存、落盘由主进程加密。 */
+  function diceAiHubData() {
+    if (!S.settings.dice) S.settings.dice = {};
+    const h = S.settings.dice.aiHub || (S.settings.dice.aiHub = {});
+    if (typeof h.masterOn !== 'boolean') h.masterOn = true;
+    const dp = { temperature: 0.7, topP: 1, maxTokens: 1024, frequencyPenalty: 0, presencePenalty: 0 };
+    if (!h.params || typeof h.params !== 'object') h.params = {};
+    for (const k of Object.keys(dp)) { const v = Number(h.params[k]); if (!Number.isFinite(v)) h.params[k] = dp[k]; }
+    if (!Array.isArray(h.models)) h.models = [];
+    for (const m of h.models) {
+      if (typeof m.enabled !== 'boolean') m.enabled = true;
+      if (!m.id) m.id = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      if (!m.stats || typeof m.stats !== 'object') m.stats = {};
+      for (const k of ['tokens', 'cost', 'calls', 'lastUsedAt']) { const v = Number(m.stats[k]); if (!Number.isFinite(v)) m.stats[k] = 0; }
+    }
+    return h;
+  }
+  /* 渲染层复刻主进程超限判定（tokenLimit/costLimit，0 = 不限），保证 UI 状态与主进程同口径。 */
+  function hubOverLimit(m) {
+    const s = (m && m.stats) || {};
+    if ((Number(m.tokenLimit) || 0) > 0 && (Number(s.tokens) || 0) >= Number(m.tokenLimit)) return 'token';
+    if ((Number(m.costLimit) || 0) > 0 && (Number(s.cost) || 0) >= Number(m.costLimit)) return 'cost';
+    return null;
+  }
+  /* 与主进程 diceAiCfg 同口径：中枢（masterOn 开 + 首个启用且未超限的模型）优先，否则回退旧 aiPort。
+   * 返回 transport 兼容 cfg（baseUrl/apiKey/model/params/__hubModelId），无可用配置返回 null。 */
+  function diceAiActiveCfg() {
+    const hub = diceAiHubData();
+    if (hub.masterOn) {
+      const m = hub.models.find((x) => x.enabled && x.baseUrl && !hubOverLimit(x));
+      if (m) return { baseUrl: m.baseUrl, apiKey: m.key || '', model: m.model, params: Object.assign({}, hub.params), __hubModelId: m.id };
+    }
+    const p = readDiceAiPort();
+    if (p.enabled && p.base) return { baseUrl: p.base, apiKey: p.key || '', model: p.model || 'gpt-3.5-turbo' };
+    return null;
+  }
+  function diceAiHubStateText() {
+    const hub = diceAiHubData();
+    if (!hub.masterOn) return { cls: 'warn', text: 'AI 中枢总开关已关闭：骰娘全部 AI 功能短路（.ai 指令将给出提示）' };
+    const act = hub.models.find((x) => x.enabled && x.baseUrl && !hubOverLimit(x));
+    if (act) return { cls: 'ok', text: '当前生效：' + esc(act.name) + '（' + esc(act.model) + '）—— 首个启用的模型为全局默认' };
+    const p = readDiceAiPort();
+    if (p.enabled && p.base) return { cls: '', text: '中枢暂无启用模型，已回退旧「独立 AI 端口」（' + esc(p.model || '未填模型名') + '）' };
+    return { cls: 'warn', text: '尚未配置：请在下方添加并启用模型，或启用旧「独立 AI 端口」' };
+  }
+  /* 正在编辑的模型 id：null = 无；'new' = 新增中；其余 = 对应模型 id */
+  let _hubEditId = null;
+  function fmtHubTokens(n) { const v = Number(n) || 0; return v >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : v >= 1000 ? (v / 1000).toFixed(1) + 'k' : String(v); }
+  function fmtHubCost(n) { return '￥' + (Number(n) || 0).toFixed(4); }
+  function fmtHubLimit(n, unit) { const v = Number(n) || 0; return v > 0 ? (fmtHubTokens(v) + unit) : '不限'; }
+  function diceAiHubCardHTML(m, i) {
+    const hub = diceAiHubData();
+    const lim = hubOverLimit(m);
+    const isDef = hub.masterOn && !lim && hub.models.findIndex((x) => x.enabled && x.baseUrl && !hubOverLimit(x)) === i;
+    const st = m.stats || {};
+    if (_hubEditId === m.id) return diceAiHubEditFormHTML(m);
+    return `<div class="dh-card dice-hub-card" style="${lim ? 'opacity:.75;border-color:var(--warn)' : ''}">
+      <div class="dh-head">
+        <label class="ai-toggle"><input type="checkbox" ${m.enabled !== false ? 'checked' : ''} onchange="WB.diceAiHubToggle('${m.id}', this.checked)"> 启用</label>
+        <b>${esc(m.name)}</b>
+        ${isDef ? '<span class="dgrade gok">默认</span>' : ''}
+        ${lim ? `<span class="dgrade gfail">已达${lim === 'token' ? 'Token' : '费用'}上限</span>` : ''}
+        <span class="grow"></span>
+        <span id="hub_test_${m.id}" class="hint" style="max-width:300px;text-align:right"></span>
+        <button class="ghost mini" onclick="WB.diceAiHubTest('${m.id}')">🔍 Test</button>
+        <button class="ghost mini" onclick="WB.diceAiHubEdit('${m.id}')">✏️ 编辑</button>
+        <button class="ghost mini" onclick="WB.diceAiHubDel('${m.id}')">🗑 删除</button>
+      </div>
+      <div class="hint" style="margin:2px 0 6px"><code>${esc(m.model)}</code> @ ${esc(m.baseUrl || '未填接口地址')}</div>
+      <div class="dh-row"><span class="lbl">累计用量</span><span class="val">${fmtHubTokens(st.tokens)} tokens · ${fmtHubCost(st.cost)} · ${st.calls || 0} 次调用${st.lastUsedAt ? ' · 最近 ' + new Date(st.lastUsedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span></div>
+      <div class="dh-row"><span class="lbl">限额 / 单价</span><span class="val">${fmtHubLimit(m.tokenLimit, ' tokens')} / ${fmtHubLimit(m.costLimit, '￥')} · 输入 ${Number(m.inputPrice) || 0} 输出 ${Number(m.outputPrice) || 0} ￥/百万tokens</span></div>
+      ${lim ? `<div class="dh-row"><span class="lbl"></span><span class="val" style="color:var(--warn)">已自动跳过该模型：请调高限额或「用量清零」后重新启用</span></div>` : ''}
+      ${(st.calls || 0) > 0 ? `<div class="toolbar" style="margin-top:4px"><button class="ghost mini" onclick="WB.diceAiHubResetUsage('${m.id}')">↺ 用量清零</button></div>` : ''}
+    </div>`;
+  }
+  /* 新增 / 编辑共用的模型表单：m 为待编辑对象（新增时传入出厂默认骨架） */
+  function diceAiHubEditFormHTML(m) {
+    return `<div class="dh-card dice-hub-card" style="border:1px solid var(--accent)">
+      <div class="dh-head"><b>${_hubEditId === 'new' ? '➕ 新增模型' : '✏️ 编辑模型'}</b><span class="grow"></span><span class="hint">OpenAI 兼容接口</span></div>
+      <div class="row"><label>名称（自定义，便于区分）</label><input id="hub_name" value="${esc(m.name)}" placeholder="如：DeepSeek 官方 / 本地 Ollama"></div>
+      <div class="row"><label>接口地址（OpenAI 兼容，含 /v1）</label><input id="hub_baseUrl" value="${esc(m.baseUrl)}" placeholder="https://api.deepseek.com/v1" style="font-family:monospace"></div>
+      <div class="row ai2"><label>API Key（本地服务可留空）</label><input id="hub_key" type="password" value="${esc(m.key || '')}">
+        <label>模型名</label><input id="hub_model" value="${esc(m.model)}" placeholder="deepseek-chat" style="width:200px"></div>
+      <div class="row ai2"><label>输入单价 ￥/百万tokens</label><input id="hub_inputPrice" type="number" min="0" step="0.1" value="${Number(m.inputPrice) || 0}">
+        <label>输出单价 ￥/百万tokens</label><input id="hub_outputPrice" type="number" min="0" step="0.1" value="${Number(m.outputPrice) || 0}"></div>
+      <div class="row ai2"><label>Token 用量上限（0=不限）</label><input id="hub_tokenLimit" type="number" min="0" value="${Number(m.tokenLimit) || 0}">
+        <label>费用上限 ￥（0=不限）</label><input id="hub_costLimit" type="number" min="0" value="${Number(m.costLimit) || 0}"></div>
+      <div class="toolbar"><label class="ai-toggle"><input type="checkbox" id="hub_enabled" ${m.enabled !== false ? 'checked' : ''}> 启用该模型</label>
+        <span class="grow"></span>
+        <button onclick="WB.diceAiHubSaveEdit()">💾 保存</button>
+        <button class="ghost" onclick="WB.diceAiHubCancelEdit()">取消</button></div>
+      <div class="dh-note">保存后立即生效；首个「启用且已填地址」的模型成为全局默认。Key 落盘时由主进程统一加密。</div>
+    </div>`;
+  }
+  function diceAiHubPanelHTML() {
+    const hub = diceAiHubData();
+    const stt = diceAiHubStateText();
+    const p = hub.params;
+    const pRow = (id, label, v, step) => `<div style="flex:1;min-width:130px"><label style="font-size:12px">${label}</label>
+      <input id="hubp_${id}" type="number" step="${step}" value="${v}" onchange="WB.diceAiHubParams()"></div>`;
+    const cards = hub.models.map(diceAiHubCardHTML).join('');
+    return `
+      <div class="airow" style="display:flex;align-items:center;gap:10px">
+        <label class="ai-toggle"><input type="checkbox" id="hubp_master" ${hub.masterOn ? 'checked' : ''} onchange="WB.diceAiHubMaster(this.checked)"> <b>AI 中枢总开关</b></label>
+        <span class="grow"></span>
+        <button onclick="WB.diceAiHubNew()">➕ 新增模型</button>
+      </div>
+      <div class="hint" style="margin:4px 0 10px;color:var(--${stt.cls === 'ok' ? 'ok' : stt.cls === 'warn' ? 'warn' : 'ink-faint'})">${stt.text}</div>
+      <details style="margin-bottom:10px"><summary class="dsec" style="cursor:pointer;list-style:none">⚙️ 请求参数默认值 <span class="hint" style="font-weight:400">随每次请求下发（模型未单独设置时生效）</span></summary>
+        <div class="airow" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+          ${pRow('temperature', '温度 temperature', p.temperature, 0.1)}
+          ${pRow('topP', 'Top P', p.topP, 0.1)}
+          ${pRow('maxTokens', '最大 tokens', p.maxTokens, 64)}
+          ${pRow('frequencyPenalty', '频率惩罚', p.frequencyPenalty, 0.1)}
+          ${pRow('presencePenalty', '存在惩罚', p.presencePenalty, 0.1)}
+        </div>
+        <div class="toolbar"><button class="ghost" onclick="WB.diceAiHubParamsReset()">↺ 恢复默认</button>
+          <span class="hint">改动即存即时生效，走骰娘通道的 AI 请求都会携带</span></div>
+      </details>
+      <div style="display:grid;gap:10px" id="hubModelList">${cards || '<div class="empty">暂无模型卡片：点「➕ 新增模型」接入 OpenAI 兼容接口（官方 API / DeepSeek / 本地 Ollama 均可）</div>'}${_hubEditId === 'new' ? diceAiHubEditFormHTML({ name: '', baseUrl: '', key: '', model: '', enabled: true, inputPrice: 0, outputPrice: 0, tokenLimit: 0, costLimit: 0 }) : ''}</div>
+      <div class="dh-note" style="margin-top:8px">与旧「独立 AI 端口」的关系：中枢有启用模型时优先走中枢；无启用模型（或全部超限）时自动回退旧端口，两边配置互不覆盖。用量由调用侧回写累计，超过限额的模型自动跳过并提示。</div>`;
+  }
+  function paintDiceAiHub() {
+    const box = q('dice-ai-hub'); if (!box) return;
+    box.innerHTML = diceAiHubPanelHTML();
+  }
+  function renderDiceAiHub() {
+    contentInner(`<div class="page-title"><h2>AI 中枢（模型管理）</h2>
+      <span class="hint">总开关 · 多模型卡片 · 请求参数默认值 · 连通测试；无启用模型时自动回退旧「独立 AI 端口」</span></div>
+      <div class="dh-card"><div id="dice-ai-hub" class="dice-ai-hub"></div></div>
+      <div class="setcard" style="margin-top:14px"><h4>使用说明</h4>
+        <div class="note">本页管理<b>骰娘通道</b>的全部 AI 模型：<code>.ai</code> 对话、定向判定、骰点润色、插话、表情、KP 建议都从这里取模型。<br>
+        ① 总开关关闭 = 全部骰娘 AI 短路，群内 <code>.ai</code> 会收到友好提示；<br>
+        ② 模型卡片可添加多张，<b>首个「启用且已填地址」</b>的模型成为全局默认，其余卡片可作为备用（禁用前面的即可切换）；<br>
+        ③ 「Test」用最小请求（max_tokens=1）验证连通性，显示延迟，不消耗正常配额、不计入用量统计；<br>
+        ④ 限额到顶的模型自动跳过，避免账单失控；单价填「￥ / 每百万 tokens」用于费用估算。</div>
+      </div>`);
+    paintDiceAiHub();
+  }
+  function genHubId() { return 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+  function collectHubModelForm() {
+    const g = (k) => { const el = document.getElementById('hub_' + k); return el ? el.value : ''; };
+    const gc = (k) => { const el = document.getElementById('hub_' + k); return el ? el.checked : false; };
+    return {
+      name: g('name').trim() || '未命名模型',
+      baseUrl: g('baseUrl').trim().replace(/\/+$/, ''),
+      key: g('key'),
+      model: g('model').trim() || 'gpt-3.5-turbo',
+      enabled: gc('enabled'),
+      inputPrice: Number(g('inputPrice')) || 0,
+      outputPrice: Number(g('outputPrice')) || 0,
+      tokenLimit: Number(g('tokenLimit')) || 0,
+      costLimit: Number(g('costLimit')) || 0
+    };
+  }
+  window.WB.diceAiHubMaster = function (on) {
+    diceAiHubData().masterOn = !!on;
+    persist(); paintDiceAiHub();
+    toast(on ? 'AI 中枢已开启' : 'AI 中枢已关闭（骰娘全部 AI 功能短路）', 'ok');
+  };
+  window.WB.diceAiHubParams = function () {
+    const hub = diceAiHubData();
+    const num = (k, def) => { const el = document.getElementById('hubp_' + k); if (!el) return; const v = Number(el.value); hub.params[k] = Number.isFinite(v) ? v : def; };
+    num('temperature', 0.7); num('topP', 1); num('maxTokens', 1024); num('frequencyPenalty', 0); num('presencePenalty', 0);
+    persist();
+  };
+  window.WB.diceAiHubParamsReset = function () {
+    const hub = diceAiHubData();
+    hub.params = { temperature: 0.7, topP: 1, maxTokens: 1024, frequencyPenalty: 0, presencePenalty: 0 };
+    persist(); paintDiceAiHub();
+    toast('请求参数已恢复默认', 'ok');
+  };
+  window.WB.diceAiHubNew = function () { _hubEditId = 'new'; paintDiceAiHub(); };
+  window.WB.diceAiHubEdit = function (id) { _hubEditId = id; paintDiceAiHub(); };
+  window.WB.diceAiHubCancelEdit = function () { _hubEditId = null; paintDiceAiHub(); };
+  window.WB.diceAiHubSaveEdit = function () {
+    const hub = diceAiHubData();
+    const m = collectHubModelForm();
+    if (!m.baseUrl) { toast('接口地址不能为空', 'err'); return; }
+    if (_hubEditId === 'new') hub.models.push(Object.assign({ id: genHubId(), stats: { tokens: 0, cost: 0, calls: 0, lastUsedAt: 0 } }, m));
+    else {
+      const old = hub.models.find((x) => x.id === _hubEditId);
+      if (!old) { toast('模型不存在或已删除', 'err'); _hubEditId = null; paintDiceAiHub(); return; }
+      Object.assign(old, m);   // stats 保留不覆盖
+    }
+    _hubEditId = null;
+    persist(); paintDiceAiHub();
+    toast('模型已保存' + (hub.masterOn && m.enabled && m.baseUrl ? '，作为骰娘 AI 通道生效' : ''), 'ok');
+  };
+  window.WB.diceAiHubDel = function (id) {
+    const hub = diceAiHubData();
+    const m = hub.models.find((x) => x.id === id); if (!m) return;
+    /* Electron 屏蔽原生 confirm，破坏性操作统一走内置确认弹窗（appConfirm → Promise） */
+    appConfirm('删除模型', '确定删除模型「' + m.name + '」？\n用量统计将一并清除，此操作不可撤销。').then((yes) => {
+      if (!yes) return;
+      const h = diceAiHubData();
+      h.models = h.models.filter((x) => x.id !== id);
+      persist(); paintDiceAiHub();
+      toast('已删除模型「' + m.name + '」', 'ok');
+    });
+  };
+  window.WB.diceAiHubToggle = function (id, on) {
+    const m = diceAiHubData().models.find((x) => x.id === id); if (!m) return;
+    m.enabled = !!on;
+    persist(); paintDiceAiHub();
+  };
+  window.WB.diceAiHubResetUsage = function (id) {
+    const m = diceAiHubData().models.find((x) => x.id === id); if (!m) return;
+    m.stats = { tokens: 0, cost: 0, calls: 0, lastUsedAt: 0 };
+    persist(); paintDiceAiHub();
+    toast('用量已清零', 'ok');
+  };
+  window.WB.diceAiHubTest = async function (id) {
+    const m = diceAiHubData().models.find((x) => x.id === id); if (!m) return;
+    const api = dwApi();
+    if (!api || !api.diceAiHub) { toast('当前环境未暴露 AI 中枢测试接口', 'err'); return; }
+    const stEl = document.getElementById('hub_test_' + id);
+    if (stEl) stEl.textContent = '测试中…';
+    const rep = await api.diceAiHub.test({ name: m.name, baseUrl: m.baseUrl, key: m.key, model: m.model });
+    const ok = !!(rep && rep.ok);
+    if (stEl) stEl.textContent = ok ? ('✓ ' + (rep.latencyMs || 0) + 'ms') : ('✕ ' + ((rep && rep.error) || '无响应'));
+    toast(ok ? ('模型「' + m.name + '」连通成功（' + (rep.latencyMs || 0) + 'ms）') : ('连通失败：' + ((rep && rep.error) || '无响应')), ok ? 'ok' : 'err');
+  };
+
   /* 骰娘 AI 设置 → 表情包库 */
   function renderDiceMeme() {
     const html = `<div class="page-title"><h2>表情包库</h2>
@@ -6043,7 +6272,7 @@
     { v: 'ai', ic: '✧', t: 'AI 助手' }, { v: 'persona', ic: '♜', t: 'AI 设定' },
     { v: 'aiconf', ic: '⇅', t: 'AI 配置' }, { v: 'polish', ic: '✍', t: '记录润色' }, { v: 'rawtext', ic: '↯', t: '原始文本' },
     { v: 'dicehost', ic: '🎲', t: '连 QQ 骰娘' }, { v: 'dice', ic: '⚀', t: '本地掷骰' }, { v: 'dicework', ic: '🧭', t: '骰娘工作台' },
-    { v: 'diceai', ic: '🎛', t: '骰娘 AI 功能开关' }, { v: 'diceaichat', ic: '💬', t: '群聊 AI 行为' }, { v: 'dicememe', ic: '🖼', t: '表情包库' },
+    { v: 'diceai', ic: '🎛', t: '骰娘 AI 功能开关' }, { v: 'diceaihub', ic: '🧠', t: 'AI 中枢（模型管理）' }, { v: 'diceaichat', ic: '💬', t: '群聊 AI 行为' }, { v: 'dicememe', ic: '🖼', t: '表情包库' },
     { v: 'encounter', ic: '⚔', t: '临场战斗' }, { v: 'stats', ic: '📊', t: '统计分析' },
     { v: 'gm', ic: '⚡', t: '开团模式（集中驾驶舱）' },
     { v: 'settings', ic: '⚙', t: '偏好设置' }, { v: 'help', ic: '❓', t: '帮助中心' },
@@ -8578,10 +8807,10 @@
   function diceBoardHTML(title) {
     const sel = S.settings.dice || {};
     const rule = sel.rule || 'coc';
-    /* 骰娘 AI 只认自己的总开关与独立端口，不再引用工作台 AI 凭证。 */
-    const aiPort = sel.aiPort || {};
+    /* 骰娘 AI 只认自己的总开关 + AI 中枢/独立端口，不再引用工作台 AI 凭证。 */
+    const aiPort = readDiceAiPort();                       // 旧端口表单仍在 AI 判定区里（中枢的后备）
     const aiSw = diceAiSwitches();
-    const aiReady = aiSw.enabled && !!aiPort.enabled && !!aiPort.base;
+    const aiReady = aiSw.enabled && !!diceAiActiveCfg();   // 中枢有启用模型 或 旧端口已启用
     const aiOn = aiSw.enabled;
     const hist = (S.settings.diceLog || []).slice(0, 12);
     let html = title || '';
@@ -8630,7 +8859,7 @@
       <div id="diceOut" class="diceout">${S.settings.diceLast ? renderDiceResult(S.settings.diceLast) : '<div class="empty">投掷 / 检定结果将显示在这里</div>'}</div>`;
 
     // AI 定向判定 + 人物卡 Excel
-    html += `<details class="diceai"><summary class="dsec" style="margin:0;cursor:pointer;list-style:none">🎭 AI 定向判定 <span class="hint" style="font-family:var(--font);font-weight:400;letter-spacing:0">可导入人物卡 Excel，可独立接本地 AI 端口</span></summary>
+    html += `<details class="diceai"><summary class="dsec" style="margin:0;cursor:pointer;list-style:none">🎭 AI 定向判定 <span class="hint" style="font-family:var(--font);font-weight:400;letter-spacing:0">可导入人物卡 Excel；模型在「AI 中枢」或下方独立端口配置</span></summary>
       <div class="airow"><label class="file-label"><input type="file" id="sheetFile" accept=".xlsx,.xls,.csv" hidden onchange="WB.readSheet(this)">
         <span class="ghost filebtn">📄 选择人物卡 Excel</span></label>
         <span id="sheetState" class="hint">${S.settings.sheetName ? '已加载：' + esc(S.settings.sheetName) : '未加载人物卡'}</span>
@@ -8640,13 +8869,13 @@
         <input id="diceTask" placeholder="例：守夜时用潜行溜过卫兵 / 使用力量推开石门" value="${esc(sel.task || '')}"></div>
       <div class="airow"><label>可选：人物卡匹配关键字（留空则让 AI 选）</label>
         <input id="diceChar" placeholder="例：李凡 / 默认人物" value="${esc(sel.char || '')}"></div>
-      <div class="toolbar"><button ${aiReady ? '' : 'disabled title="需先启用骰娘「独立 AI 端口」并填写接口地址"'} onclick="WB.aiJudge()">🤖 AI 定向判定</button>
+      <div class="toolbar"><button ${aiReady ? '' : 'disabled title="需先在「AI 中枢」添加启用模型，或启用骰娘「独立 AI 端口」"'} onclick="WB.aiJudge()">🤖 AI 定向判定</button>
         <button class="ghost" onclick="WB.aiJudgeExplain()">📋 解释判定</button><span class="hint">接 AI 后按人物卡属性算调整值并针对性投骰</span></div>
       <div id="aiJudgeOut" class="diceout"></div>
 
-      <!-- 独立 AI 端口（骰娘专用）：优先使用，独立于工作台全局 AI -->
+      <!-- 独立 AI 端口（骰娘专用）：AI 中枢的后备通道，独立于工作台全局 AI -->
       <div class="airow ai-port" style="border-top:1px dashed var(--line);padding-top:10px;margin-top:6px">
-        <b>🤖 独立 AI 端口（骰娘专用）</b><span class="grow"></span>
+        <b>🤖 独立 AI 端口（骰娘专用 · 后备）</b><span class="grow"></span>
         <label class="ai-toggle"><input type="checkbox" id="diceAiPortOn" ${aiPort.enabled ? 'checked' : ''} onchange="WB.diceAiPortSave()"> 启用</label></div>
       <div class="airow"><label>接口地址（OpenAI 兼容，本地如 Ollama http://127.0.0.1:11434/v1）</label>
         <input id="diceAiPortBase" placeholder="http://127.0.0.1:11434/v1" value="${esc(aiPort.base || '')}" style="font-family:monospace"></div>
@@ -8655,7 +8884,7 @@
         <label>模型名</label><input id="diceAiPortModel" value="${esc(aiPort.model || '')}" placeholder="模型名，" style="width:180px"></div>
       <div class="toolbar"><button class="ghost" onclick="WB.diceAiPortSave()">💾 保存端口</button>
         <button class="ghost" onclick="WB.diceAITest()">🔍 测试连接</button>
-        <span id="diceAiPortState" class="hint">${aiPort.enabled && aiPort.base ? '已启用独立端口' : '未启用独立端口，骰娘 AI 不可用'}</span></div>
+        <span id="diceAiPortState" class="hint">${aiPort.enabled && aiPort.base ? '已启用独立端口（AI 中枢有启用模型时仅作后备）' : '未启用；骰娘 AI 可改用「AI 中枢」的模型'}</span></div>
     </details>`;
 
     // 历史
@@ -8820,8 +9049,7 @@
     dhRefresh(true); // 首次进入立即拉取一次真实状态
   }
   function diceAiCapable() {
-    const p = (S.settings.dice && S.settings.dice.aiPort) || {};
-    return diceAiSwitches().enabled && !!p.enabled && !!p.base;   // 只认骰娘自己的开关与端口
+    return diceAiSwitches().enabled && !!diceAiActiveCfg();   // 中枢有启用模型 或 旧端口已启用
   }
 
   /* ========== 统计报表（主页区块） ========== */
@@ -9025,19 +9253,20 @@
     out.reason = s.slice(0, 400);
     return out;
   }
-  /* 骰娘独立 AI 端口：只走骰娘自己的 OpenAI 兼容端点，绝不回退工作台全局 AI（两者互不影响）。 */
+  /* 骰娘 AI 端口：只走骰娘自己的 OpenAI 兼容端点，绝不回退工作台全局 AI（两者互不影响）。
+   * U9 起 diceAiChat 取模型优先走「AI 中枢」，无启用模型时回退本端口（与主进程 diceAiCfg 同口径）。 */
   function readDiceAiPort() {
     if (!S.settings.dice) S.settings.dice = {};
     if (!S.settings.dice.aiPort) S.settings.dice.aiPort = {};
     return S.settings.dice.aiPort;
   }
   async function diceAiChat(messages) {
-    const cfg = readDiceAiPort();
     if (!diceAiSwitches().enabled) throw new Error('骰娘 AI 总开关已关闭（可在「骰娘 AI 设置」开启）');
-    if (!cfg.enabled || !cfg.base) throw new Error('骰娘 AI 尚未配置（请在下方「独立 AI 端口」填写接口地址并启用）');
-    const rep = await window.api.diceCore.ai.chat({ base: cfg.base, key: cfg.key, model: cfg.model }, messages);
+    const cfg = diceAiActiveCfg();
+    if (!cfg) throw new Error('骰娘 AI 尚未配置（请在「AI 中枢」添加并启用模型，或启用「独立 AI 端口」）');
+    const rep = await window.api.diceCore.ai.chat(cfg, messages);
     if (rep && rep.ok) return rep.reply || '';
-    throw new Error((rep && rep.error) || '独立 AI 端口调用失败');
+    throw new Error((rep && rep.error) || 'AI 调用失败');
   }
   function diceAiPortSave() {
     const cfg = readDiceAiPort();
@@ -9470,7 +9699,7 @@
   }
   function renderDiceWork() {
     const html = `<div class="page-title"><h2>骰娘工作台</h2>
-      <span class="hint">连接中心 · 指令日志 · 文案与人设 · 插件工坊 · 测试通道，端到端指令联调主战场</span></div>
+      <span class="hint">连接中心 · 指令日志 · 文案与人设 · 插件工坊 · 测试通道 · AI 中枢，端到端指令联调主战场</span></div>
       <div class="dhgrid" style="grid-template-columns:1fr 1fr">
         <div class="dh-card"><div class="dh-head"><b>🔌 连接中心（分区 2）</b><span class="grow"></span><button class="ghost mini" id="dwRefreshNet">🔄 刷新</button></div>
           <div id="dice-conn-center" class="dice-conn-center"></div>
@@ -9506,6 +9735,10 @@
           </div>
         </div>
         <div class="dh-note">U8-4/U8-6：骰娘收发过消息的群/私聊自动进入目录；可按群开关骰娘与 AI（U8-7），并以内置骰娘 QQ 界面手动聊天——普通文本由骰娘账号直接发出，指令走统一口径，全部经发送节流闸（U8-8）。</div></div>
+      <div class="dh-card" style="margin-top:14px"><div class="dh-head"><b>🧠 AI 中枢（分区 8 · U9）</b><span class="grow"></span>
+          <span id="dwHubMeta" class="hint"></span>
+          <button class="ghost mini" onclick="WB.go('diceaihub')">⧉ 独立页管理</button></div>
+        <div id="dice-ai-hub" class="dice-ai-hub"></div></div>
       <div class="dh-card" style="margin-top:14px"><div class="dh-head"><b>🧠 K P 建议（批次5）</b><span class="grow"></span>
           <span id="dwKpAdviceState" class="hint">…</span>
           <button class="ghost mini" id="dwKpAdviceRun">💡 生成建议</button></div>
@@ -9517,6 +9750,7 @@
     `;
     const el = q('content'); el.innerHTML = html;
     _dw.simMsgs = []; _dw.logPanel = null; _dw.sessActive = '';
+    paintDiceAiHub();   // 分区 8：AI 中枢（本地配置直读，不依赖 dwApi）
     if (!dwApi()) { toast('当前环境未暴露骰娘工作台接口', 'err'); return; }
     refreshConnCenter();
     refreshCmdLog();
@@ -9539,6 +9773,14 @@
     on('dwRefreshPlg', dhRenderWorkshop);
     on('dwKpAdviceRun', runKpAdvice);
     paintKpAdviceState();
+    paintDwHubMeta();
+  }
+  /* 分区 8 头部摘要：中枢状态一句话（生效模型 / 回退端口 / 关闭） */
+  function paintDwHubMeta() {
+    const el = q('dwHubMeta'); if (!el) return;
+    const stt = diceAiHubStateText();
+    el.textContent = stt.text.replace('当前生效：', '').replace('—— 首个启用的模型为全局默认', '');
+    el.style.color = stt.cls === 'ok' ? 'var(--ok)' : stt.cls === 'warn' ? 'var(--warn)' : '';
   }
 
   /* ---------- 骰娘工作台：KP 建议（批次5） ---------- */

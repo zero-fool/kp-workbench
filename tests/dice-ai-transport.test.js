@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { chat, chatRaw, normalizeCfg } = require('../src/main/dice-ai-transport');
+const { chat, chatRaw, probe, normalizeCfg } = require('../src/main/dice-ai-transport');
 
 function withServer(handler) {
   return new Promise((resolve) => {
@@ -99,5 +99,70 @@ test('外部 signal 中止：chatRaw 抛取消错误', async () => {
     const p = chatRaw({ base }, [{ role: 'user', content: 'hi' }], { signal: ctl.signal });
     ctl.abort();
     await assert.rejects(() => p, /AI_TASK_CANCELLED/);
+  } finally { srv.close(); }
+});
+
+/* ---- U9-3/U9-4：请求参数默认值透传 + probe 连通测试 ---- */
+
+test('U9-3：cfg.params 透传进请求体（temperature/maxTokens 等随每次请求下发）', async () => {
+  let got = '';
+  const { srv, base } = await withServer((req, res) => {
+    let b = ''; req.on('data', (c) => { b += c; });
+    req.on('end', () => { got = b; res.end(okBody('ok')); });
+  });
+  try {
+    await chatRaw({ base, params: { temperature: 0.3, top_p: 0.9, max_tokens: 512 } }, [{ role: 'user', content: 'hi' }]);
+    const body = JSON.parse(got);
+    assert.equal(body.temperature, 0.3);
+    assert.equal(body.top_p, 0.9);
+    assert.equal(body.max_tokens, 512);
+    // 无 params 时不注入多余字段
+    await chatRaw({ base }, [{ role: 'user', content: 'hi2' }]);
+    const bare = JSON.parse(got);
+    assert.equal('temperature' in bare, false);
+  } finally { srv.close(); }
+});
+
+test('U9-3：chatRaw 返回 usage（供用量回写）', async () => {
+  const { srv, base } = await withServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }));
+    });
+  });
+  try {
+    const out = await chatRaw({ base }, [{ role: 'user', content: 'hi' }]);
+    assert.deepEqual(out.usage, { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 });
+  } finally { srv.close(); }
+});
+
+test('U9-4：probe 连通成功返回延迟与模型名（最小请求 max_tokens=1）', async () => {
+  let got = '';
+  const { srv, base } = await withServer((req, res) => {
+    let b = ''; req.on('data', (c) => { b += c; });
+    req.on('end', () => { got = b; res.end(okBody('ok')); });
+  });
+  try {
+    const r = await probe({ base, apiKey: 'sk-p', model: 'm-probe' });
+    assert.equal(r.ok, true);
+    assert.ok(r.latencyMs >= 0);
+    assert.equal(r.model, 'm-probe');
+    const body = JSON.parse(got);
+    assert.equal(body.max_tokens, 1);
+    assert.equal(body.messages[0].content, 'ping');
+    assert.equal(got.includes('temperature'), true);
+  } finally { srv.close(); }
+});
+
+test('U9-4：probe 失败不抛错，返回 ok=false 与可读错误；空地址短路', async () => {
+  const { srv, base } = await withServer((req, res) => { res.statusCode = 401; res.end('{}'); });
+  try {
+    const bad = await probe({ base, model: 'm' });
+    assert.equal(bad.ok, false);
+    assert.match(bad.error, /鉴权失败/);
+    const empty = await probe({ base: '' });
+    assert.equal(empty.ok, false);
+    assert.match(empty.error, /地址为空/);
   } finally { srv.close(); }
 });

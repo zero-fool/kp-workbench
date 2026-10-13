@@ -38,6 +38,7 @@ function createDiceAi(ctx) {
     const feature = (params && params.feature) || 'dice';
     const j = judgement(feature);
     if (j.__err) return { ok: false, text: 'AI 暂时不可用：' + j.__err };
+    if (j.masterOff) return { ok: false, text: 'AI 中枢总开关已关闭（骰娘工作台 → AI 中枢 → 打开总开关）。' };
     if (!j.enabled) return { ok: false, text: FEATURE_OFF_TEXT[feature] || 'AI 功能当前不可用（未放行）。' };
 
     const msgs = (messages || []).filter(m => m && m.role === 'system' && m.content)
@@ -45,10 +46,14 @@ function createDiceAi(ctx) {
 
     // cfg 缺失（未配置）→ 短路，不调用供应商
     const cfg = j.cfg;
-    if (!cfg) return { ok: false, text: '骰娘 AI 尚未配置（请在「骰娘」面板启用「独立 AI 端口」并填写接口/模型）。' };
+    if (!cfg) return { ok: false, text: '骰娘 AI 尚未配置（请在「AI 中枢」添加并启用模型，或启用旧版「独立 AI 端口」）。' };
 
     const res = await ctx.ai.chatRaw(cfg, msgs, { timeoutMs: params && params.timeoutMs });
     const text = (res && (res.text !== undefined ? res.text : res.content)) || '';
+    // U9-2：用量回写（AI 中枢模型卡片展示累计 token/费用；无回写口则跳过）
+    if (res && res.usage && cfg.__hubModelId && typeof ctx.recordUsage === 'function') {
+      try { ctx.recordUsage(cfg.__hubModelId, res.usage); } catch (_) {}
+    }
     // 记忆自动回写：成功后把本次关键内容追加到对应场景记忆文件，供后续注入，减少全量上下文阅读
     if (j.remember && text) {
       try { j.remember(feature, String(text).slice(0, 400)); } catch (_) {}
