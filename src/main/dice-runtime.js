@@ -10,6 +10,7 @@ const { createStateBox } = require('../dice-core/state');
 const { DEFAULT_PERSONA, DEFAULT_TEMPLATES } = require('../dice-core/reply/defaults');
 const { RULE_REPLY_RULES, RULE_REPLY_KEYS, RULE_REPLY_META } = require('../dice-core/reply/rule-replies');
 const { importPack } = require('../dice-core/reply/io');
+const { createSendGate } = require('./send-gate');
 
 function createDiceRuntime(deps) {
   const o = deps || {};
@@ -27,6 +28,16 @@ function createDiceRuntime(deps) {
     dataDir: o.dataDir, onQqEvent: o.onQqEvent,
   });
   for (const a of adapters) hub.attach(a);
+
+  // U8-8 发送侧节流：真实通道的对外回复统一过闸（会话间隔/全局窗口/错误退避/指标记录）；
+  // sim 测试通道不受限流影响，避免工作台联调卡顿。适配器持有同一引用，原地包裹 send。
+  const sendGate = createSendGate({ cfg: cfg.sendGate });
+  for (const a of adapters) {
+    if (!a || a.id === 'sim' || typeof a.send !== 'function' || a.__sendGated) continue;
+    const rawSend = a.send.bind(a);
+    a.send = (sessionId, reply) => sendGate.send(sessionId, () => rawSend(sessionId, reply));
+    a.__sendGated = true;
+  }
 
   // 分区 3 指令日志（单一数据源：hub 事件流）。{time, sessionId, user, text, reply}
   // hub 对每条入站消息会广播 message 事件（无回显）与 replies 事件（带回显），
@@ -147,6 +158,89 @@ function createDiceRuntime(deps) {
   function qqStatus() { const a = qqAdapter(); return a ? a.status() : { state: 'stopped' }; }
   async function qqSignCheck() { const a = qqAdapter(); return a ? a.signCheck() : { ok: false, reason: 'QQ 直连通道未装配' }; }
 
+  /* ─── U8-4 会话目录管理（骰娘 QQ 界面数据源）────────────
+   * 会话本体在 brain.sessions（dice:sessions 持久化），这里做目录级读改删：
+   * list 输出摘要（开关/规则/人物卡数），set 合并 patch（switches/prefix/defaultDice），
+   * delete 直接删除会话（日志里的历史记录仍保留在 logBuf 供查询）。 */
+  function sessionSummary(s) {
+    return {
+      id: s.id,
+      channel: String(s.id || '').split(':')[0] || 'sim',
+      target: String(s.id || '').split(':').slice(1).join(':'),
+      rule: s.rule,
+      prefix: s.settings && s.settings.prefix,
+      switches: Object.assign({}, s.settings && s.settings.switches),
+      cards: Object.keys(s.cards || {}).length,
+      rolls: (s.logs || []).length,
+    };
+  }
+  function sessionList() {
+    try { return (hub.brain.sessions.listSessions() || []).map(sessionSummary); } catch (_) { return []; }
+  }
+  function sessionSet(id, patch) {
+    const sid = String(id || '').trim();
+    if (!sid) throw new Error('缺少会话 id');
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const store2 = hub.brain.sessions;
+    const s = store2.getSession(sid);
+    if (p.switches && typeof p.switches === 'object') {
+      s.settings.switches = Object.assign({}, s.settings.switches, p.switches);
+    }
+    if (typeof p.prefix === 'string' && /^[.。/#*！!]$/.test(p.prefix.trim())) s.settings.prefix = p.prefix.trim();
+    if (typeof p.defaultDice === 'string') s.defaultDice = p.defaultDice.trim().slice(0, 40);
+    if (typeof p.rule === 'string' && p.rule && p.rule !== s.rule) {
+      try { store2.setRule(sid, p.rule); } catch (e) { throw new Error((e && e.message) || '规则不存在'); }
+    }
+    store2.persist();
+    return sessionSummary(s);
+  }
+  function sessionDelete(id) {
+    const sid = String(id || '').trim();
+    if (!sid) throw new Error('缺少会话 id');
+    hub.brain.sessions.deleteSession(sid);
+    return true;
+  }
+
+  /* ─── U8-6 内置骰娘 QQ 界面：以骰娘账号身份手动发言/发指令 ───
+   * 指令（. 开头）走 hub 统一口径（开关闭包/权限/日志与群里行为完全一致）；
+   * 普通文本视为「骰娘亲自说话」，直发通道适配器（仍过 send-gate 节流）。
+   * 返回拉平的回复文本（普通直发返回原文），供界面回显。 */
+  async function sessionSend(sessionId, text) {
+    const sid = String(sessionId || '').trim();
+    const t = String(text || '').replace(/\s+$/, '');
+    if (!sid || !t) throw new Error('缺少会话或内容');
+    const m = /^([a-z0-9]+):(.+)$/i.exec(sid);
+    if (!m) throw new Error('会话 id 不合法：' + sid);
+    const ch = m[1], target = m[2];
+    const a = adapters.find((x) => x && x.id === ch);
+    if (!a) throw new Error('通道不存在：' + ch);
+    const isPrivate = target.startsWith('private:');
+    const st = (typeof a.status === 'function') ? a.status() : {};
+    const botId = String(st.uin || (cfg[ch] && cfg[ch].uin) || 'dice-bot');
+    const botName = String(st.nickname || '骰娘');
+    const prefix = (() => {
+      try { return hub.brain.sessions.getSession(sid).settings.prefix || '.'; } catch (_) { return '.'; }
+    })();
+    const isCmd = t.startsWith(prefix) || t.startsWith('。');
+    if (isCmd) {
+      const msg = {
+        id: `manual-${Date.now()}-${++logSeq}`, channel: ch,
+        groupId: isPrivate ? undefined : target,
+        user: { id: botId, name: botName, role: 'owner' },
+        text: t, ts: Date.now(),
+      };
+      const replies = await hub.handleInbound(a, msg);
+      return flattenReplies(replies);
+    }
+    // 普通发言：直发（发送记录写入指令日志，界面聊天气泡可见）
+    await a.send(sid, { sessionId: sid, segments: [{ type: 'text', text: t }] });
+    pushLog({ time: Date.now(), sessionId: sid, user: '骰娘（手动）', text: '', reply: t });
+    return t;
+  }
+
+  // U8-8：发送观测指标（连接中心「发送观测」数据源）
+  function sendGateMetrics() { return sendGate.summary(); }
+
   // 分区 3 日志查询/导出
   function logQuery({ sessionId = '', limit = 200, keyword = '' } = {}) {
     for (const id of Array.from(logPending.keys())) flushPending(id); // 冲刷未回显的指令，确保不漏记
@@ -192,6 +286,8 @@ function createDiceRuntime(deps) {
     hub, adapters, stateBox,
     netStart, netStop, status, netList, simSend,
     qqLogin, qqConfirmQr, qqSubmitSlider, qqSubmitSms, qqLogout, qqStatus, qqSignCheck,
+    sessionList, sessionSet, sessionDelete, sessionSend,   // U8-4/U8-6 会话目录与手动发送
+    sendGateMetrics,                                       // U8-8 发送观测
     logQuery, logExport, replyLoad, replySave, replyImport, dispose,
   };
 }

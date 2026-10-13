@@ -1755,6 +1755,13 @@ function registerIpc() {
   ipcMain.handle('diceReply:reload', () => diceWorkbench.replyLoad());
   // 测试通道聊天窗（分区 6）
   ipcMain.handle('diceSim:send', (e, o) => diceWorkbench.simSend(o || {}));
+  // 会话目录与内置骰娘 QQ 界面（U8-4/U8-6）：列出/改开关/删除/以骰娘身份手动发言
+  ipcMain.handle('diceSessions:list', () => diceWorkbench.sessionList());
+  ipcMain.handle('diceSessions:set', (e, id, patch) => diceWorkbench.sessionSet(id, patch || {}));
+  ipcMain.handle('diceSessions:delete', (e, id) => diceWorkbench.sessionDelete(id));
+  ipcMain.handle('diceSessions:send', (e, id, text) => diceWorkbench.sessionSend(id, text));
+  // 发送观测（U8-8）：发送侧节流指标，供连接中心展示
+  ipcMain.handle('diceNet:sendMetrics', () => diceWorkbench.sendGateMetrics());
   // 退出前回收（与 before-quit 里 global.diceNetAdapters 一致，此处仅挂一次）
   global.__diceWorkbenchDispose = () => diceWorkbench.dispose();
 }

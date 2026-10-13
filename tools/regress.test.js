@@ -2388,9 +2388,9 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     return (/function loginGuard/.test(qqdSrc) && /BACKOFF_BASE/.test(qqdSrc) && /function noteLoginFailure/.test(qqdSrc))
       ? true : '缺少退避/频控';
   });
-  check('U1-17 冲突治理：互踢提示 + 按账号固定设备指纹目录（dataDir/<uin>）', () => {
+  check('U1-17 冲突治理：互踢提示（U8-5 起按生效协议区分）+ 按账号固定设备指纹目录（dataDir/<uin>）', () => {
     const qqdSrc = fs.readFileSync(path.join(qqdDir, 'index.js'), 'utf8');
-    return (/CONFLICT_HINT/.test(qqdSrc) && /function sessionDir/.test(qqdSrc) && /path\.join\(dataDir, String\(id\)\)/.test(qqdSrc))
+    return (/function conflictHint/.test(qqdSrc) && /KICK_COMMON_TAIL/.test(qqdSrc) && /function sessionDir/.test(qqdSrc) && /path\.join\(dataDir, String\(id\)\)/.test(qqdSrc))
       ? true : '冲突治理/设备指纹目录缺失';
   });
   check('U1-19 装配：runtime 暴露 qqSignCheck 且登录前合并通道配置', () => {

@@ -103,6 +103,8 @@ function makeContext(msg, session, brain, extra) {
   }
   // 权限闸暴露在 ctx.perm：指令内可再查，CommandBrain 分发时已用 manage 拦管理组。
   ctx.perm = Object.assign(gate, { _ctx: ctx });
+  // U8-7：会话状态存储暴露（.bot / boton 写开关位后可立即持久化）。
+  ctx.sessions = brain.sessions || null;
   return ctx;
 }
 

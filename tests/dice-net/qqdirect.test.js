@@ -312,15 +312,25 @@ test('设备指纹读取：文件不存在时给出将生成路径且标记未�
   assert.strictEqual(fp.fingerprint, '');
 });
 
-test('登录诊断：默认平台/签名未配置/冲突提示/设备指纹路径齐备', () => {
+test('登录诊断：默认平台/签名未配置/冲突提示/设备指纹路径齐备（U8-5 默认 aPad 不挤手机端）', () => {
   const { adapter } = makeAdapter();
   const st = adapter.status();
-  assert.strictEqual(st.diagnostics.platform, 'android');
+  assert.strictEqual(st.diagnostics.platform, 'apad');
   assert.strictEqual(st.diagnostics.platformDefault, true);
-  assert.strictEqual(st.diagnostics.signConfigured, false);
+  assert.strictEqual(st.diagnostics.platformCoexist, true);   // 默认平板协议可与手机端共存
+  assert.ok(/可与手机端官方 QQ 同时在线/.test(st.conflict)); // 互踢提示按协议区分
   assert.ok(/独立小号/.test(st.conflict));
   assert.ok(st.diagnostics.deviceFile.endsWith('device.json'));
   assert.ok(/签名服务/.test(st.diagnostics.routeHint));
+});
+
+test('U8-5 协议共存：显式 android 时 platformCoexist=false 且提示互踢；显式 iPad 时共存', () => {
+  const a = makeAdapter({ platform: 'android' }).adapter.status();
+  assert.strictEqual(a.diagnostics.platformCoexist, false);
+  assert.ok(/互相挤下线/.test(a.conflict));
+  const b = makeAdapter({ platform: 'iPad' }).adapter.status();
+  assert.strictEqual(b.diagnostics.platformCoexist, true);
+  assert.ok(/可与手机端官方 QQ 同时在线/.test(b.conflict));
 });
 
 test('登录诊断：配置的 platform/ver/signApiAddr 如实反映', () => {

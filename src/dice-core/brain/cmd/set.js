@@ -37,8 +37,8 @@ module.exports = registerCmd({
       s.defaultDice = expr;
       return ok(`默认骰 = ${s.defaultDice}`);
     }
-    m = /^(fun|admin|ai|optimize|interject|meme|kpAdvice|dice)\s+(on|off)$/.exec(arg);
+    m = /^(fun|admin|ai|optimize|interject|meme|kpAdvice|dice|bot)\s+(on|off)$/.exec(arg);
     if (m) { cfg.switches[m[1]] = m[2] === 'on'; return ok(`${m[1]} 功能 = ${cfg.switches[m[1]] ? '开' : '关'}`); }
-    return { text: '用法：set prefix <符号> / set fullwidth on|off / set d <默认骰表达式>|off / set <面数> / set fun|admin|ai|optimize|interject|meme on|off' };
+    return { text: '用法：set prefix <符号> / set fullwidth on|off / set d <默认骰表达式>|off / set <面数> / set fun|admin|ai|bot|optimize|interject|meme on|off' };
   }
 });

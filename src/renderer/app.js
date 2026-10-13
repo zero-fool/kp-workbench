@@ -16,8 +16,19 @@
   const KINDS = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
   const TPL_KINDS = ['pcs', 'npcs', 'mobs']; // 仅「卡片类」实体支持切换模板（模板改变显示字段集）
   const THEMES = [['ember', '残火纪·暗黑'], ['parchment', '现代卷宗'], ['lite', '极简浅色'], ['neon', '赛博霓虹'], ['dusk', '暮光护眼']];
-  const APP_VERSION = '3.3.2';
+  const APP_VERSION = '3.3.4';
   const CHANGELOG = [
+    { version: '3.3.4', date: '2026-10-13', type: '正式版·骰娘共存与群级开关（小项更新）', items: [
+      'QQ 直连默认平板协议（aPad），登录不再挤掉手机官方 QQ：官方允许「手机 + 平板」同时在线互不挤踢；仅当手动选择 android 移动端协议时才与手机 QQ 互踢，QQ 直连面板按生效协议明确提示共存关系。',
+      '群级骰娘开关：.bot on|off|status 按群/私聊开关骰娘（关闭后普通消息静默，仅放行重新开启指令）；骰主可远程 boton/botoff <群号> 开关任意群；AI 骰娘回复同样受会话级开关控制；工作台会话目录里也可直接改。',
+      '内置骰娘 QQ 界面（会话中心）：骰娘工作台新分区展示群聊/私聊会话列表与聊天记录气泡，支持在应用内手动发消息——指令走骰娘内核完整解析、普通文本原样直发，被挤下线或想亲自下场聊天时不用再掏手机。',
+      '会话目录管理：会话列表可改名、删除、手动发送，群聊新消息 5 秒自动轮询刷新；会话改名/删除与内核会话状态双向同步。',
+      '发送侧节流与观测（防风控）：所有真实通道（QQ 直连/OneBot/QQ 官方机器人）对外回复统一过闸——会话最小间隔 + 全局滑动窗口限频、排队超时丢弃、连续失败指数退避，防止刷屏触发 QQ 风控；连接中心/会话面板/QQ 直连诊断常态化展示发送观测指标与最近发送错误。',
+    ]},
+    { version: '3.3.3', date: '2026-10-13', type: '正式版·骰娘工作台修复（小项更新）', items: [
+      '修复骰娘工作台六个分区（投骰台 / 连接中心 / 指令日志 / 文案人设 / 插件工坊 / 测试通道）在打包版中全部空白的问题：esbuild 打包时注入的局部 module shim 使 UMD 判断误走 Node 分支，浏览器全局从未挂载；六个 UI 模块改为「工厂单次调用 + 双通道赋值」（module.exports 与浏览器全局并存），在 Node require / esbuild 打包 / 原生 script 三种环境下均正确挂载。',
+      '构建回归新增「打包后浏览器全局挂载」检查：每个骰娘 UI 模块按与生产一致的 esbuild 配置打包后，在模拟浏览器沙箱中断言全局挂载与 require 路径存活，同类回归构建期即被拦截。',
+    ]},
     { version: '3.3.2', date: '2026-10-12', type: '正式版·长文本解析优化（小项更新）', items: [
       '长文本空结果质量闸：AI 拆分/分幕前先做实体信号预检，空结果触发一次带上下文的定向纠偏重试，仍未产出的段落透明记录为「空段」——不再整批静默丢内容，长模组分幕与取卡质量恢复稳定。',
       '纯设定类长文自动跳过分幕：较长的文本若完全检测不到剧情叙事（人物对话、场景推进），分幕必然产出空幕——自动跳过并说明原因，不再白跑耗时耗 token；可在设置里关闭，强制重新分幕（补跑）时也不跳过。',
@@ -9114,7 +9125,7 @@
   function paintQqDirect() {
     const panel = document.getElementById('qqdPanel'); if (!panel) return;
     const CC = window.DiceUIConnCenter || {};
-    const st = Object.assign({}, _dw.qqStatus || { state: 'stopped' }, { signCheck: _dw.qqSignCheck || null });
+    const st = Object.assign({}, _dw.qqStatus || { state: 'stopped' }, { signCheck: _dw.qqSignCheck || null, sendGate: _dw.sendMetrics || null });
     panel.innerHTML = (CC.renderQqDirectPanel || (() => ''))(st);
     const light = document.getElementById('qqdLight');
     if (light) {
@@ -9137,6 +9148,7 @@
     _dw.qqSub = true;
     api.diceQq.onQqEvent((v) => {
       _dw.qqStatus = v || _dw.qqStatus; paintQqDirect();
+      if (v && (v.type === 'send-error' || v.type === 'online' || v.type === 'kickoff')) refreshSendMetrics(); // U8-8/U8-3：发送异常即刷新观测
       if (!v) return;
       if (v.type === 'online') toast('QQ 骰娘已登入' + (v.nickname || v.uin ? '：' + (v.nickname || v.uin) : ''), 'ok');
       else if (v.type === 'kickoff') toast('QQ 被踢下线' + (v.kickCode ? '（原因码 ' + v.kickCode + '）' : '') + (v.kickMessage ? '：' + v.kickMessage : '') + '；同一账号与 PC 端 QQ 会互踢，建议改用独立小号', 'err');
@@ -9182,7 +9194,7 @@
         _dw.qqSignCheck = await api.diceQq.signCheck();
         toast(_dw.qqSignCheck && _dw.qqSignCheck.ok ? '签名服务可用' : ('签名服务不可用：' + ((_dw.qqSignCheck && _dw.qqSignCheck.reason) || '未知')), (_dw.qqSignCheck && _dw.qqSignCheck.ok) ? 'ok' : 'err');
       }
-      /* P1-8：登录失败时一键切 OneBot 中转——展开「高级」区、高亮 OneBot 卡片并给出操作指引 */
+      /* P1-8：登录失败时一键切 OneBot 中转——展开「高级」区、高亮 OneBot 卡片、预填服务端地址并聚焦，给出操作指引 */
       else if (act === 'qq-to-onebot') {
         const adv = document.querySelector('.qqd-adv');
         if (adv) adv.open = true;
@@ -9190,8 +9202,12 @@
         if (ob) {
           try { ob.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
           ob.classList.add('flash'); setTimeout(() => ob.classList.remove('flash'), 1600);
+          const hostInp = ob.querySelector('input[data-field="host"]');
+          if (hostInp) { try { hostInp.focus(); hostInp.select(); } catch (_) {} }
+          const portInp = ob.querySelector('input[data-field="port"]');
+          if (portInp && !String(portInp.value || '').trim()) portInp.value = '6700';
         }
-        toast('已展开「高级」OneBot 中转：在服务端地址处填好后点「启动」即可接管骰娘连接', 'ok');
+        toast('已展开「高级」OneBot 中转：确认服务端地址后点「启动」即可接管骰娘连接', 'ok');
       }
     } catch (e) { toast('QQ 直连操作失败：' + ((e && e.message) || e), 'err'); }
     await refreshQqDirect();
@@ -9215,6 +9231,7 @@
     el.querySelectorAll('[data-qact]').forEach((btn) => { btn.onclick = () => qqDirectAct(btn.getAttribute('data-qact')); });
     subscribeQqEvents();
     await refreshQqDirect();
+    refreshSendMetrics(); // U8-8：连接中心渲染后即拉一次发送观测
     // 输入框：实时写回配置并持久化。这是关键——否则用户填写后一重渲染就被清空，启动也读不到值（旧 bug：点启动内容消失 + 提示缺少 appId/clientSecret）。
     el.querySelectorAll('[data-channel]').forEach((card) => {
       const ch = card.getAttribute('data-channel');
@@ -9339,6 +9356,118 @@
     if (send) send.onclick = doSend;
     if (input) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doSend(); } });
   }
+  /* ---------- 骰娘工作台：分区 7 会话与群聊（U8-4 会话目录 / U8-6 内置骰娘 QQ 界面） ---------- */
+  function paintSessions() {
+    const SC = window.DiceUISessionCenter || {};
+    const listEl = document.getElementById('dice-session-list');
+    if (listEl) listEl.innerHTML = (SC.sessionListHTML || (() => ''))(_dw.sessions || [], _dw.sessActive || '');
+  }
+  async function refreshSessions() {
+    const api = dwApi();
+    if (!api || !api.diceSessions) { paintSessions(); return; }
+    try { _dw.sessions = (await api.diceSessions.list()) || []; } catch (_) { _dw.sessions = _dw.sessions || []; }
+    if (_dw.sessActive && !_dw.sessions.some((s) => s.id === _dw.sessActive)) _dw.sessActive = '';
+    paintSessions();
+    if (_dw.sessActive) refreshSessionChat();
+  }
+  function paintSessionChat(rows) {
+    const SC = window.DiceUISessionCenter || {};
+    const el = document.getElementById('dice-session-chat'); if (!el) return;
+    el.innerHTML = (SC.sessionChatHTML || (() => ''))(rows || []);
+    el.scrollTop = el.scrollHeight;
+  }
+  async function refreshSessionChat() {
+    const api = dwApi();
+    if (!api || !_dw.sessActive) return;
+    try { paintSessionChat((await api.log.query({ sessionId: _dw.sessActive, limit: 100 })) || []); } catch (_) {}
+  }
+  async function openSessionChat(id) {
+    _dw.sessActive = id || '';
+    paintSessions();
+    await refreshSessionChat();
+  }
+  async function sessionSwitchAct(sid, key, on) {
+    const api = dwApi(); if (!api || !api.diceSessions) return;
+    try {
+      await api.diceSessions.set(sid, { switches: { [key]: !!on } });
+      toast(key === 'bot'
+        ? (on ? '已开启该会话的骰娘' : '已关闭该会话的骰娘（群里发送 .bot on 可重新开启）')
+        : (on ? '已开启该会话的 AI 功能' : '已关闭该会话的 AI 功能（骰点润色/插话一并停用）'), 'ok');
+      await refreshSessions();
+    } catch (e) { toast('开关设置失败：' + ((e && e.message) || e), 'err'); }
+  }
+  async function sessionDelAct(sid) {
+    const api = dwApi(); if (!api || !api.diceSessions) return;
+    if (!(await appConfirm('移除会话', `从会话目录移除 ${sid}？（不影响已保存的聊天记录）`))) return;
+    try { await api.diceSessions.delete(sid); if (_dw.sessActive === sid) _dw.sessActive = ''; await refreshSessions(); toast('已移除会话', 'ok'); }
+    catch (e) { toast('移除失败：' + ((e && e.message) || e), 'err'); }
+  }
+  function bindSessions() {
+    const listEl = document.getElementById('dice-session-list'); if (!listEl) return;
+    listEl.addEventListener('click', (e) => {
+      const del = e.target.closest('[data-sdel]');
+      if (del) { sessionDelAct(del.getAttribute('data-sdel')); return; }
+      const item = e.target.closest('[data-session]');
+      if (item) openSessionChat(item.getAttribute('data-session'));
+    });
+    listEl.addEventListener('change', (e) => {
+      const sw = e.target.closest('input[data-sw]'); if (!sw) return;
+      sessionSwitchAct(sw.getAttribute('data-sid'), sw.getAttribute('data-sw'), sw.checked);
+    });
+    const input = document.getElementById('dice-session-input');
+    const send = document.getElementById('dice-session-send');
+    const doSend = async () => {
+      const api = dwApi();
+      if (!api || !api.diceSessions) { toast('当前环境未暴露会话接口', ''); return; }
+      const text = String((input || {}).value || '').trim(); if (!text) return;
+      if (!_dw.sessActive) { toast('请先在左侧选择或打开一个会话', 'err'); return; }
+      if (input) input.value = '';
+      try {
+        await api.diceSessions.send(_dw.sessActive, text);
+        await refreshSessionChat();
+      } catch (e) { toast('发送失败：' + ((e && e.message) || e), 'err'); await refreshSessionChat(); }
+    };
+    if (send) send.onclick = doSend;
+    if (input) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doSend(); } });
+    // 群号直开：纯数字默认挂 QQ 直连通道；也接受完整会话 id（如 onebot11:12345）
+    const openBtn = document.getElementById('dwOpenSession');
+    const openInput = document.getElementById('diceSessionOpen');
+    if (openBtn && openInput) openBtn.onclick = async () => {
+      const raw = String(openInput.value || '').trim(); if (!raw) { toast('请输入群号或会话 id', ''); return; }
+      const api = dwApi(); if (!api || !api.diceSessions) { toast('当前环境未暴露会话接口', ''); return; }
+      const id = /^[a-z0-9]+:/i.test(raw) ? raw : `qqdirect:${raw}`;
+      try {
+        await api.diceSessions.set(id, {});   // 幂等：不存在则创建
+        await refreshSessions();
+        await openSessionChat(id);
+        toast('已打开会话 ' + id, 'ok');
+      } catch (e) { toast('打开失败：' + ((e && e.message) || e), 'err'); }
+    };
+  }
+  /* U8-8/U8-3：发送观测指标 + 诊断常态化轮询（连接状态/群聊新消息 5s 刷新） */
+  async function refreshSendMetrics() {
+    const api = dwApi();
+    if (!api || !api.diceNet || !api.diceNet.sendMetrics) return;
+    const SC = window.DiceUISessionCenter || {};
+    try {
+      const m = await api.diceNet.sendMetrics();
+      _dw.sendMetrics = m;
+      const html = (SC.sendMetricsHTML || (() => ''))(m);
+      const a = document.getElementById('dwSendMetrics'); if (a) a.innerHTML = html;
+      const b = document.getElementById('sessMetrics'); if (b) b.innerHTML = html;
+      paintQqDirect(); // 诊断块同步发送观测行
+    } catch (_) {}
+  }
+  function startDwPolling() {
+    if (_dw.poll) clearInterval(_dw.poll);
+    _dw.poll = setInterval(() => {
+      const alive = document.getElementById('qqdPanel') || document.getElementById('dice-session-list');
+      if (!alive) { if (_dw.poll) { clearInterval(_dw.poll); _dw.poll = null; } return; }
+      refreshQqDirect();                        // U8-3：登录诊断/连接状态自动刷新
+      refreshSendMetrics();                     // U8-8：发送观测
+      if (_dw.sessActive) refreshSessionChat(); // 内置骰娘 QQ 界面：新消息轮询
+    }, 5000);
+  }
   function renderDiceWork() {
     const html = `<div class="page-title"><h2>骰娘工作台</h2>
       <span class="hint">连接中心 · 指令日志 · 文案与人设 · 插件工坊 · 测试通道，端到端指令联调主战场</span></div>
@@ -9366,6 +9495,17 @@
         <div id="dice-sim-chat" class="dice-chat"></div>
         <div class="dice-chat-input"><input id="dice-sim-input" placeholder="输入指令，如 .jrrp / .sign / .drew / .r1d20 / .admin list"><button id="dice-sim-send">发送</button></div>
         <div class="dh-note">不经真实 QQ：在本应用内模拟玩家身份，构造消息进中枢，回显气泡并写入指令日志。</div></div>
+      <div class="dh-card" style="margin-top:14px"><div class="dh-head"><b>📥 会话与群聊（分区 7）</b><span class="grow"></span><span id="sessMetrics" class="hint"></span>
+          <input id="diceSessionOpen" placeholder="输入群号直开会话" style="width:150px"><button class="ghost mini" id="dwOpenSession">打开</button>
+          <button class="ghost mini" id="dwRefreshSess">🔄 刷新</button></div>
+        <div class="sess-grid">
+          <div id="dice-session-list" class="sess-list"></div>
+          <div class="sess-chat-wrap">
+            <div id="dice-session-chat" class="sess-chat"></div>
+            <div class="dice-chat-input"><input id="dice-session-input" placeholder="以骰娘身份向该会话发言；以 . 开头按指令处理（如 .r 1d100）"><button id="dice-session-send">发送</button></div>
+          </div>
+        </div>
+        <div class="dh-note">U8-4/U8-6：骰娘收发过消息的群/私聊自动进入目录；可按群开关骰娘与 AI（U8-7），并以内置骰娘 QQ 界面手动聊天——普通文本由骰娘账号直接发出，指令走统一口径，全部经发送节流闸（U8-8）。</div></div>
       <div class="dh-card" style="margin-top:14px"><div class="dh-head"><b>🧠 K P 建议（批次5）</b><span class="grow"></span>
           <span id="dwKpAdviceState" class="hint">…</span>
           <button class="ghost mini" id="dwKpAdviceRun">💡 生成建议</button></div>
@@ -9376,7 +9516,7 @@
         </div></div>
     `;
     const el = q('content'); el.innerHTML = html;
-    _dw.simMsgs = []; _dw.logPanel = null;
+    _dw.simMsgs = []; _dw.logPanel = null; _dw.sessActive = '';
     if (!dwApi()) { toast('当前环境未暴露骰娘工作台接口', 'err'); return; }
     refreshConnCenter();
     refreshCmdLog();
@@ -9385,9 +9525,14 @@
     dhRenderWizard();
     drawSimChat();
     bindSimChat();
+    refreshSessions();
+    bindSessions();
+    refreshSendMetrics();
+    startDwPolling();
     const on = (id, cb) => { const b = document.getElementById(id); if (b) b.onclick = cb; };
     on('dwRefreshNet', refreshConnCenter);
     on('dwRefreshLog', refreshCmdLog);
+    on('dwRefreshSess', refreshSessions);
     on('dwExportLog', exportCmdLog);
     on('dwSaveReply', saveReply);
     on('dwExportReply', exportReply);

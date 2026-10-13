@@ -57,7 +57,21 @@ function setGroup(ctx, args, on) {
     return { text: `远程群开关（${on ? '开启' : '关闭'}）：${ids.join('、') || '缺少群号'}\n已登记：${names.map(g => `${g}：${r.groups[g] ? 'on' : 'off'}`).join('，') || '（无）'}\n用法：${on ? 'boton' : 'botoff'} <群号>` };
   }
   for (const g of ids) r.groups[g] = on;
-  return { text: `已远程${on ? '开启' : '关闭'} ${ids.join('、')}` };
+  /* U8-7：远程开关落到目标会话的开关位（hub 按会话 settings.switches.bot 拦截，真正生效）；
+   * remote.groups 仍保留登记，供 .master list 查看。目标会话通道取骰主当前会话的通道前缀。 */
+  let applied = 0;
+  if (ctx.sessions && typeof ctx.sessions.getSession === 'function') {
+    const ch = String(ctx.session.id || '').split(':')[0] || 'sim';
+    for (const g of ids) {
+      const s = ctx.sessions.getSession(`${ch}:${g}`);
+      if (!s.settings) s.settings = { prefix: '.', fullwidth: true, switches: {} };
+      if (!s.settings.switches) s.settings.switches = {};
+      s.settings.switches.bot = on;
+      applied += 1;
+    }
+    if (typeof ctx.sessions.persist === 'function') ctx.sessions.persist();
+  }
+  return { text: `已远程${on ? '开启' : '关闭'} ${ids.join('、')}${applied ? `（已生效于 ${applied} 个会话）` : ''}` };
 }
 
 function runMaster(ctx) {

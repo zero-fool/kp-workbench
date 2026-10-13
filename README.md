@@ -3,7 +3,7 @@
 > 一款专为 TRPG 主持人（KP / 守密人 / GM）打造的 **Windows 桌面辅助工具**：资料管理、AI 辅助创作、剧本分幕、地图与关系网、骰娘检定、记录润色，全部收在一个免安装即用的应用里。
 > 制作人：**零弈秋**　|　反馈 QQ：**247910428**　|　[下载最新版](https://github.com/zero-fool/kp-workbench/releases)　|　[下载与绿色版使用须知](DOWNLOAD.md)
 
-[![最新版本](https://img.shields.io/badge/版本-3.3.2-4c1d95)](https://github.com/zero-fool/kp-workbench/releases)　[![平台](https://img.shields.io/badge/平台-Windows%2010%2F11%20(64%E4%BD%8D)-0078d4)]()　[![许可](https://img.shields.io/badge/许可-MIT-green)]()　[![形态](https://img.shields.io/badge/形态-Electron%20%E7%BB%BF%E8%89%B2%E7%89%88-orange)]()
+[![最新版本](https://img.shields.io/badge/版本-3.3.4-4c1d95)](https://github.com/zero-fool/kp-workbench/releases)　[![平台](https://img.shields.io/badge/平台-Windows%2010%2F11%20(64%E4%BD%8D)-0078d4)]()　[![许可](https://img.shields.io/badge/许可-MIT-green)]()　[![形态](https://img.shields.io/badge/形态-Electron%20%E7%BB%BF%E8%89%B2%E7%89%88-orange)]()
 
 - **免费**：个人独立开发的免费辅助工具，请勿用于商业用途
 - **数据自持**：所有资料保存在本地 `data` 目录，不上传、不经第三方服务器
@@ -35,7 +35,7 @@ KP 跑团工作台把主持人开团要用的一堆零散工具整合进一个�
 | 板块 | 能做什么 |
 | ---- | ---- |
 | **工作台** | 人物卡 / NPC / 地区 / 日志 / 怪物 / 规则 / 背景 七类资料卡管理，多档案与备份、卡片模板（内置 CoC / DnD 规则书模板）、全局搜索、批量导入与 AI 拆分登记、卡片交叉引用与一键去重 |
-| **骰娘工作台** | 自研 dice-core 骰娘内核：投骰台（通用 / CoC 7th / DnD 5e 规则插件）、连接中心（OneBot 11 / QQ 官方机器人 / 应用内测试通道，支持 QQ 直连与断线自动重连）、指令日志、文案与人设、插件工坊（含 AI 生成向导） |
+| **骰娘工作台** | 自研 dice-core 骰娘内核：投骰台（通用 / CoC 7th / DnD 5e 规则插件）、连接中心（OneBot 11 / QQ 官方机器人 / 应用内测试通道，支持 QQ 直连与断线自动重连）、会话中心（内置骰娘 QQ 界面：会话列表 / 聊天气泡 / 应用内手动聊天）、群级开关（.bot 与骰主远程 boton/botoff）、指令日志、文案与人设、插件工坊（含 AI 生成向导） |
 | **临场战斗** | 遭遇登记、回合追踪（当前行动者高亮、前进/后退/跳转）、逐单位血量与状态（昏迷/血流/中毒/狂暴等）、结算标记（我方胜利/败北/弃置）、统计汇总 |
 | **地图 / 关系网** | Canvas 画板（底图 / 网格 / 标记 / 迷雾，支持椭圆区域与测量）、AI 依描述生成地图草案、关系网一键整理与方向箭头、框选多节点、AI 补全关系 |
 | **剧本分幕** | AI 依据全档案上下文生成分幕剧本；分幕链路增强——先提取清洗剧本正文、按章节/段落/句末边界结构分段、跨段回传人物/地点/线索锚点、失败自动降粒度重分；每幕要点逐幕落盘为独立 txt；剧本进度状态机（未开始/进行中/已完成/略过）、伏笔兑现、现场备注、一键生成开团清单 |

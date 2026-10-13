@@ -67,11 +67,17 @@
    * 密码框刻意不带 data-field：避免被通用输入绑定写进设置明文落盘；仅点击登录时即时读取。 */
   function qqDirectCard(cfg) {
     const qd = (cfg && cfg.qqdirect) || {};
+    /* U8-5 互踢提示按用户所选协议区分：留空/平板类协议可与手机端共存；android 移动端会互踢。 */
+    const plat = String(qd.platform || '').trim().toLowerCase();
+    const platIsAndroid = plat === 'android' || plat === '1';
+    const warn = platIsAndroid
+      ? '⚠ 当前选择 android 移动端协议：与手机端官方 QQ 同时在线会<b>互相挤下线</b>。建议留空改用默认平板协议（aPad），或使用<b>独立小号</b>。'
+      : 'ℹ 默认平板协议（aPad）可与手机端官方 QQ 同时在线，<b>登录不挤掉手机 QQ</b>；与同协议其他设备仍可能互踢。骰娘仍建议使用<b>独立小号</b>。';
     return `
       <div class="dice-channel-card qqd-card" data-channel="qqdirect">
         <h4>QQ 直连登入（扫码 / 账号密码）<span class="grow"></span><span id="qqdLight" class="dice-light off">已登出</span></h4>
         <div class="qqd-hint">直接在软件里登入 QQ 骰娘账号即可收发群/私聊指令，<b>无需配置 OneBot 协议端</b>。</div>
-        <div class="qqd-warn">⚠ 同一个 QQ 号与电脑端官方 QQ 同时在线会互相挤下线；骰娘建议使用<b>独立小号</b>，或改用下方「高级」里的 OneBot 中转。</div>
+        <div class="qqd-warn">${warn}</div>
         <label>QQ 账号 <input data-field="uin" placeholder="骰娘 QQ 号，如 123456789" value="${esc(qd.uin || '')}"></label>
         <label>密码 <input id="qqdPassword" type="password" placeholder="仅账号密码登录时填写，不会保存"></label>
         <div class="qqd-actions">
@@ -85,7 +91,7 @@
           <label class="qqd-toggle"><input type="checkbox" data-field="signEnabled"${qd.signEnabled === false ? '' : ' checked'}> 启用签名服务</label>
           <label>签名服务地址 <input data-field="signApiAddr" placeholder="如 http://127.0.0.1:8080" value="${esc(qd.signApiAddr || '')}"></label>
           <label>协议版本 ver <input data-field="ver" placeholder="留空用引擎默认，如 8.9.63" value="${esc(qd.ver || '')}"></label>
-          <label>登录平台 platform <input data-field="platform" placeholder="留空默认 android（移动端，最不易与 PC 冲突）" value="${esc(qd.platform || '')}"></label>
+          <label>登录平台 platform <input data-field="platform" placeholder="留空默认 aPad（平板，不挤手机端 QQ；填 android 将与手机互踢）" value="${esc(qd.platform || '')}"></label>
           <div class="qqd-actions"><button class="ghost" data-qact="qq-signcheck">🔍 签名服务自检</button></div>
         </details>
         <div id="qqdPanel" class="qqd-panel"><div class="hint">选择一种方式登录；首次登录若提示滑动/短信验证，按下方提示完成即可。</div></div>
@@ -118,6 +124,7 @@
         <h4>测试通道（分区 6）</h4>
         <button data-act="start">启动</button><button data-act="stop">停止</button>
       </div>
+      <div class="dice-send-metrics" id="dwSendMetrics"></div>
     </div>`;
   }
 
@@ -166,11 +173,18 @@
     const d = s && s.diagnostics;
     if (!d) return '';
     const rows = [];
-    rows.push(`协议 ${esc(d.platform || '')}${d.platformDefault ? '（默认移动端）' : ''}${d.ver ? ' · ver ' + esc(d.ver) : ''}`);
+    rows.push(`协议 ${esc(d.platform || '')}${d.platformDefault ? '（默认平板 aPad）' : ''}${d.ver ? ' · ver ' + esc(d.ver) : ''}${d.platformCoexist === false ? ' · ⚠ 与手机端互踢' : ' · 可与手机端同时在线'}`);
     rows.push(`签名服务 ${d.signEnabled === false ? '已关闭（可在风控治理中重新开启）' : (d.signConfigured ? '已启用：' + esc(d.signApiAddr) : '未启用（未填地址）')}`);
     rows.push(`设备指纹 ${d.deviceFingerprint ? esc(d.deviceFingerprint) : '首次登录将生成并固定'}${d.deviceFixed ? '（已固定复用）' : ''}`);
     if (d.cooldownLeft > 0) rows.push(`退避中：还需 ${d.cooldownLeft} 秒（连续失败会延长）`);
     if (d.lastKick) rows.push(`最近被踢：原因码 ${esc(d.lastKick.code || '—')}${d.lastKick.message ? ' · ' + esc(d.lastKick.message) : ''}`);
+    /* U8-8/U8-3：发送观测行（send-gate 指标随状态注入时展示） */
+    const sg = s.sendGate;
+    if (sg && sg.totals) {
+      rows.push(`发送观测 已发 ${sg.totals.sent} · 丢弃 ${sg.totals.dropped} · 错误 ${sg.totals.errors} · 排队 ${sg.queue || 0}${sg.backoffs && sg.backoffs.length ? ` · 退避 ${sg.backoffs.length} 会话` : ''}`);
+      const lastErr = (sg.recent || []).slice().reverse().find((r) => r.state === 'error');
+      if (lastErr) rows.push(`最近发送错误：${esc(lastErr.error || '')}（${esc(lastErr.sessionId || '')}）`);
+    }
     const route = `<div class="qqd-diag-route">${esc(d.routeHint || '')}</div>`;
     const sc = s.signCheck;
     const scLine = sc ? `<div class="qqd-diag-sc ${sc.ok ? 'ok' : 'bad'}">签名服务自检：${sc.ok ? '可用' : '不可用'}${sc.reason ? '（' + esc(sc.reason) + '）' : ''}</div>` : '';

@@ -23,7 +23,7 @@ const https = require('node:https');
 const { normalizeQqEvent, makeSessionId, planQqDirectMessages } = require('./normalize');
 const { loadEngine, createEngineClient } = require('./engine');
 
-const DEFAULT_PLATFORM = 'android';   // 默认移动端协议：与电脑端官方 QQ 同协议共存时最易互踢，故骰娘默认走移动端
+const DEFAULT_PLATFORM = 'apad';     // U8-5 默认平板协议：官方允许「手机 + 平板」同时在线互不挤踢，登录不挤掉用户本体手机 QQ
 const LOGIN_MIN_INTERVAL = 3000;      // 同一会话两次「发起登录」的最小间隔（频控，避免连点）
 const BACKOFF_BASE = 8000;            // 首次失败冷却 8s
 const BACKOFF_MAX = 5 * 60 * 1000;    // 冷却上限 5min
@@ -33,7 +33,7 @@ const RECONNECT_MAX_ATTEMPTS = 5;     // 连续自动重连上限，超过后转
 const FAKE_ONLINE_THRESHOLD = 10 * 60 * 1000; // 假在线判定：running 状态连续无消息时长（默认 10min）
 const FAKE_CHECK_INTERVAL = 60 * 1000;        // 假在线巡检间隔
 const DEVICE_FILE = 'device.json';    // icqq 在此文件缓存设备指纹，复用即「固定设备」
-const CONFLICT_HINT = '同一 QQ 号与电脑端官方 QQ 同时在线会互相挤下线；骰娘建议使用独立小号，或改用「高级」里的 OneBot 中转。';
+const KICK_COMMON_TAIL = '骰娘建议使用独立小号，或改用「高级」里的 OneBot 中转。';
 const NO_SIGN_HINT = '未配置签名服务：icqq 登录极易触发滑动/短信验证甚至冻结，建议填写签名服务地址（QSign 等）并自检，或改用「高级」里的 OneBot 中转。';
 
 /* icqq 的平台参数是数字枚举（Android=1 / aPad=2 / Watch=3 / iMac=4 / iPad=5 / Tim=6），
@@ -49,6 +49,12 @@ function normalizePlatform(v) {
   if (PLATFORM_ENUM[s] != null) return PLATFORM_ENUM[s];
   const n = Number(s);
   return Number.isInteger(n) && n >= 1 && n <= 6 ? n : undefined;
+}
+
+/* U8-5 与手机端共存判定：仅 android（移动端）协议与手机官方 QQ 同协议互踢；
+ * aPad/Watch/iMac/iPad/Tim 官方支持与手机端同时在线（互不挤踢），仅与同协议其他设备互踢。 */
+function coexistsWithMobile(p) {
+  return normalizePlatform(p) !== PLATFORM_ENUM.android;
 }
 
 /** 读取 icqq 已落盘的设备指纹（复用即固定设备）；不存在时返回将生成的位置 */
@@ -177,6 +183,13 @@ function createQqDirectAdapter(deps) {
   function signAddr() { return String(cfg.signApiAddr || '').trim(); }
   /* 签名服务总开关：signEnabled === false 时即使填了地址也视为关闭（可选择关闭）。 */
   function signOn() { return cfg.signEnabled !== false && !!signAddr(); }
+  /* U8-5 互踢提示按生效协议区分：android 移动端与手机官方 QQ 同协议互踢；其余协议可与手机端共存。 */
+  function conflictHint() {
+    const p = String(cfg.platform != null ? cfg.platform : DEFAULT_PLATFORM).trim() || DEFAULT_PLATFORM;
+    return coexistsWithMobile(p)
+      ? `当前协议（${p}）可与手机端官方 QQ 同时在线，登录不会挤掉手机 QQ；与同协议的其他设备仍可能互踢。${KICK_COMMON_TAIL}`
+      : `同一 QQ 号与手机/电脑端官方 QQ 同时在线会互相挤下线。${KICK_COMMON_TAIL}`;
+  }
   /* 按账号隔离登录态目录：icqq 会把 device.json 写在此目录，固定复用即「固定设备指纹」。
    * 未填账号（纯扫码且不留账号）时退回 dataDir 根目录。 */
   function sessionDir() {
@@ -211,6 +224,7 @@ function createQqDirectAdapter(deps) {
       dataDir: dir,
       platform: cfg.platform != null ? cfg.platform : DEFAULT_PLATFORM,
       platformDefault: cfg.platform == null,
+      platformCoexist: coexistsWithMobile(cfg.platform != null ? cfg.platform : DEFAULT_PLATFORM), // U8-5：与手机端共存关系
       ver: cfg.ver || '',
       signApiAddr: signAddr(),
       signEnabled: cfg.signEnabled !== false,
@@ -375,7 +389,7 @@ function createQqDirectAdapter(deps) {
       if (diag.kicks.length > 10) diag.kicks.shift();
       logDiag('kickoff', lastError);
       setState('stopped', 'offline');
-      emit('kickoff', { kickCode: code, kickMessage: message, conflict: CONFLICT_HINT });
+      emit('kickoff', { kickCode: code, kickMessage: message, conflict: conflictHint() });
     });
     c.on('system.offline', () => {
       if (state === 'running') { stopFakeCheck(); lastError = '连接已断开'; logDiag('offline', lastError); setState('stopped', 'offline'); }
@@ -588,7 +602,7 @@ function createQqDirectAdapter(deps) {
         lastMsgAt,
         connections: state === 'running' ? 1 : 0,
         cooldownLeft: Math.max(0, Math.ceil((diag.cooldownUntil - Date.now()) / 1000)), // U1-19：退避剩余秒数
-        conflict: CONFLICT_HINT,                                                        // U1-17：与 PC 端 QQ 互踢提示
+        conflict: conflictHint(),                                                       // U8-5：按协议区分的互踢提示
         diagnostics: buildDiagnostics(),                                                // U1-17：登录诊断
       };
     },

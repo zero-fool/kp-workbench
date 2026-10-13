@@ -54,3 +54,60 @@ test('hub：非指令消息静默（不回复）', async () => {
   const replies = await sim.sendUser('sim-user-1', '大家好呀', 'grp-a');
   assert.strictEqual(replies.length, 0);
 });
+
+/* ---------- U8-7：群级骰娘/AI 开关 ---------- */
+
+test('U8-7 群级骰娘开关：bot off 后普通消息静默，仅 .bot on（管理权限）可重新开启', async () => {
+  const hub = createHub();
+  const sim = createSimChannel({ name: '回归通道' }).start();
+  hub.attach(sim);
+  // 群管理关闭骰娘
+  const off = await sim.sendUser('sim-gm', '.bot off', 'grp-x');
+  assert.match(off[0].segments[0].text, /不再响应/);
+  // 关闭后：掷骰、闲聊全部静默
+  assert.strictEqual((await sim.sendUser('sim-user-1', '.r 1d100', 'grp-x')).length, 0);
+  assert.strictEqual((await sim.sendUser('sim-user-1', '有人吗', 'grp-x')).length, 0);
+  // 成员尝试重新开启：有权限拒绝回执，且开关保持关闭
+  const denied = await sim.sendUser('sim-user-1', '.bot on', 'grp-x');
+  assert.ok(denied.length === 1);
+  assert.match(denied[0].segments[0].text, /权限/);
+  assert.strictEqual((await sim.sendUser('sim-user-1', '.r 1d6', 'grp-x')).length, 0);
+  // 管理员重新开启 → 恢复响应
+  const on = await sim.sendUser('sim-gm', '.bot on', 'grp-x');
+  assert.match(on[0].segments[0].text, /开启/);
+  const back = await sim.sendUser('sim-user-1', '.r 1d6', 'grp-x');
+  assert.match(back[0].segments[0].text, /^掷骰 1d6：/);
+});
+
+test('U8-7 会话 AI 开关：.set ai off 后 transformReplies 收到 aiEnabled=false，重新开启后恢复', async () => {
+  const seen = [];
+  const hub = createHub({ transformReplies: ({ replies, aiEnabled }) => { seen.push(aiEnabled); return replies; } });
+  const sim = createSimChannel({ name: '回归通道' }).start();
+  hub.attach(sim);
+  await sim.sendUser('sim-user-1', '.r 1d6', 'grp-ai');      // 默认开
+  await sim.sendUser('sim-gm', '.set ai off', 'grp-ai');     // 群管理关闭本会话 AI
+  await sim.sendUser('sim-user-1', '.r 1d6', 'grp-ai');      // 关闭后
+  await sim.sendUser('sim-gm', '.set ai on', 'grp-ai');      // 重新开启
+  await sim.sendUser('sim-user-1', '.r 1d6', 'grp-ai');
+  // 5 条消息依次经过增强器（.set 指令本身也会过）：默认 true → off 指令起效后 false → 重新开启后 true
+  assert.deepStrictEqual(seen, [true, false, false, true, true]);
+});
+
+test('U8-7 骰主远程开关：boton/botoff <群号> 落到目标会话开关位并真正生效', async () => {
+  const hub = createHub();
+  const sim = createSimChannel({ name: '回归通道' }).start();
+  hub.attach(sim);
+  sim.registerUser({ id: 'sim-master', name: '骰主', role: 'master' });
+  // 骰主在其私聊会话远程关闭 grp-y
+  const off = await sim.sendUser('sim-master', 'botoff grp-y', 'private-x');
+  assert.match(off[0].segments[0].text, /已远程关闭/);
+  assert.strictEqual((await sim.sendUser('sim-user-1', '.r 1d6', 'grp-y')).length, 0);
+  // 远程开启后恢复
+  const on = await sim.sendUser('sim-master', 'boton grp-y', 'private-x');
+  assert.match(on[0].segments[0].text, /已远程开启/);
+  const back = await sim.sendUser('sim-user-1', '.r 1d6', 'grp-y');
+  assert.match(back[0].segments[0].text, /^掷骰 1d6：/);
+  // 非骰主不可操作（管理闸先拦）
+  const denied = await sim.sendUser('sim-user-1', 'botoff grp-y', 'grp-y');
+  assert.match(denied[0].segments[0].text, /权限/);
+});

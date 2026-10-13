@@ -70,9 +70,12 @@ function createTransformReplies(deps) {
   //   getConfig() -> { enabled, features:{optimize,interject,meme}, interjectProb, memeProb, optimizePrompt }
   //   memes      = 表情库端口（可选；提供则偷取+抽表情）
   //   stealEnabled = () => boolean，本次消息是否允许“偷表情”（通常总开关开即可）
-  return async function transformReplies({ msg, replies }) {
+  return async function transformReplies({ msg, replies, aiEnabled }) {
     const cfg = (deps.getConfig && deps.getConfig()) || {};
     if (cfg.enabled === false || !Array.isArray(replies)) return replies;
+    // U8-7：会话级 AI 开关（群内 .set ai off / 工作台会话目录关闭）——润色与插话都是 AI 调用，
+    // 关闭后直接跳过，绝不消耗 token；偷表情是本地行为不受此开关影响。
+    const aiOn = aiEnabled !== false;
     const feats = cfg.features || {};
     const out = [];
     const isRollMsg = ROLL_RE.test(String((msg && msg.text) || ''));
@@ -90,7 +93,7 @@ function createTransformReplies(deps) {
 
     // 1) 骰点文本优化：只在原骰点结果之后「追加」一段剧情化描述，
     //    绝不替换或改写原始回复——数值与明细永远保持引擎算出的样子（AI 只负责文风，不碰数据）。
-    if (isRollMsg && hasEnable('optimize')) {
+    if (isRollMsg && aiOn && hasEnable('optimize')) {
       for (const r of replies) {
         const cur = textOf(r);
         let target = r;
@@ -119,7 +122,7 @@ function createTransformReplies(deps) {
 
     // 2) 随机插话
     const prob = Number(cfg.interjectProb);
-    const interjectRoll = prob > 0 && hasEnable('interject') && Math.random() * 100 < prob;
+    const interjectRoll = aiOn && prob > 0 && hasEnable('interject') && Math.random() * 100 < prob;
 
     // 2a) 插话命中（含概率附带已偷表情）
     if (interjectRoll && out.length) {

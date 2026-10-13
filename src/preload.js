@@ -324,7 +324,16 @@ contextBridge.exposeInMainWorld('api', {
       list: () => ipcRenderer.invoke('diceNet:list'),
       start: (id, cfg) => ipcRenderer.invoke('diceNet:start', id, cfg),
       stop: (id) => ipcRenderer.invoke('diceNet:stop', id),
-      status: (id) => ipcRenderer.invoke('diceNet:status', id)
+      status: (id) => ipcRenderer.invoke('diceNet:status', id),
+      sendMetrics: () => ipcRenderer.invoke('diceNet:sendMetrics')   // U8-8：发送观测指标
+    },
+    /* 会话目录与内置骰娘 QQ 界面（U8-4/U8-6）：
+     * list/set/delete 管理会话（开关/前缀/规则/删除）；send 以骰娘账号身份向会话手动发言。 */
+    diceSessions: {
+      list: () => ipcRenderer.invoke('diceSessions:list'),
+      set: (id, patch) => ipcRenderer.invoke('diceSessions:set', id, patch || {}),
+      delete: (id) => ipcRenderer.invoke('diceSessions:delete', id),
+      send: (id, text) => ipcRenderer.invoke('diceSessions:send', id, text)
     },
     /* QQ 直连登入：软件内扫码 / 账密直接登入 QQ，无需 OneBot 协议端中转。
      * login(opts) 的 opts = { mode:'qr'|'password', uin, password }；登录过程状态经 onQqEvent 持续推送。 */

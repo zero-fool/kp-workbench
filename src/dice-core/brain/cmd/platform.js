@@ -27,13 +27,22 @@ const deny = { text: '没有权限：该指令需要主持人或管理员' };
 
 function st(ctx) { const s = ctx.session; s.settings = s.settings || {}; s.settings.switches = s.settings.switches || {}; return s; }
 
-/* ─── .bot ────────────────────────────────────────────── */
+/* ─── .bot（U8-7 会话级骰娘开关）──────────────────────────
+ * off 后 hub 按本开关位静默丢弃该群/私聊的普通消息，仅放行「.bot on」重新开启；
+ * 骰主远程 boton/botoff <群号>（master.js）写的也是这一开关位。 */
 function runBot(ctx, args) {
   const s = st(ctx);
   const v = argStr(args).toLowerCase();
+  const persist = () => { if (ctx.sessions && typeof ctx.sessions.persist === 'function') ctx.sessions.persist(); };
+  if (v === 'status' || v === '状态' || v === '') {
+    return { text: `机器人状态：${s.settings.switches.bot === false ? 'off（本会话静默中）' : 'on'}\n用法：.bot on|off|status；骰主可远程：boton/botoff <群号>` };
+  }
   if (v !== 'on' && v !== 'off') return { text: `机器人状态：${s.settings.switches.bot === false ? 'off' : 'on'}\n用法：.bot on|off` };
   s.settings.switches.bot = v === 'on';
-  return { text: `机器人已${v === 'on' ? '开启' : '关闭'}（本地会话）` };
+  persist();
+  return v === 'on'
+    ? { text: '机器人已开启（本地会话）：正常响应掷骰与指令。' }
+    : { text: '机器人已关闭（本地会话）：之后普通消息不再响应；管理员发送「.bot on」可重新开启（也可在工作台会话目录里改）。' };
 }
 
 /* ─── .trust ──────────────────────────────────────────── */
