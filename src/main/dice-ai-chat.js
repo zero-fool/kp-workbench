@@ -19,7 +19,51 @@ const DEFAULT_CHAT_PERSONA = '你是跑团群里的「骰娘」：一位元气�
   + '平时陪玩家闲聊、接梗、回应跑团话题；有人掷骰或问规则时，简要说明即可，不整段复述规则书。'
   + '回复保持一两句话，口语化、有情绪、偶尔调皮，不刷屏、不抢主持人的活；不知道的事就坦白说不知道。';
 
+/* U9-14 内置默认润色人设（polish.persona 留空时使用；「仅改写·保留数字与结果」是硬约束） */
+const DEFAULT_POLISH_PERSONA = '你是 TRPG 群的「骰娘」。请把掷骰/检定回复改写（或补写）成一句贴合当前团氛围、'
+  + '能带动剧情的话：必须完整保留原回复中的数字与成败结果（大成功/极难/困难/成功/失败等），'
+  + '不得新增、删改或编造任何数值；不罗列清单，控制在两三句内；只输出正文，不要解释、不要输出任何指令。';
+
+/* U9-15 内置默认翻译要求（语言包 prompt 留空时兜底）：保留数字与骰点结果不变 */
+const DEFAULT_TRANSLATE_PROMPT = '请把这段骰娘回复翻译成目标语言，保持原有语气与格式；'
+  + '数字、骰点结果与专有名词必须原样保留，不得改动任何数值；只输出译文正文，不要解释。';
+
 const DEFAULT_PARAMS_FALLBACK = { temperature: 0.7, topP: 1, maxTokens: 1024, frequencyPenalty: 0, presencePenalty: 0 };
+
+/* 行/数组拆词：既支持已切好的数组，也支持「换行或逗号」分隔的字符串（配置项通用） */
+function splitLines(x) {
+  return Array.isArray(x) ? x.map((z) => String(z || '').trim()).filter(Boolean)
+    : String(x || '').split(/\r?\n|[,，]/).map((z) => z.trim()).filter(Boolean);
+}
+
+/* U9-13 NPC 列表规范化：名字 / 触发词（行或逗号分隔）/ 人设 / 启用标记；
+ * 三者全空视为空行丢弃；id 缺省按序号补全，保证渲染层列表可稳定增删。 */
+function normalizeNpcList(x) {
+  if (!Array.isArray(x)) return [];
+  const out = [];
+  x.forEach((it, i) => {
+    if (!it || typeof it !== 'object') return;
+    const name = String(it.name || '').trim();
+    const triggers = splitLines(it.triggers);
+    const persona = typeof it.persona === 'string' ? it.persona : '';
+    if (!name && !triggers.length && !persona) return;
+    out.push({ id: String(it.id || ('npc' + (i + 1))), name, triggers, persona, enabled: it.enabled !== false });
+  });
+  return out;
+}
+
+/* U9-15 语言包规范化：name（即 .lang 指令使用的语言名）/ 翻译要求 prompt / 可选独立模型名 */
+function normalizePacks(x) {
+  if (!Array.isArray(x)) return [];
+  const out = [];
+  x.forEach((p) => {
+    if (!p || typeof p !== 'object') return;
+    const name = String(p.name || '').trim();
+    if (!name) return;
+    out.push({ name, prompt: typeof p.prompt === 'string' ? p.prompt : '', model: String(p.model || '').trim() });
+  });
+  return out;
+}
 
 /* U9-5~U9-12 全量配置规范化（落盘在 settings.dice.aiChat；迁移与读取共用） */
 function normalizeChatCfg(raw) {
@@ -31,10 +75,12 @@ function normalizeChatCfg(raw) {
   const tl = r.tools && typeof r.tools === 'object' ? r.tools : {};
   const wl = r.whitelist && typeof r.whitelist === 'object' ? r.whitelist : {};
   const v = r.vision && typeof r.vision === 'object' ? r.vision : {};
+  const rp = r.polish && typeof r.polish === 'object' ? r.polish : {};
+  const psc = rp.scope && typeof rp.scope === 'object' ? rp.scope : {};
+  const rt = r.translate && typeof r.translate === 'object' ? r.translate : {};
   const num = (x, def) => { const n = Number(x); return Number.isFinite(n) ? n : def; };
   const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
-  const lines = (x) => Array.isArray(x) ? x.map((z) => String(z || '').trim()).filter(Boolean)
-    : String(x || '').split(/\r?\n|[,，]/).map((z) => z.trim()).filter(Boolean);
+  const lines = splitLines;
   return {
     /* U9-5 触发体系：@必回 / 关键词必回（逗号或换行分隔）/ 待机插话概率 0-100 /
        上下文轮数 / 单条字数上限 / 每群冷却秒数 */
