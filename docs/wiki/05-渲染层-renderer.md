@@ -74,7 +74,7 @@ switchView(view)
 - **视图渲染 `render*(...)`**：每个视图一个函数，返回/写入 HTML，再绑定该视图的事件。
 - **事件委托 + 直接绑定**：侧栏 `data-view` 点击 → `switchView`；其余在渲染后 `q(...).onclick/oninput`。
 - **`window.WB` 命名空间**：文件早期即 `window.WB = window.WB || {}`（[app.js#L7](file:///workspace/src/renderer/app.js#L7)），后续 `window.WB = Object.assign(window.WB, {…})`（[app.js#L8129](file:///workspace/src/renderer/app.js#L8129)）挂载供内联事件调用的方法。
-- **版本常量**：顶部 `APP_VERSION = '3.4.0'` 与 `CHANGELOG`（[app.js#L19-L20](file:///workspace/src/renderer/app.js#L19-L20)）。`APP_VERSION` 必须与 `package.json` 的 `version` 一致（`npm test` 校验）；`CHANGELOG` 同时是应用内「更新公告」与 Release 正文来源。
+- **版本常量**：顶部 `APP_VERSION = '3.4.1'` 与 `CHANGELOG`（[app.js#L19-L20](file:///workspace/src/renderer/app.js#L19-L20)）。`APP_VERSION` 必须与 `package.json` 的 `version` 一致（`npm test` 校验）；`CHANGELOG` 同时是应用内「更新公告」与 Release 正文来源。
 
 > 注意：`app.js` 体量大，修改时优先定位到具体 `render*` / 事件函数；不要整文件重排。
 

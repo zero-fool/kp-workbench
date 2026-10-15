@@ -16,8 +16,14 @@
   const KINDS = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
   const TPL_KINDS = ['pcs', 'npcs', 'mobs']; // 仅「卡片类」实体支持切换模板（模板改变显示字段集）
   const THEMES = [['ember', '残火纪·暗黑'], ['parchment', '现代卷宗'], ['lite', '极简浅色'], ['neon', '赛博霓虹'], ['dusk', '暮光护眼']];
-  const APP_VERSION = '3.4.0';
+  const APP_VERSION = '3.4.1';
   const CHANGELOG = [
+    { version: '3.4.1', date: '2026-10-15', type: '补丁版·AI 广播断链修复（发版收尾）', items: [
+      '修复全局「AI 处理中」提示条始终不亮的问题：preload 广播 ai:busy 后主进程此前没有 ipcMain.on 中转，消息被静默丢弃，导致提示条、计时、任务队列可视化与 AI 收尾时的预算核对及用量徽标刷新全部失效；现补上中转链路，任意界面发起 AI 任务均正常显示进度。',
+      '补上 dice-core:engine-event 推送：骰娘页状态徽标改为事件驱动即时刷新（此前该通道有监听无发送，只能靠 4 秒轮询兜底）。',
+      '接线审计升级：wiring-audit 新增「1B 单向广播配对」检查——比对全仓 ipcRenderer.send↔ipcMain.on 与 ipcRenderer.on↔webContents.send 的通道名，本次两条断链此前 382 项回归全绿却未被发现，正因旧审计只校验 invoke↔handle；同类断链今后在 npm run verify 即被拦截。',
+      '验证：单元测试 555 项全绿，回归清单 382 项 GREEN · 0 RED，npm run verify 通过（接线审计含 1B 新检查）。',
+    ]},
     { version: '3.4.0', date: '2026-10-15', type: '正式版·AI 中枢模型管理与 NPC/润色/翻译（对齐 Dice-Next）', items: [
       'AI 中枢（模型管理）：新增 AI 中枢总开关（关闭则骰娘全部 AI 功能短路，各 AI 分区顶部显示警示条）；多模型卡片管理（Base URL / 模型名 / API Key / 输入输出单价 / Token 上限 / 费用上限，首个启用模型为各功能默认，卡片实时显示已用 token 与费用）；全局请求参数（Temperature / top_p / Max tokens / Frequency penalty / Presence penalty，默认 0.7/1/1024/0/0）；每个模型可一键 Test 连通测试（返回延迟与模型名，错误 key 明确报错不崩溃）；超费用上限自动熔断。',
       'NPC 扮演：骰娘 AI 设置新增 NPC 列表（名字 / 触发词 / 人设 / 启用），命中触发词即以该 NPC 身份回复且优先于普通 AI 对话；有人设用人设，无人设则署名身份兜底（不以骰娘口吻作答）；仍受冷却、记忆、工具、白名单全链路约束。无触发词的普通消息命中 NPC 名字也会触发，避免只靠 @ 才能唤起 NPC。',
@@ -25,9 +31,6 @@
       '自定义语言翻译：新增 .lang <语言名> 自定义语言包翻译——语言包（名称/提示词/模型）可增删改，群内切换语言后回复按语言包翻译；翻译模型可单独指定；翻译失败或超时一律回退原文，绝不因翻译挂掉丢回复。',
       '白名单修复：.ai 指令与群记忆现在同受 AI 白名单约束——白名单开启后非白名单会话发 .ai 直接拒绝（Dice-Next 语义：群管理员发 .ai 也被拒）；被拒会话的消息不再进入上下文缓冲，杜绝「被白名单拦下却仍在偷偷攒摘要烧 token」的漏洞。',
       '识图直链开关补齐行为：Vision「直链模式」关闭时自动由本进程把图片下载转 base64 data URI 再送识别（QQ 图链带签名/易过期，模型服务商侧常拉不到），下载失败自动降级回直链、绝不因此丢回复；超 8MB 图片放弃转码。',
-      '修复全局「AI 处理中」提示条始终不亮的问题：preload 广播 ai:busy 后主进程此前没有 ipcMain.on 中转，消息被静默丢弃，导致提示条、计时、任务队列可视化与 AI 收尾时的用量徽标刷新全部失效；现补上中转链路，任意界面发起 AI 任务均正常显示进度。同时补上 dice-core:engine-event 推送，骰娘页状态徽标改为事件驱动即时刷新（不再只靠 4 秒轮询）。',
-      '接线审计升级：wiring-audit 新增「1B 单向广播配对」检查——比对全仓 ipcRenderer.send↔ipcMain.on 与 ipcRenderer.on↔webContents.send 的通道名，本次两条断链此前 382 项回归全绿却未被发现，正因旧审计只校验 invoke↔handle；同类断链今后在 npm run verify 即被拦截。',
-      '验证：单元测试 555 项全绿，回归清单 382 项 GREEN · 0 RED（新增 U9 系列 15 条纯逻辑与接线断言 + 6 条行为级用例），npm run verify 通过。',
     ]},
     { version: '3.3.5', date: '2026-10-13', type: '正式版·AI 骰娘对话引擎（对齐 Dice-Next Chat，小项更新）', items: [
       'AI 骰娘对话引擎（触发体系）：新增「骰娘专属 AI 对话」区块——被 @ 必回（无视冷却）、关键词必回（逗号/换行分隔）、待机插话概率、上下文轮数、单条字数上限、每群冷却秒数均可配置；群消息据此自动回应，工作台测试通道同样生效。',
