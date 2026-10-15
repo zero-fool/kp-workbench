@@ -74,7 +74,7 @@ switchView(view)
 - **视图渲染 `render*(...)`**：每个视图一个函数，返回/写入 HTML，再绑定该视图的事件。
 - **事件委托 + 直接绑定**：侧栏 `data-view` 点击 → `switchView`；其余在渲染后 `q(...).onclick/oninput`。
 - **`window.WB` 命名空间**：文件早期即 `window.WB = window.WB || {}`（[app.js#L7](file:///workspace/src/renderer/app.js#L7)），后续 `window.WB = Object.assign(window.WB, {…})`（[app.js#L8129](file:///workspace/src/renderer/app.js#L8129)）挂载供内联事件调用的方法。
-- **版本常量**：顶部 `APP_VERSION = '3.2.1'` 与 `CHANGELOG`（[app.js#L19-L20](file:///workspace/src/renderer/app.js#L19-L20)）。`APP_VERSION` 必须与 `package.json` 的 `version` 一致（`npm test` 校验）；`CHANGELOG` 同时是应用内「更新公告」与 Release 正文来源。
+- **版本常量**：顶部 `APP_VERSION = '3.4.0'` 与 `CHANGELOG`（[app.js#L19-L20](file:///workspace/src/renderer/app.js#L19-L20)）。`APP_VERSION` 必须与 `package.json` 的 `version` 一致（`npm test` 校验）；`CHANGELOG` 同时是应用内「更新公告」与 Release 正文来源。
 
 > 注意：`app.js` 体量大，修改时优先定位到具体 `render*` / 事件函数；不要整文件重排。
 
@@ -113,7 +113,7 @@ window.diceCore = {
 
 preload 把所有 AI 接口包了一层守卫（[preload.js#L21-L89](file:///workspace/src/preload.js#L21-L89)）：
 
-1. **广播忙闲**：请求开始/结束向渲染层发 `ai:busy`，界面统一亮起「AI 处理中」提示（任意界面生效）。
+1. **广播忙闲**：请求开始/结束经 preload `ipcRenderer.send('ai:busy')` → 主进程 `ipcMain.on` 中转 → `webContents.send` 回渲染层，界面统一亮起「AI 处理中」提示（任意界面生效）。
 2. **按任务类型分队列**：同类型一次只放行一项，未完成时同类型再调用被拦下并说明原因；不同类型（对话 vs 地图 vs 分幕）可并行，长任务不霸占整条通道。
 3. **可取消**：`aiCancel(group)` 对某一类型发起取消。
 
@@ -146,5 +146,5 @@ preload 把所有 AI 接口包了一层守卫（[preload.js#L21-L89](file:///wor
 ## 8. 与主进程的通信约定
 
 - 请求应答用 `ipcRenderer.invoke` / `ipcMain.handle`（`window.api.*`）。
-- 单向通知/广播用 `ipcRenderer.send` / `ipcMain.on`（如 `ai:busy`、`ai:cancel`）与 `webContents.send`（如 `dice-core:workspace-changed`、`updater:state`）。
-- 所有通道的接线正确性由 [tools/wiring-audit.js](file:///workspace/tools/wiring-audit.js) 在 `npm run verify` 中强制校验（比对 preload 的 invoke 与主进程的 handle、`window.api.*` 暴露与使用、`window.WB` 定义与引用、重复 id / 重复函数定义、内联事件裸调用等）。
+- 单向通知/广播用 `ipcRenderer.send` / `ipcMain.on`（如 `ai:busy`、`ai:cancel`）与 `webContents.send`（如 `dice-core:workspace-changed`、`updater:state`）。注意 `ipcRenderer.send` 只能送到主进程，需主进程 `ipcMain.on` 接收后再 `webContents.send` 才能回到渲染层。
+- 所有通道的接线正确性由 [tools/wiring-audit.js](file:///workspace/tools/wiring-audit.js) 在 `npm run verify` 中强制校验（比对 preload 的 invoke 与主进程的 handle、单向广播配对——`ipcRenderer.send` 必须有 `ipcMain.on` 中转、`ipcRenderer.on` 必须有主进程 `webContents.send` 推送、`window.api.*` 暴露与使用、`window.WB` 定义与引用、重复 id / 重复函数定义、内联事件裸调用等）。

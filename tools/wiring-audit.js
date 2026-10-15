@@ -41,6 +41,34 @@ out.push('preload 调用 ' + invokeCh.length + ' 个通道｜main handle ' + han
 missHandler.length ? bad('无对应 handle（调用必失败）: ' + missHandler.join(', ')) : ok('所有 invoke 均有 handle');
 out.push(unusedHandler.length ? 'ℹ️ handle 未被 preload 使用: ' + unusedHandler.join(', ') : '✅ 无冗余 handle');
 
+/* ---------- 1B. 单向广播配对 ---------- */
+title('1B. 单向广播：preload send/on ↔ 主进程 ipcMain.on / webContents.send');
+/* 渲染进程之间不能直接通信：preload 的 ipcRenderer.send 必须由主进程 ipcMain.on 中转后再
+ * webContents.send 回来，preload 的 ipcRenderer.on 才收得到。断链不会报错，只是静默丢弃
+ * （ai:busy 忙闲广播曾整条缺失），故必须全仓比对通道名。
+ * 扫描范围覆盖 src 全部 JS：ipcMain.on 可能不在 main.js，webContents.send 可能在 window.js。 */
+const srcAll = (function collect(d) {
+  let out = [];
+  for (const f of fs.readdirSync(d, { withFileTypes: true })) {
+    const p = path.join(d, f.name);
+    if (f.isDirectory()) out = out.concat(collect(p));
+    else if (f.name.endsWith('.js')) out.push(fs.readFileSync(p, 'utf8'));
+  }
+  return out;
+})(ROOT);
+const grab = (re) => uniq(srcAll.flatMap(s => [...s.matchAll(re)].map(m => m[1])));
+const sendCh = grab(/ipcRenderer\.send\(\s*'([^']+)'/g);
+const ipcOnCh = grab(/ipcMain\.on\(\s*'([^']+)'/g);
+const recvCh = grab(/ipcRenderer\.(?:on|once)\(\s*'([^']+)'/g);
+const pushCh = grab(/webContents\.send\(\s*'([^']+)'/g);
+const sendMiss = sendCh.filter(c => !ipcOnCh.includes(c));
+const recvMiss = recvCh.filter(c => !pushCh.includes(c));
+const orphanPush = pushCh.filter(c => !recvCh.includes(c));
+out.push('preload send ' + sendCh.length + ' 个｜ipcMain.on ' + ipcOnCh.length + ' 个｜preload on ' + recvCh.length + ' 个｜webContents.send ' + pushCh.length + ' 个');
+sendMiss.length ? bad('preload send 但主进程无 ipcMain.on（消息被静默丢弃）: ' + sendMiss.join(', ')) : ok('所有 preload send 均有主进程中转');
+recvMiss.length ? bad('preload 监听但主进程从不推送（监听永不触发）: ' + recvMiss.join(', ')) : ok('所有 preload 监听均有主进程推送');
+out.push(orphanPush.length ? 'ℹ️ 主进程推送但 preload 未监听: ' + orphanPush.join(', ') : '✅ 无孤儿推送');
+
 /* ---------- 2. window.api.* 暴露 vs 使用 ---------- */
 title('2. window.api.* 暴露 vs 渲染层使用');
 const exposed = uniq([...preload.matchAll(/^\s{2}([a-zA-Z_$][\w$]*)\s*:\s*\(/gm)].map(m => m[1]));

@@ -1495,6 +1495,11 @@ function registerIpc() {
     const n = ai.cancelGroup(group);
     try { if (win && win.webContents) win.webContents.send('ai:cancelled', { group, hit: n }); } catch (_) {}
   });
+  /* preload 的 aiGuard 用 ipcRenderer.send 广播忙闲；渲染进程之间不能直连，
+   * 主进程必须中转，否则消息被丢弃，全局「AI 处理中」提示/计时/队列可视化全部失效。 */
+  ipcMain.on('ai:busy', (e, payload) => {
+    try { if (win && win.webContents) win.webContents.send('ai:busy', payload); } catch (_) {}
+  });
 
   /* 骰娘 AI 开关不再经 IPC 读写：渲染层直接读写本地存档的 settings.dice.aiSwitches 并 persist()，
    * 主进程每次调用骰娘 AI 时经 diceAiSwitches() 实时读取，天然与工作台 AI 解耦。 */
@@ -1902,6 +1907,14 @@ function registerIpc() {
     const ch = (diceWorkbench.adapters || []).find((a) => a && a.id === m.channel);
     if (!ch) return;
     aiChatEngine.onMessage(m, ch).catch(() => {});
+  });
+  /* 骰娘引擎事件 → 渲染层（骰娘页订阅 onEngineEvent 做即时刷新）。
+   * hub 事件流覆盖 message/replies/suppressed，即任何入站消息都是一次「引擎活动」。 */
+  diceWorkbench.hub.onEvent((ev) => {
+    if (!ev) return;
+    try {
+      if (win && win.webContents) win.webContents.send('dice-core:engine-event', { type: ev.type, at: Date.now() });
+    } catch (_) {}
   });
   /* AI 对话配置 IPC：摘要库/事实库 View·Clear（U9-8/U9-9）+ 默认值回填（U9-7 Load default） */
   ipcMain.handle('diceAiChat:memView', () => aiChatEngine.memView());
