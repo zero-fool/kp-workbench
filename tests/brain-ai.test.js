@@ -83,3 +83,43 @@ test('反例：无 ai 端口（ctx.ai 为 null）→ 明确提示', async () => 
   const { run } = mk(null);
   assert.match(await run('.ai 你好'), /AI 端口未接入/);
 });
+
+/* ---- U9-11：.ai 指令同受 AI 白名单约束（Dice-Next：白名单开启后群管理员发 .ai 也被拒） ---- */
+
+function mkWhite(whitelistPass) {
+  const brain = new CommandBrain({ render: r => r });
+  brain.aiWhitelistPass = whitelistPass;   // 主进程注入的判定器（测试直接置于 brain）
+  const state = { users: {}, logs: [], customs: {}, sessions: {} };
+  let called = false;
+  const ai = { async chat() { called = true; return { text: '白名单内回复' }; } };
+  const run = async (text) => {
+    const out = await brain.handle({
+      id: '1', channel: 'sim', groupId: 'sandbox',
+      user: { id: 'u1', name: '测试员', role: 'member' }, text, ts: Date.now()
+    }, { state, ai });
+    return out.flatMap(x => x.segments).map(s => s.text || '').join('\n');
+  };
+  return { run, called: () => called };
+}
+
+test('U9-11：白名单拒绝的会话发 .ai → 拒绝提示，且不消耗 AI 调用', async () => {
+  const t = mkWhite(() => false);
+  const out = await t.run('.ai 你好');
+  assert.match(out, /不在 AI 白名单/);
+  assert.equal(t.called(), false, '被拒时不应调用 AI');
+});
+
+test('U9-11：白名单放行的会话发 .ai → 正常走 AI', async () => {
+  const t = mkWhite(() => true);
+  const out = await t.run('.ai 你好');
+  assert.match(out, /白名单内回复/);
+  assert.equal(t.called(), true);
+});
+
+test('U9-11：未注入判定器（测试通道/离线）→ 不限制 .ai', async () => {
+  let called = false;
+  const { run } = mk(mkAi({ async chat() { called = true; return { text: '自由回复' }; } }));
+  const out = await run('.ai 你好');
+  assert.match(out, /自由回复/);
+  assert.equal(called, true);
+});

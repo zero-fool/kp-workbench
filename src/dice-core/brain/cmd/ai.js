@@ -52,6 +52,11 @@ async function handle(ctx, args) {
     || (ctx.session && ctx.session.settings && ctx.session.settings.switches)
     || {};
   if (sw.ai === false) return { text: OFF_TEXT };
+  /* U9-11：AI 白名单 —— .ai 指令与主动聊天同受约束（Dice-Next 约定：白名单开启后
+   * 群管理员发 .ai 也被拒；未注入判定器=测试通道/离线，不限制）。 */
+  if (typeof ctx.aiWhitelistPass === 'function' && ctx.aiWhitelistPass(ctx.session, ctx.sender) === false) {
+    return { text: '本会话不在 AI 白名单内，无法使用 .ai（白名单在「骰娘 AI 设置 → AI 白名单」配置）。' };
+  }
   if (!ctx.ai) return { text: 'AI 端口未接入，当前无法使用 .ai 指令' };
   const [sub, ...rest] = args;
   if (sub === '判定') {

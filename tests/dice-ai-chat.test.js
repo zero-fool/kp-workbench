@@ -261,7 +261,7 @@ test('normalizeChatCfg：NPC/润色/翻译配置规范化（润色与翻译默�
   assert.equal(c.polish.enabled, true);
   assert.equal(c.polish.model, 'p-model');
   assert.equal(c.polish.persona, '短句');
-  assert.deepEqual(c.polish.scope, { roll: true, deck: false, fun: false, plugin: true });
+  assert.deepEqual(c.polish.scope, { roll: true, deck: false, fun: false, custom: false, plugin: true });
   assert.equal(c.translate.enabled, true);
   assert.equal(c.translate.packs.length, 1);                 // 无名语言包被丢弃
   assert.equal(c.translate.packs[0].name, '精灵语');
@@ -271,7 +271,7 @@ test('normalizeChatCfg：NPC/润色/翻译配置规范化（润色与翻译默�
   assert.equal(d.npc.enabled, true);
   assert.deepEqual(d.npc.list, []);
   assert.equal(d.polish.enabled, false);
-  assert.deepEqual(d.polish.scope, { roll: false, deck: false, fun: false, plugin: false });
+  assert.deepEqual(d.polish.scope, { roll: false, deck: false, fun: false, custom: false, plugin: false });
   assert.equal(d.translate.enabled, false);
   assert.deepEqual(d.translate.packs, []);
 });

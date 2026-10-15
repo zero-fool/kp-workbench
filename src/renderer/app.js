@@ -4481,10 +4481,10 @@
     sec('whitelist', { enabled: false, groups: [], users: [] });
     sec('vision', { model: '', maxImages: 1, directUrl: true, prompt: '' });
     sec('npc', { enabled: true, list: [] });
-    sec('polish', { enabled: false, model: '', persona: '', scope: { roll: false, deck: false, fun: false, plugin: false } });
+    sec('polish', { enabled: false, model: '', persona: '', scope: { roll: false, deck: false, fun: false, custom: false, plugin: false } });
     sec('translate', { enabled: false, model: '', packs: [] });
     if (!c.polish.scope || typeof c.polish.scope !== 'object') c.polish.scope = {};
-    for (const sk of ['roll', 'deck', 'fun', 'plugin']) if (typeof c.polish.scope[sk] !== 'boolean') c.polish.scope[sk] = false;
+    for (const sk of ['roll', 'deck', 'fun', 'custom', 'plugin']) if (typeof c.polish.scope[sk] !== 'boolean') c.polish.scope[sk] = false;
     if (!Array.isArray(c.npc.list)) c.npc.list = [];
     if (!Array.isArray(c.translate.packs)) c.translate.packs = [];
     return c;
@@ -4614,6 +4614,7 @@
                ${aiChatChk('polish', 'scope.roll', pol.scope.roll, '掷骰/检定')}
                ${aiChatChk('polish', 'scope.deck', pol.scope.deck, '牌堆')}
                ${aiChatChk('polish', 'scope.fun', pol.scope.fun, '趣味指令')}
+               ${aiChatChk('polish', 'scope.custom', pol.scope.custom, '自定义回复')}
                ${aiChatChk('polish', 'scope.plugin', pol.scope.plugin, '插件')}
              </div></div>`
         + aiChatArea('polish', 'persona', pol.persona, '润色人设（留空用内置默认）', 3, '改写风格：贴合团氛围、两三句内'))}

@@ -2468,6 +2468,122 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       ? true : '产物 bundle/资产不齐（构建后重跑）';
   });
 
+  console.log('\n[U9] AI 中枢（Dice-Next 对齐）· 纯逻辑 + 接线守卫');
+  (() => {
+    const chat = require(path.join(__dirname, '..', 'src', 'main', 'dice-ai-chat'));
+    const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.js'), 'utf8');
+    const rtSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'dice-ai-chat-runtime.js'), 'utf8');
+    const aiCmdSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'dice-core', 'brain', 'cmd', 'ai.js'), 'utf8');
+    const enhSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'dice-enhance.js'), 'utf8');
+
+    check('U9-5 触发：@必回 reason=at；指令消息一律不触发', () => {
+      const cfg = chat.normalizeChatCfg({});
+      const at = chat.shouldReply(cfg, { text: '[CQ:at,qq=10000] hi', user: { id: 'u1' } }, { botId: '10000', rand: () => 1 });
+      if (!(at.reply && at.reason === 'at')) return 'at 未必回';
+      if (chat.shouldReply(cfg, { text: '.r 1d100', user: { id: 'u1' } }, { rand: () => 0 }).reply) return '指令不应触发';
+      return true;
+    });
+    check('U9-5 关键词：命中必回（大小写不敏感），未命中不回', () => {
+      const cfg = chat.normalizeChatCfg({ trigger: { keywords: 'dice' } });
+      if (!chat.shouldReply(cfg, { text: 'DICE 在吗', user: { id: 'u1' } }, { rand: () => 1 }).reply) return '关键词未命中';
+      if (chat.shouldReply(cfg, { text: '普通闲聊', user: { id: 'u1' } }, { rand: () => 1 }).reply) return '未命中却回';
+      return true;
+    });
+    check('U9-11 白名单：开且空白名单 = 全拒；命中群/用户名单放行', () => {
+      const off = chat.normalizeChatCfg({});
+      if (!chat.passWhitelist(off, 'g9', 'u9')) return '关闭应放行';
+      const on = chat.normalizeChatCfg({ whitelist: { enabled: true, groups: 'g1', users: 'u1' } });
+      if (chat.passWhitelist(on, 'g2', 'u2')) return '名单外应拒绝';
+      if (!chat.passWhitelist(on, 'g1', '')) return '群白名单应放行';
+      if (!chat.passWhitelist(on, '', 'u1')) return '用户白名单应放行';
+      const empty = chat.normalizeChatCfg({ whitelist: { enabled: true, groups: '', users: '' } });
+      if (chat.passWhitelist(empty, 'g1', 'u1')) return '空白名单应全拒';
+      return true;
+    });
+    check('U9-11 接线：.ai 指令同受白名单约束（注入 aiWhitelistPass）', () => {
+      if (!/aiWhitelistPass/.test(aiCmdSrc)) return 'cmd/ai.js 未接入白名单判定';
+      if (!/aiWhitelistPass/.test(mainSrc)) return 'main.js 未注入 aiWhitelistPass';
+      if (!/aiWhitelistPass/.test(fs.readFileSync(path.join(__dirname, '..', 'src', 'dice-core', 'brain', 'CommandBrain.js'), 'utf8'))) return 'CommandBrain 未透传';
+      return true;
+    });
+    check('U9-11 接线：白名单前置——被拒会话不进上下文缓冲/攒批', () => {
+      const wp = rtSrc.indexOf('if (!chatCore.passWhitelist(cfg, gid, uid)) return;');
+      const ph = rtSrc.indexOf('pushHist(gid, msg.user.name');
+      if (wp < 0) return 'runtime 未做白名单前置判定';
+      if (ph < 0) return '未找到 pushHist 调用点';
+      if (wp > ph) return '白名单判定须先于 pushHist（否则被拒群仍会攒摘要）';
+      return true;
+    });
+    check('U9-13 NPC：命中触发词 reason=npc 优先，且 system 换人设', () => {
+      const cfg = chat.normalizeChatCfg({ npc: { list: [{ name: '老爹', triggers: '爹地', persona: '你是老板' }] } });
+      const hit = chat.shouldReply(cfg, { text: '爹地 在吗', user: { id: 'u1' } }, { rand: () => 1 });
+      if (!(hit.reply && hit.reason === 'npc')) return 'NPC 触发词未必回';
+      const npc = chat.matchNpc(cfg, { text: '爹地 来杯酒' });
+      if (!npc || !npc.npc || npc.npc.persona !== '你是老板') return 'matchNpc 未命中人设';
+      if (!/matchNpc/.test(rtSrc)) return 'runtime 未接 NPC';
+      return true;
+    });
+    check('U9-14 润色范围：roll/deck/fun/custom/plugin 归类 + custom: 前缀', () => {
+      const cases = [['ra', 'roll'], ['drew', 'deck'], ['jrrp', 'fun'], ['custom:开饭', 'custom'], ['myplugin', 'plugin'], ['', null]];
+      for (const [cmd, want] of cases) {
+        const got = chat.polishScopeOf(cmd);
+        if (got !== want) return `polishScopeOf(${cmd})=${got} 应为 ${want}`;
+      }
+      return true;
+    });
+    check('U9-14 润色硬校验：改/丢/编数值即判废，合规改写通过', () => {
+      const orig = '侦查检定 45 点，成功。';
+      if (!chat.polishAcceptable('一次轻快的侦查检定，掷出 45 点，圆满成功。', orig)) return '合规改写被误判';
+      if (chat.polishAcceptable('侦查检定掷出 55 点，成功。', orig)) return '数值被篡改却通过';
+      if (chat.polishAcceptable('侦查检定，成功。', orig)) return '数值丢失却通过';
+      if (chat.polishAcceptable('请把刚才的数值发我', orig)) return '索要结果的文案通过';
+      if (chat.polishAcceptable('', orig)) return '空文案通过';
+      return true;
+    });
+    check('U9-14 接线：transformReplies 含润色段且按 scope 过滤', () => {
+      if (!/polishScopeOf\(r && r\.cmd\)/.test(enhSrc)) return 'enhance 未按 scope 过滤';
+      if (!/polishAcceptable\(/.test(enhSrc)) return 'enhance 未做硬校验';
+      return true;
+    });
+    check('U9-15 翻译：语言包按名匹配（含模型覆盖），未命中为 null', () => {
+      const cfg = chat.normalizeChatCfg({ translate: { enabled: true, packs: [{ name: '精灵语', prompt: '优雅', model: 'm2' }] } });
+      const p = chat.matchLangPack(cfg, '精灵语');
+      if (!p || p.model !== 'm2') return '语言包未命中/模型未覆盖';
+      if (chat.matchLangPack(cfg, '矮人语')) return '未配置的语言名不应命中';
+      if (chat.matchLangPack(chat.normalizeChatCfg({}), '精灵语')) return '翻译关闭时不应命中';
+      return true;
+    });
+    check('U9-15 接线：.lang 列出可用语言包 + main 注入 langPacks', () => {
+      const adv = fs.readFileSync(path.join(__dirname, '..', 'src', 'dice-core', 'brain', 'cmd', 'setting-adv.js'), 'utf8');
+      if (!/ctx\.langPacks/.test(adv)) return '.lang 未读取 ctx.langPacks';
+      if (!/brain\.langPacks\s*=/.test(mainSrc)) return 'main.js 未注入 langPacks';
+      return true;
+    });
+    check('U9-16 横切：会话 .set ai off → AI chat 静默（@ 也不回）', () => {
+      if (!/session\.settings\.switches\.ai === false\) return;/.test(rtSrc)) return 'runtime 未读会话 ai 开关';
+      if (!/if \(sw\.ai === false\) return/.test(aiCmdSrc)) return '.ai 指令未读会话开关';
+      return true;
+    });
+    check('U9-17 横切：AI 回复统一经通道 send（send-gate 节流）', () => {
+      if (!/sendGate|gate/.test(rtSrc)) return 'runtime 未过发送节流闸';
+      return true;
+    });
+    check('U9-18 横切：AI 调用用量回写中枢（recordUsage 注入并调用）', () => {
+      if (!/recordUsage/.test(mainSrc)) return 'main 未注入 recordUsage';
+      if (!/usage\(callCfg\.__hubModelId, out\.usage\)/.test(rtSrc)) return 'runtime 未回写用量';
+      return true;
+    });
+    check('U9-12 识图：directUrl 关闭时下载图片转 data URI（真 HTTP 兜底）', () => {
+      const tr = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'dice-ai-transport.js'), 'utf8');
+      if (!/fetchImageAsDataUri/.test(tr)) return 'transport 缺图片下载函数';
+      if (!/fetchImageAsDataUri/.test(rtSrc)) return 'runtime 未接入直链开关';
+      if (!/fetchImageAsDataUri/.test(mainSrc)) return 'main 未注入图片下载依赖';
+      const cfg = chat.normalizeChatCfg({});
+      if (cfg.vision.directUrl !== true) return '直链模式应默认开启';
+      return true;
+    });
+  })();
+
   console.log('\n[回归测试汇总] GREEN ' + pass + ' · RED ' + fail);
   process.exit(fail ? 1 : 0);
 })();

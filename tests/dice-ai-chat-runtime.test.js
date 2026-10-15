@@ -107,6 +107,20 @@ test('U9-11：白名单开启后未命中群不回、命中群照常', async () 
   assert.equal(env.sent.length, 1);
 });
 
+test('U9-11：被白名单拒绝的群不进上下文缓冲（群记忆不绕过白名单）', async () => {
+  const env = makeEnv({ cfg: { whitelist: { enabled: true, groups: 'g9' } } });
+  // 默认群 g1 不在名单内：发普通消息 → 不回、且不许进上下文缓冲
+  await env.engine.onMessage(groupMsg('绝不应入上下文的句子'), env.channel);
+  assert.equal(env.sent.length, 0);
+  assert.equal(env.calls.length, 0);
+  // 放开名单后再触发：历史里不得出现先前那条被拒消息
+  env.cfg.whitelist.groups = 'g1';
+  await env.engine.onMessage(groupMsg('@10000 接着说'), env.channel);
+  assert.equal(env.calls.length, 1);
+  const contents = env.calls[0].messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+  assert.ok(!contents.includes('绝不应入上下文的句子'), '被白名单拒绝的消息不应被上下文/摘要回收');
+});
+
 test('U9-5：待机插话受每群冷却限制，@ 无视冷却必回', async () => {
   const env = makeEnv({ cfg: { trigger: { idleProb: 100, cooldownSec: 60 } }, rand: () => 0 });
   await env.engine.onMessage(groupMsg('闲聊一号'), env.channel);

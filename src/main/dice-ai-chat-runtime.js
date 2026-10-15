@@ -25,6 +25,7 @@ function createAiChatEngine(deps) {
   const brain = d.brain;             // hub.brain（sessions/cards/help）
   const chatRaw = d.chatRaw;         // transport.chatRaw
   const embeddingsRaw = d.embeddingsRaw || null;
+  const fetchImageAsDataUri = d.fetchImageAsDataUri || null;   // U9-12 直链关闭时下载图片转 data URI
   const getCfg = d.getCfg;           // () => { cfg, botId, botName, hubCfg }（cfg 已 normalizeChatCfg）
   const recordUsage = d.recordUsage;
   const log = d.log || (() => {});
@@ -250,6 +251,17 @@ function createAiChatEngine(deps) {
     const images = chatCore.collectImages(cfg, msg);
     /* U9-12：含图消息必须配置 Vision 模型，否则忽略图片（纯文本继续） */
     const visionCfg = cfg.vision.model ? modelCfg(hubCfg, cfg.vision.model) : null;
+    /* U9-12 直链模式：开（默认）= 直接把图片 URL 发给模型；关 = 先由本进程下载转 data URI
+     * （QQ 图链带签名/过期，模型服务商侧拉不到）。下载失败降级回直链，不丢回复。 */
+    let sentImages = images;
+    if (images.length && visionCfg && cfg.vision.directUrl === false && fetchImageAsDataUri) {
+      const conv = [];
+      for (const im of images) {
+        const r = await fetchImageAsDataUri(im, 8000);
+        conv.push(r && r.ok ? r.dataUri : im);
+      }
+      sentImages = conv;
+    }
     let msgForPrompt = msg;
     if (images.length && visionCfg) {
       const vp = cfg.vision.prompt || '（请先描述图片内容，再结合对话语境回应）';
@@ -265,7 +277,7 @@ function createAiChatEngine(deps) {
       facts,
       history,
       msg: msgForPrompt,
-      images: images.length && visionCfg ? images : null,
+      images: images.length && visionCfg ? sentImages : null,
     });
     /* U9-13 NPC 扮演：命中 NPC 触发词则把第一条 system 换成该 NPC 的人设，
      * 因此 NPC 回复在语义上优先于普通 chat；仍复用冷却/记忆/工具/修饰全链路约束。 */
@@ -301,6 +313,9 @@ function createAiChatEngine(deps) {
     if (!cfg || !env.hubCfg) return;
     const gid = groupIdOf(msg);
     const uid = String(msg.user.id);
+    /* U9-11 白名单前置：未命中白名单的会话不进上下文缓冲、不攒批摘要/事实
+     * （白名单管 chat/NPC/群记忆三项——被拒的群若仍 pushHist/攒批会白烧摘要 token） */
+    if (!chatCore.passWhitelist(cfg, gid, uid)) return;
     /* 上下文缓冲：所有非指令消息都记（含未触发回复的），供上下文/摘要/抽取 */
     const text = String(msg.text || '').trim();
     if (text && !/^[.。/#*！！]/.test(text)) pushHist(gid, msg.user.name, text);

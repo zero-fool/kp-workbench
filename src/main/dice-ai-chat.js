@@ -157,6 +157,7 @@ function normalizeChatCfg(raw) {
         roll: psc.roll === true,                      // 掷骰/检定结果
         deck: psc.deck === true,                      // 牌堆抽取结果
         fun: psc.fun === true,                        // 趣味指令结果
+        custom: psc.custom === true,                  // 自定义回复（.custom 触发词模板）
         plugin: psc.plugin === true,                  // 插件指令结果
       },
     },
@@ -256,8 +257,9 @@ function matchNpc(cfg, msg) {
   return null;
 }
 
-/* U9-14 润色范围识别：按指令名归类到 scope（roll / deck / fun / plugin）。
- * 前三类来自内置指令分组，其余（含插件自定义指令）一律归 plugin。 */
+/* U9-14 润色范围识别：按指令名归类到 scope（roll / deck / fun / custom / plugin）。
+ * 前三类来自内置指令分组；"custom:<触发词>" 是自定义回复模板（CommandBrain 标记）归 custom；
+ * 其余（含插件自定义指令）一律归 plugin。 */
 const POLISH_SCOPE_CMDS = {
   roll: ['r', 'rh', 'ra', 'rd', 'rab', 'rap', 'rav', 'rcv', 'rx', 'ba', 'bav', 'ww', 'dx', 'rdx', 'rdc', 'sc', 'en', 'coc', 'dnd'],
   deck: ['drew', 'draw', 'deck'],
@@ -267,6 +269,7 @@ const POLISH_SCOPE_CMDS = {
 function polishScopeOf(cmdName) {
   const n = String(cmdName || '').toLowerCase();
   if (!n) return null;
+  if (n.startsWith('custom:')) return 'custom';       // 自定义回复模板
   for (const k of Object.keys(POLISH_SCOPE_CMDS)) {
     if (POLISH_SCOPE_CMDS[k].includes(n)) return k;
   }

@@ -89,6 +89,10 @@ function makeContext(msg, session, brain, extra) {
     render: brain.renderer.render.bind(brain.renderer),
     /* U9-15：可用自定义语言包名（供 .lang 列出）；由主进程经 brain.langPacks 注入 */
     langPacks: (typeof brain.langPacks === 'function') ? brain.langPacks() : [],
+    /* U9-11：AI 白名单判定（session → 是否放行）；由主进程经 brain.aiWhitelistPass 注入，
+     * 供 .ai 指令同受白名单约束（Dice-Next 约定：白名单开启后群管理员发 .ai 也被拒）。
+     * 未注入（测试通道/离线）→ null 表示不受限。 */
+    aiWhitelistPass: (typeof brain.aiWhitelistPass === 'function') ? brain.aiWhitelistPass : null,
     // 按规则渲染投掷/检定回复：ruleId 缺省取当前会话规则；fallback 为活动规则包给出的原文（未自定义时优先用它）
     ruleReply: (key, vars, ruleId, fallback) => (brain.renderer && typeof brain.renderer.ruleReply === 'function')
       ? brain.renderer.ruleReply(ruleId || (session && session.rule) || 'plain', key, vars || {}, fallback || '')
@@ -174,19 +178,21 @@ class CommandBrain {
     if (ctxData && ctxData.state && ctxData.state.sessions && ctxData.state.sessions[session.id]) {
       Object.assign(session, ctxData.state.sessions[session.id]);
     }
-    const reply = (text) => ({
+    const reply = (text, cmdOverride) => ({
       sessionId: session.id,
       segments: [{ type: 'text', text }],
       at: messageIn.user && messageIn.user.id,
       /* U9-14：回传最终命中的指令名（含别名映射后的真名），供回复润色按 scope 识别来源 */
-      cmd: parsed.name
+      cmd: cmdOverride || parsed.name
     });
     const ctx = makeContext(messageIn, session, this, ctxData);
     // 自定义触发词短路：命中优先于内置指令，但不覆盖内置指令（registered trigger ≠ builtin）
     const customCmd = getCommand('custom');
     if (customCmd && typeof customCmd.handleTrigger === 'function') {
       const hit = customCmd.handleTrigger(ctx, parsed.name);
-      if (hit) return [reply(hit.text)];
+      /* U9-14：自定义回复模板用 "custom:<触发词>" 标记，
+       * 润色据此归入独立的 custom 范围（与 .custom 管理指令区分） */
+      if (hit) return [reply(hit.text, 'custom:' + parsed.name)];
     }
     const cmd = getCommand(parsed.name);
     if (!cmd) {

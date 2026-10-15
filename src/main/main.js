@@ -1821,6 +1821,20 @@ function registerIpc() {
       } catch (_) { return []; }
     };
   } catch (_) {}
+  /* U9-11：把 AI 白名单判定注入 brain（.ai 指令同受白名单约束）。
+   * session.id = "channel:groupId" 或 "channel:private:uid"；sender.id 即 QQ 号。 */
+  try {
+    diceWorkbench.hub.brain.aiWhitelistPass = (session, sender) => {
+      try {
+        const aic = aiChatCore.normalizeChatCfg(((doc.settings && doc.settings.dice) || {}).aiChat);
+        const sid = String((session && session.id) || '');
+        const rest = sid.slice(sid.indexOf(':') + 1);   // 去掉通道前缀
+        const gid = (!rest || rest.indexOf('private:') === 0) ? '' : rest;
+        const uid = String((sender && sender.id) || '');
+        return aiChatCore.passWhitelist(aic, gid, uid);
+      } catch (_) { return true; }
+    };
+  } catch (_) {}
   global.diceNetAdapters = diceWorkbench.adapters; // 兼容既有 before-quit 回收逻辑
 
   // 连接中心（分区 2）
@@ -1866,6 +1880,8 @@ function registerIpc() {
     brain: diceWorkbench.hub.brain,
     chatRaw: (cfg, msgs, opts) => diceAiTransport.chatRaw(cfg, msgs, opts),
     embeddingsRaw: (cfg, input, opts) => diceAiTransport.embeddingsRaw(cfg, input, opts),
+    /* U9-12：直链模式关闭时下载图片转 data URI（QQ 图链签名/过期，模型侧拉不到） */
+    fetchImageAsDataUri: (url, timeoutMs) => diceAiTransport.fetchImageAsDataUri(url, timeoutMs),
     getCfg() {
       const d = (doc.settings && doc.settings.dice) || {};
       const cfg = aiChatCore.normalizeChatCfg(d.aiChat);

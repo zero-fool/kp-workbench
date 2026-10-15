@@ -178,4 +178,44 @@ async function probe(cfg) {
   }
 }
 
-module.exports = { chatRaw, chat, probe, embeddingsRaw, sanitizeMessages, normalizeCfg };
+/* U9-12 直链模式关闭时：把图片 URL 下载成本地 data URI（QQ 图链常带签名/过期，
+ * 模型服务商侧拉不到；下载由本进程完成）。成功 → { ok, dataUri }；失败 → { ok:false }
+ * （调用侧降级回直链，绝不因取图失败丢掉整条回复）。 */
+async function fetchImageAsDataUri(url, timeoutMs = 8000, signal) {
+  let u;
+  try { u = new URL(String(url || '')); } catch (_) { return { ok: false, error: 'url invalid' }; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false, error: 'scheme' };
+  const lib = u.protocol === 'https:' ? https : http;
+  return new Promise((resolve) => {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    if (signal) { if (signal.aborted) { resolve({ ok: false, error: 'cancelled' }); return; } signal.addEventListener('abort', onAbort, { once: true }); }
+    let done = false;
+    const finish = (r) => { if (done) return; done = true; clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); resolve(r); };
+    const timer = setTimeout(() => { controller.abort(); finish({ ok: false, error: 'timeout' }); }, timeoutMs);
+    try {
+      const req = lib.request({ hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80), path: u.pathname + u.search, method: 'GET', signal: controller.signal }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {   // 跟一次重定向
+          res.resume();
+          fetchImageAsDataUri(new URL(res.headers.location, u).toString(), timeoutMs, signal).then(finish);
+          return;
+        }
+        if (res.statusCode !== 200) { res.resume(); finish({ ok: false, error: 'HTTP ' + res.statusCode }); return; }
+        const ctype = String(res.headers['content-type'] || '').split(';')[0].trim();
+        if (!/^image\//.test(ctype)) { res.resume(); finish({ ok: false, error: 'not image' }); return; }
+        const chunks = []; let size = 0; let overflow = false;
+        res.on('data', (c) => {
+          size += c.length;
+          if (size > 8 * 1024 * 1024) { overflow = true; res.destroy(); return; }   // 超 8MB 放弃转码
+          chunks.push(c);
+        });
+        res.on('end', () => { if (overflow) finish({ ok: false, error: 'too large' }); else finish({ ok: true, dataUri: `data:${ctype};base64,${Buffer.concat(chunks).toString('base64')}` }); });
+        res.on('error', () => finish({ ok: false, error: 'read error' }));
+      });
+      req.on('error', () => finish({ ok: false, error: 'net error' }));
+      req.end();
+    } catch (_) { finish({ ok: false, error: 'request error' }); }
+  });
+}
+
+module.exports = { chatRaw, chat, probe, embeddingsRaw, sanitizeMessages, normalizeCfg, fetchImageAsDataUri };
