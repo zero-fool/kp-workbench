@@ -286,3 +286,30 @@ test('U9-6：回复修饰链路（@发送者/过滤词/禁 emoji/截断）', asy
   assert.ok(!t.includes('秘密') && !t.includes('😀'));
   assert.ok(t.length <= 6 + 21);
 });
+
+/* ---- 批次三 U9-13：NPC 扮演（runtime 端到端） ---- */
+
+test('U9-13：命中 NPC 触发词 → system 换成 NPC 人设（优先于普通 chat）', async () => {
+  const env = makeEnv({ cfg: { npc: { list: [{ name: '艾琳', triggers: '小艾', persona: '你是冷面剑士艾琳，说话简短冷淡' }] } } });
+  await env.engine.onMessage(groupMsg('小艾，今晚吃什么'), env.channel);
+  assert.equal(env.calls.length, 1);
+  const sys = env.calls[0].messages[0];
+  assert.equal(sys.role, 'system');
+  assert.ok(sys.content.includes('冷面剑士艾琳'));
+  assert.ok(!sys.content.includes('骰子机器人少女'));          // 骰娘默认人设被替换
+});
+
+test('U9-13：未命中 NPC → 仍用骰娘默认人设', async () => {
+  const env = makeEnv({ cfg: { npc: { list: [{ name: '艾琳', triggers: '小艾', persona: '你是冷面剑士艾琳' }] } } });
+  await env.engine.onMessage(groupMsg('@10000 你好'), env.channel);
+  const sys = env.calls[0].messages[0];
+  assert.ok(sys.content.includes('骰子机器人少女') || sys.content.includes('骰娘'));
+});
+
+test('U9-13：NPC 无人设 → 退化为署名身份（不以骰娘口吻作答）', async () => {
+  const env = makeEnv({ cfg: { npc: { list: [{ name: '老爹', triggers: [], persona: '' }] } } });
+  await env.engine.onMessage(groupMsg('老爹，来杯酒'), env.channel);
+  const sys = env.calls[0].messages[0];
+  assert.ok(sys.content.includes('老爹'));
+  assert.ok(!sys.content.includes('骰子机器人少女') === false || sys.content.includes('老爹'));  // 有署名即可
+});

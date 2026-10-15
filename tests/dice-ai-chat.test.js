@@ -245,3 +245,104 @@ test('runToolLoop：execTool 抛错转 ERR 回喂不中断', async () => {
   const toolMsg = msgs2[1].find((m) => m.role === 'tool');
   assert.match(toolMsg.content, /^ERR 工具炸了/);
 });
+
+/* ---- 批次三 U9-13~U9-15：NPC 扮演 / 回复润色 / 自定义语言翻译 ---- */
+
+test('normalizeChatCfg：NPC/润色/翻译配置规范化（润色与翻译默认关）', () => {
+  const c = chat.normalizeChatCfg({
+    npc: { enabled: false, list: [{ name: '老爹', triggers: '爹地\n老爹头', persona: '你是酒馆老板老爹', enabled: true }, { name: '', triggers: '', persona: '' }] },
+    polish: { enabled: true, model: 'p-model', persona: '短句', scope: { roll: true, plugin: true } },
+    translate: { enabled: true, model: 't-model', packs: [{ name: '精灵语', prompt: '用优雅古风', model: 'm2' }, { name: '' }] },
+  });
+  assert.equal(c.npc.enabled, false);
+  assert.equal(c.npc.list.length, 1);                       // 三者全空的行被丢弃
+  assert.equal(c.npc.list[0].name, '老爹');
+  assert.deepEqual(c.npc.list[0].triggers, ['爹地', '老爹头']);
+  assert.equal(c.polish.enabled, true);
+  assert.equal(c.polish.model, 'p-model');
+  assert.equal(c.polish.persona, '短句');
+  assert.deepEqual(c.polish.scope, { roll: true, deck: false, fun: false, plugin: true });
+  assert.equal(c.translate.enabled, true);
+  assert.equal(c.translate.packs.length, 1);                 // 无名语言包被丢弃
+  assert.equal(c.translate.packs[0].name, '精灵语');
+  assert.equal(c.translate.packs[0].model, 'm2');
+  // 出厂默认：三者全关（不消耗 token）
+  const d = chat.normalizeChatCfg(null);
+  assert.equal(d.npc.enabled, true);
+  assert.deepEqual(d.npc.list, []);
+  assert.equal(d.polish.enabled, false);
+  assert.deepEqual(d.polish.scope, { roll: false, deck: false, fun: false, plugin: false });
+  assert.equal(d.translate.enabled, false);
+  assert.deepEqual(d.translate.packs, []);
+});
+
+test('matchNpc：名字/触发词命中；停用条目跳过；无人设时仍返回该 NPC', () => {
+  const cfg = chat.normalizeChatCfg({
+    npc: { list: [
+      { name: '艾琳', triggers: '小艾,艾琳小姐', persona: '冷面剑士艾琳', enabled: true },
+      { name: '罗伊', triggers: '罗伊先生', persona: '', enabled: false },
+    ] },
+  });
+  assert.equal(chat.matchNpc(cfg, { text: '艾琳小姐，这边走！' }).npc.name, '艾琳');   // 触发词命中
+  assert.equal(chat.matchNpc(cfg, { text: '小艾你好' }).npc.name, '艾琳');             // 触发词命中
+  assert.equal(chat.matchNpc(cfg, { text: '艾琳，你在吗' }).npc.name, '艾琳');         // 名字命中
+  assert.equal(chat.matchNpc(cfg, { text: '罗伊先生来了' }), null);                    // 已停用 → 跳过
+  assert.equal(chat.matchNpc(cfg, { text: '完全无关的消息' }), null);                  // 无命中
+  assert.equal(chat.matchNpc(chat.normalizeChatCfg(null), { text: '艾琳' }), null);    // 名单空
+  // 无人设的条目也应返回（调用侧会退化为「署名身份」）
+  const noPersona = chat.normalizeChatCfg({ npc: { list: [{ name: '老爹', triggers: [], persona: '' }] } });
+  assert.equal(chat.matchNpc(noPersona, { text: '老爹，来杯酒' }).npc.name, '老爹');
+});
+
+test('polishScopeOf：掷骰/牌堆/趣味归类，其余（含插件）归 plugin', () => {
+  assert.equal(chat.polishScopeOf('r'), 'roll');
+  assert.equal(chat.polishScopeOf('ra'), 'roll');
+  assert.equal(chat.polishScopeOf('rd'), 'roll');
+  assert.equal(chat.polishScopeOf('draw'), 'deck');
+  assert.equal(chat.polishScopeOf('drew'), 'deck');
+  assert.equal(chat.polishScopeOf('jrrp'), 'fun');
+  assert.equal(chat.polishScopeOf('gacha'), 'fun');
+  assert.equal(chat.polishScopeOf('myplugin'), 'plugin');     // 插件自定义指令
+  assert.equal(chat.polishScopeOf(''), null);                // 无指令名 → 不润色
+});
+
+test('polishAcceptable：保留全部数字才通过；改/丢/编数字即判废', () => {
+  const orig = '掷骰 1d100：45 = 45\n技能检定：45/60 = 成功';
+  assert.equal(chat.polishAcceptable('剑锋擦过肩甲，掷骰 1d100：45 = 45，技能检定 45/60，成功。', orig), true);
+  // 把 45 改成 46：判废
+  assert.equal(chat.polishAcceptable('掷骰 1d100：46 = 46，技能检定 46/60，成功。', orig), false);
+  // 丢掉 60：判废
+  assert.equal(chat.polishAcceptable('掷骰 1d100：45 = 45，技能检定 45/600，成功。'.replace('45/600', '45'), orig), false);
+  // 编造原文没有的新数值：判废
+  assert.equal(chat.polishAcceptable('掷骰 1d100：45 = 45，技能检定 45/60 = 成功，再掷 1d20 得 7。', orig), false);
+  // 索要结果型话术：判废
+  assert.equal(chat.polishAcceptable('请把你的掷骰结果发给我', orig), false);
+  // 夹带伪骰点指令：判废
+  assert.equal(chat.polishAcceptable('好的，.r 1d100 走起', orig), false);
+  // 空/开关提示：判废
+  assert.equal(chat.polishAcceptable('', orig), false);
+  assert.equal(chat.polishAcceptable('骰娘 AI 尚未配置', orig), false);
+});
+
+test('buildPolishMessages：默认润色人设 + 原文注入；自定义人设优先', () => {
+  const d = chat.buildPolishMessages(chat.normalizeChatCfg(null), '掷骰 1d6：3 = 3', '');
+  assert.equal(d[0].role, 'system');
+  assert.ok(d[0].content.includes('骰娘'));
+  assert.ok(d[1].content.includes('掷骰 1d6：3 = 3'));
+  assert.ok(d[1].content.includes('不得新增或删改任何数值'));
+  const custom = chat.buildPolishMessages(chat.normalizeChatCfg({ polish: { persona: '我是一条龙' } }), '掷骰 1d6：3 = 3', '地下城入口');
+  assert.equal(custom[0].content, '我是一条龙\n\n【当前场景背景】\n地下城入口');
+});
+
+test('matchLangPack：大小写不敏感精确命中；buildTranslateMessages 带附加要求', () => {
+  const cfg = chat.normalizeChatCfg({ translate: { packs: [{ name: '精灵语', prompt: '用优雅古风' }, { name: '矮人语' }] } });
+  assert.equal(chat.matchLangPack(cfg, '精灵语').name, '精灵语');
+  assert.equal(chat.matchLangPack(cfg, ' 精灵语 ').name, '精灵语');
+  assert.equal(chat.matchLangPack(cfg, '精灵'), null);        // 不做模糊匹配
+  assert.equal(chat.matchLangPack(cfg, ''), null);
+  assert.equal(chat.matchLangPack(chat.normalizeChatCfg(null), '精灵语'), null);
+  const m = chat.buildTranslateMessages({ name: '精灵语', prompt: '用优雅古风' }, '掷骰 1d6：3 = 3');
+  assert.ok(m[0].content.includes('精灵语') === false);       // system 不含目标名（在 user 里）
+  assert.ok(m[0].content.includes('用优雅古风'));
+  assert.ok(m[1].content.includes('「精灵语」') && m[1].content.includes('掷骰 1d6：3 = 3'));
+});

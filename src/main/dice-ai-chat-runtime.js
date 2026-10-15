@@ -267,6 +267,15 @@ function createAiChatEngine(deps) {
       msg: msgForPrompt,
       images: images.length && visionCfg ? images : null,
     });
+    /* U9-13 NPC 扮演：命中 NPC 触发词则把第一条 system 换成该 NPC 的人设，
+     * 因此 NPC 回复在语义上优先于普通 chat；仍复用冷却/记忆/工具/修饰全链路约束。 */
+    const npcHit = chatCore.matchNpc(cfg, msg);
+    if (npcHit && npcHit.npc && npcHit.npc.persona) {
+      messages[0] = { role: 'system', content: npcHit.npc.persona };
+    } else if (npcHit && npcHit.npc) {
+      /* 有名字无人设时：至少署名身份，避免模型默认以骰娘口吻作答 */
+      messages[0] = { role: 'system', content: `你是「${npcHit.npc.name}」本人（TRPG 里的 NPC）。` + chatCore.DEFAULT_CHAT_PERSONA };
+    }
     /* 调用模型：Chat model = 当前生效模型（hubCfg）；带图则走 Vision 模型 */
     const callCfg = (images.length && visionCfg) ? visionCfg : hubCfg;
     const tools = chatCore.buildToolDefs(cfg);

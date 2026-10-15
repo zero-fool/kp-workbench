@@ -143,3 +143,129 @@ test('偷表情：meme 开时从消息抽取入库（插话附带）', async () 
   assert.strictEqual(bridge.calls[bridge.calls.length - 1].feature, 'interject');
   assert.match(textOfRs(replies), /嘀咕/);
 });
+/* ---- 批次三 U9-14 回复润色 ---- */
+
+function makePolishBridge(text, ok = true) {
+  const calls = [];
+  return {
+    calls,
+    async chat(params, msgs) {
+      calls.push({ feature: params.feature, msg: msgs });
+      if (params.feature === 'polish') return { ok, text };
+      return { ok: true, text: '好嘞~' };
+    }
+  };
+}
+const chatCoreForPolish = require('../src/main/dice-ai-chat');
+
+test('U9-14：润色命中范围内指令 → 改写回复；保留数字硬校验通过才替换', async () => {
+  const bridge = makePolishBridge('剑锋擦过肩甲——掷骰 1d100：45 = 45，技能检定 45/60，成功！');
+  const tr = createTransformReplies({
+    aiBridge: bridge,
+    getConfig: () => ({ enabled: true, features: { optimize: false, interject: false, meme: false }, interjectProb: 0 }),
+    getChatCfg: () => chatCoreForPolish.normalizeChatCfg({ polish: { enabled: true, scope: { roll: true } } })
+  });
+  const replies = await tr({
+    msg: { text: '.ra 侦查', user: { id: 'u' } },
+    replies: [{ cmd: 'ra', segments: [{ type: 'text', text: '掷骰 1d100：45 = 45\n技能检定：45/60 = 成功' }] }]
+  });
+  assert.strictEqual(bridge.calls.length, 1);
+  assert.strictEqual(bridge.calls[0].feature, 'polish');
+  assert.ok(textOfRs(replies).includes('剑锋擦过肩甲'));   // 已改写
+  assert.ok(textOfRs(replies).includes('45') && textOfRs(replies).includes('60'));  // 数字保留
+});
+
+test('U9-14：润色判废（模型改了数字）→ 回退发原文，数值绝不改动', async () => {
+  const bridge = makePolishBridge('掷骰 1d100：99 = 99，大失败！');   // 把 45 改成 99 → 判废
+  const tr = createTransformReplies({
+    aiBridge: bridge,
+    getConfig: () => ({ enabled: true, features: { optimize: false, interject: false, meme: false }, interjectProb: 0 }),
+    getChatCfg: () => chatCoreForPolish.normalizeChatCfg({ polish: { enabled: true, scope: { roll: true } } })
+  });
+  const replies = await tr({
+    msg: { text: '.ra 侦查', user: { id: 'u' } },
+    replies: [{ cmd: 'ra', segments: [{ type: 'text', text: '掷骰 1d100：45 = 45\n技能检定：45/60 = 成功' }] }]
+  });
+  assert.ok(textOfRs(replies).includes('45') && !textOfRs(replies).includes('99'));   // 原文保留
+});
+
+test('U9-14：不在覆盖范围内的指令不润色（scope 未勾选该类）', async () => {
+  const bridge = makePolishBridge('改写稿');
+  const tr = createTransformReplies({
+    aiBridge: bridge,
+    getConfig: () => ({ enabled: true, features: { optimize: false, interject: false, meme: false }, interjectProb: 0 }),
+    getChatCfg: () => chatCoreForPolish.normalizeChatCfg({ polish: { enabled: true, scope: { roll: false } } })
+  });
+  const replies = await tr({
+    msg: { text: '.ra 侦查', user: { id: 'u' } },
+    replies: [{ cmd: 'ra', segments: [{ type: 'text', text: '掷骰 1d100：45 = 45' }] }]
+  });
+  assert.strictEqual(bridge.calls.length, 0);                // 未勾选 roll → 不调用
+  assert.ok(textOfRs(replies).includes('45'));
+});
+
+test('U9-14：润色功能关闭（enabled=false）→ 完全不调用 AI', async () => {
+  const bridge = makePolishBridge('改写稿');
+  const tr = createTransformReplies({
+    aiBridge: bridge,
+    getConfig: () => ({ enabled: true, features: { optimize: false, interject: false, meme: false }, interjectProb: 0 }),
+    getChatCfg: () => chatCoreForPolish.normalizeChatCfg({ polish: { enabled: false, scope: { roll: true } } })
+  });
+  const replies = await tr({
+    msg: { text: '.ra 侦查', user: { id: 'u' } },
+    replies: [{ cmd: 'ra', segments: [{ type: 'text', text: '掷骰 1d100：45 = 45' }] }]
+  });
+  assert.strictEqual(bridge.calls.length, 0);
+});
+
+/* ---- 批次三 U9-15 自定义语言翻译 ---- */
+
+test('U9-15：.lang 命中语言包 → 回复被翻译；翻译失败回退原文', async () => {
+  let translateText = 'Thy check succeeds! (45/60)';
+  const bridge = {
+    calls: [],
+    async chat(params, msgs) {
+      this.calls.push({ feature: params.feature, msg: msgs });
+      return { ok: true, text: translateText };
+    }
+  };
+  const tr = createTransformReplies({
+    aiBridge: bridge,
+    getConfig: () => ({ enabled: true, features: { optimize: false, interject: false, meme: false }, interjectProb: 0 }),
+    getChatCfg: () => chatCoreForPolish.normalizeChatCfg({ translate: { enabled: true, packs: [{ name: '精灵语' }] } }),
+    langOf: () => '精灵语'
+  });
+  const replies = await tr({
+    msg: { text: '.ra 侦查', user: { id: 'u' } },
+    replies: [{ cmd: 'ra', segments: [{ type: 'text', text: '技能检定：45/60 = 成功' }] }]
+  });
+  assert.strictEqual(bridge.calls[0].feature, 'translate');
+  assert.ok(textOfRs(replies).includes('Thy check succeeds'));   // 已翻译
+  // 翻译失败 → 回退原文
+  translateText = '';
+  const replies2 = await tr({
+    msg: { text: '.ra 侦查', user: { id: 'u' } },
+    replies: [{ cmd: 'ra', segments: [{ type: 'text', text: '技能检定：45/60 = 成功' }] }]
+  });
+  assert.ok(textOfRs(replies2).includes('45/60'));               // 原文保留
+});
+
+test('U9-15：未命中语言包或翻译关闭 → 不调用 AI', async () => {
+  const bridge = makePolishBridge('译文');
+  const noHit = createTransformReplies({
+    aiBridge: bridge,
+    getConfig: () => ({ enabled: true, features: { optimize: false, interject: false, meme: false }, interjectProb: 0 }),
+    getChatCfg: () => chatCoreForPolish.normalizeChatCfg({ translate: { enabled: true, packs: [{ name: '精灵语' }] } }),
+    langOf: () => '矮人语'                                          // 未配置该语言包
+  });
+  const off = createTransformReplies({
+    aiBridge: bridge,
+    getConfig: () => ({ enabled: true, features: { optimize: false, interject: false, meme: false }, interjectProb: 0 }),
+    getChatCfg: () => chatCoreForPolish.normalizeChatCfg({ translate: { enabled: false, packs: [{ name: '精灵语' }] } }),
+    langOf: () => '精灵语'
+  });
+  const r1 = await noHit({ msg: { text: '.ra 侦查', user: { id: 'u' } }, replies: [{ cmd: 'ra', segments: [{ type: 'text', text: '掷骰 1d100：45 = 45' }] }] });
+  const r2 = await off({ msg: { text: '.ra 侦查', user: { id: 'u' } }, replies: [{ cmd: 'ra', segments: [{ type: 'text', text: '掷骰 1d100：45 = 45' }] }] });
+  assert.strictEqual(bridge.calls.length, 0);
+  assert.ok(textOfRs(r1).includes('45') && textOfRs(r2).includes('45'));
+});

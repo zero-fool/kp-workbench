@@ -133,9 +133,14 @@ function runRules(ctx, args) {
 function packOk(id, packs) { return packs.some(p => p.manifest.id === id); }
 
 /* ─── .lang ───────────────────────────────────────────── */
+/* U9-15：自定义语言包由工作台「骰娘 AI 设置 → 语言包」配置（settings.dice.aiChat.translate.packs）。
+ * 指令本体仍只负责把语言名写进 session.lang；真正翻译发生在回复送出前（主进程 transformReplies）。 */
 function runLang(ctx, args) {
   const v = argStr(args);
-  if (!v) return { text: `当前语言：${ctx.session.lang || 'zh-Hans'}\n本地工作台内置文案为简体中文；可用：.lang zh-Hans / .lang 简体 / .lang clr` };
+  /* 语言包清单：由主进程注入 ctx.langPacks（语言名数组），便于群内直接查看可用语言 */
+  const packs = Array.isArray(ctx.langPacks) ? ctx.langPacks.filter(Boolean) : [];
+  const packLine = packs.length ? `\n可用语言包：${packs.join(' / ')}（在工作台「骰娘 AI 设置 → 语言包」里配置）` : '';
+  if (!v) return { text: `当前语言：${ctx.session.lang || 'zh-Hans'}${packLine}\n用法：.lang <语言名> / .lang clr` };
   // Dice-Next 兼容：.lang clr 清除个人语言设定，回退默认。
   if (v.toLowerCase() === 'clr' || v.toLowerCase() === 'clear') {
     ctx.session.lang = '';
@@ -144,7 +149,9 @@ function runLang(ctx, args) {
   if (v === '简体' || v === '简中' || v === 'zh-cn') ctx.session.lang = 'zh-Hans';
   else if (v === '繁体' || v === '繁中' || v === 'zh-tw') ctx.session.lang = 'zh-Hant';
   else ctx.session.lang = v;
-  return { text: `语言已设为 ${ctx.session.lang}` + (['zh-Hans', 'zh-Hant'].includes(ctx.session.lang) ? '' : '（本地工作台暂只内置简体中文文案）') };
+  const hit = packs.find((p) => String(p).toLowerCase() === ctx.session.lang.toLowerCase());
+  return { text: `语言已设为 ${ctx.session.lang}`
+    + (['zh-Hans', 'zh-Hant'].includes(ctx.session.lang) ? '' : (hit ? '（回复将按该语言包翻译）' : (packLine ? '（未配置该语言包，回复仍为原文）' : '（本地工作台暂只内置简体中文文案）'))) };
 }
 
 /* ─── .text ───────────────────────────────────────────── */

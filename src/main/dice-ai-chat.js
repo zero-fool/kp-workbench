@@ -1,5 +1,5 @@
 'use strict';
-/* src/main/dice-ai-chat.js：骰娘 AI 对话引擎核心（批次二 U9-5~U9-12，对齐 Dice-Next AI · Chat 六大块）。
+/* src/main/dice-ai-chat.js：骰娘 AI 对话引擎核心（批次二 U9-5~U9-12 + 批次三 U9-13~U9-15）。
  *
  * 六大块与归属：
  *   U9-5  触发体系   shouldReply()（@必回/关键词必回/待机插话概率）+ 调用侧每群冷却
@@ -10,6 +10,9 @@
  *   U9-10 工具调用   buildToolDefs() + runToolLoop()（协议循环，工具执行器由调用侧注入）
  *   U9-11 白名单     passWhitelist()（只管 chat/群记忆，润色翻译不受限——由调用侧遵守）
  *   U9-12 图像识别   visionConfig()/collectImages()（多模态消息构造）
+ *   U9-13 NPC 扮演   matchNpc()（触发词命中即以该 NPC 人设回复，优先于普通 chat）
+ *   U9-14 回复润色   polishAcceptable()/buildPolishMessages()（仅改写·硬约束保留数字与成败）
+ *   U9-15 语言翻译   matchLangPack()/buildTranslateMessages()（.lang 自定义语言包）
  *
  * 纯逻辑无 IO：AI 调用、工具执行、存储全部由调用侧注入，保证可单测。
  */
@@ -140,6 +143,29 @@ function normalizeChatCfg(raw) {
       directUrl: v.directUrl !== false,               // 实时消息用图片直链
       prompt: typeof v.prompt === 'string' ? v.prompt : '',
     },
+    /* U9-13 NPC 列表（名字/触发词/人设/启用）；匹配优先于普通 chat */
+    npc: {
+      enabled: (r.npc && typeof r.npc === 'object' ? r.npc.enabled : undefined) !== false,
+      list: normalizeNpcList(r.npc && typeof r.npc === 'object' ? r.npc.list : null),
+    },
+    /* U9-14 回复润色：模式固定「仅改写·保留数字与结果」；scope 覆盖所选来源 */
+    polish: {
+      enabled: rp.enabled === true,                   // 默认关（避免额外 token 消耗）
+      model: String(rp.model || '').trim(),           // 润色模型名（空 = 当前聊天模型）
+      persona: typeof rp.persona === 'string' ? rp.persona : '',   // 空 = 内置默认润色人设
+      scope: {
+        roll: psc.roll === true,                      // 掷骰/检定结果
+        deck: psc.deck === true,                      // 牌堆抽取结果
+        fun: psc.fun === true,                        // 趣味指令结果
+        plugin: psc.plugin === true,                  // 插件指令结果
+      },
+    },
+    /* U9-15 自定义语言翻译：.lang 指定语言名后，骰娘回复按语言包翻译 */
+    translate: {
+      enabled: rt.enabled === true,
+      model: String(rt.model || '').trim(),           // 翻译模型名（空 = 当前聊天模型）
+      packs: normalizePacks(rt.packs),
+    },
   };
 }
 
@@ -155,8 +181,8 @@ function passWhitelist(cfg, groupId, userId) {
 }
 
 /* U9-5 触发判定。ctx: { botId, botName, rand }（rand 注入便于测试，缺省 Math.random）。
- * 返回 { reply, reason }，reason ∈ at / keyword / idle / none。
- * 注意：@必回与关键词必回「无视冷却」（冷却由调用侧在 reason 为 idle 时执行）。 */
+ * 返回 { reply, reason }，reason ∈ npc / at / keyword / idle / none。
+ * 注意：@必回、关键词必回与 NPC 命中「无视冷却」（冷却由调用侧在 reason 为 idle 时执行）。 */
 function shouldReply(cfg, msg, ctx) {
   const c = ctx || {};
   const rand = typeof c.rand === 'function' ? c.rand : Math.random;
@@ -167,6 +193,9 @@ function shouldReply(cfg, msg, ctx) {
   /* 指令消息一律不触发 AI chat（避免 .r/.st 等触发插话，也与 .ai 指令双响应） */
   if (/^[.。/#*！！]/.test(text.trim())) return { reply: false, reason: 'none' };
   if (!passWhitelist(cfg, gid, uid)) return { reply: false, reason: 'none' };
+  /* U9-13 NPC 扮演：命中 NPC 名字/触发词必回（优先于普通 chat 触发，
+   * reason=npc 与 at/keyword 同级，均不受每群冷却限制） */
+  if (matchNpc(cfg, msg)) return { reply: true, reason: 'npc' };
   const t = cfg.trigger;
   /* @骰娘：文本含 botId（CQ 码/昵称串内都会带上）或 @botName */
   if (t.atReply) {
@@ -203,6 +232,105 @@ function decorateReply(cfg, text, ctx) {
   if (t.length > maxLen) t = t.slice(0, maxLen) + '…';
   return { text: t, atPrefix };
 }
+
+/* ──────────────────────────────────────────────────────────────
+ * 批次三 U9-13~U9-15：NPC 扮演 / 回复润色 / 自定义语言翻译
+ * ────────────────────────────────────────────────────────────── */
+
+/* U9-13 NPC 匹配：名字或任一触发词出现在消息文本里即命中。
+ * 列表顺序 = 优先级（先配置先命中，行为可预期）；已停用的条目跳过。
+ * 返回 { npc } 或 null；调用侧据此把该 NPC 人设作为 system，优先于普通 chat。 */
+function matchNpc(cfg, msg) {
+  const n = (cfg && cfg.npc) || {};
+  if (!n.enabled || !Array.isArray(n.list) || !n.list.length) return null;
+  const text = String((msg && msg.text) || '').trim();
+  if (!text) return null;
+  const low = text.toLowerCase();
+  for (const it of n.list) {
+    if (!it || it.enabled === false) continue;
+    if (it.name && low.includes(it.name.toLowerCase())) return { npc: it };
+    for (const w of (it.triggers || [])) {
+      if (w && low.includes(String(w).toLowerCase())) return { npc: it };
+    }
+  }
+  return null;
+}
+
+/* U9-14 润色范围识别：按指令名归类到 scope（roll / deck / fun / plugin）。
+ * 前三类来自内置指令分组，其余（含插件自定义指令）一律归 plugin。 */
+const POLISH_SCOPE_CMDS = {
+  roll: ['r', 'rh', 'ra', 'rd', 'rab', 'rap', 'rav', 'rcv', 'rx', 'ba', 'bav', 'ww', 'dx', 'rdx', 'rdc', 'sc', 'en', 'coc', 'dnd'],
+  deck: ['drew', 'draw', 'deck'],
+  fun: ['jrrp', 'mrrp', 'zrrp', 'sign', 'ti', 'li', 'nn', 'nnn', 'sn', 'name', 'gn', 'me', 'ak', 'sleep',
+    'gacha', 'favor', 'hiy', 'ob', 'ss', 'cast', 'longrest', 'ds', 'buff'],
+};
+function polishScopeOf(cmdName) {
+  const n = String(cmdName || '').toLowerCase();
+  if (!n) return null;
+  for (const k of Object.keys(POLISH_SCOPE_CMDS)) {
+    if (POLISH_SCOPE_CMDS[k].includes(n)) return k;
+  }
+  return 'plugin';
+}
+
+/* U9-14 润色硬校验（仅改写·保留数字与成败）——判废即回退发原文，数值永不改动：
+ *  ① 非空、不是开关提示话术、不索要结果、不夹带伪骰点指令
+ *  ② 原文中的每个数字必须原样出现在润色稿里（防删改数值）
+ *  ③ 润色稿不得出现原文没有的新数字（防编造数值）
+ * 任何一条不满足即判废；只校验数字，不校验措辞，允许改写文风。 */
+const POLISH_OFF_HINT = /已关闭|未配置|不可用|尚未配置/;
+const POLISH_ASK_RE = /(?:请|麻烦|需要|能否|可以)[^。！？\n]{0,18}(?:结果|点数|数值|骰点)[^。！？\n]{0,18}(?:发|给|告诉|提供|补|回复|重发)/;
+function polishAcceptable(text, original) {
+  const t = String(text || '').trim();
+  const o = String(original || '').trim();
+  if (!t || !o) return false;
+  if (POLISH_OFF_HINT.test(t)) return false;
+  if (POLISH_ASK_RE.test(t)) return false;
+  if (/[.。]\s*(?:r|rd|ra|rh)\b/.test(t)) return false;   // 夹带伪指令：判废
+  const nums = (s) => s.match(/-?\d+(?:\.\d+)?/g) || [];
+  const origNums = nums(o);
+  const newNums = nums(t);
+  const origSet = new Set(origNums);
+  for (const n of newNums) if (!origSet.has(n)) return false;   // 编造原文没有的新数值
+  const newSet = new Set(newNums);
+  for (const n of origNums) if (!newSet.has(n)) return false;   // 丢掉原文的数值
+  return true;
+}
+
+/* U9-14 润色请求组装：system = 润色人设（自定义留空则用内置默认）；
+ * 「仅改写·保留数字与结果」是硬约束，直接写进用户消息，不依赖模型自觉。 */
+function buildPolishMessages(cfg, original, ctxText) {
+  const persona = ((cfg && cfg.polish && cfg.polish.persona) || '').trim() || DEFAULT_POLISH_PERSONA;
+  const sys = [persona];
+  if (ctxText && String(ctxText).trim()) sys.push('【当前场景背景】\n' + String(ctxText).trim().slice(0, 600));
+  const user = '请把下面这条骰娘回复改写成更有剧情感的版本（两三句内）。'
+    + '完整保留原文中的每一个数字、骰点结果与成败判定，不得新增或删改任何数值；'
+    + '只输出改写后的正文，不要解释、不要输出任何指令。\n\n【原回复】\n' + otrim(original);
+  return [{ role: 'system', content: sys.join('\n\n') }, { role: 'user', content: user }];
+}
+
+/* U9-15 语言包匹配：按语言名精确命中（不区分大小写）；无命中返回 null。 */
+function matchLangPack(cfg, langName) {
+  const packs = (cfg && cfg.translate && cfg.translate.packs) || [];
+  const n = String(langName || '').trim();
+  if (!n) return null;
+  return packs.find((p) => p && p.name && p.name.toLowerCase() === n.toLowerCase()) || null;
+}
+
+/* U9-15 翻译请求组装：system = 默认翻译要求 + 语言包自有附加要求（可空）。 */
+function buildTranslateMessages(pack, text) {
+  const sys = [DEFAULT_TRANSLATE_PROMPT];
+  const custom = pack && String(pack.prompt || '').trim();
+  if (custom) sys.push('【本语言包附加要求】\n' + custom);
+  const name = (pack && pack.name) || '';
+  return [
+    { role: 'system', content: sys.join('\n\n') },
+    { role: 'user', content: '请把下面这段骰娘回复翻译成「' + name + '」：\n\n' + otrim(text) },
+  ];
+}
+
+/* 取文本：空值归一为 ''，避免 undefined 拼进提示词 */
+function otrim(x) { return x == null ? '' : String(x).trim(); }
 
 /* U9-12 从归一化消息收集图片（CQ 码 / segments），直链模式直接用 url。
  * msg.images 兼容 [url] 与 [{ url, b64 }] 两种形态；超出 maxImages 截断。 */
@@ -340,10 +468,20 @@ async function runToolLoop(deps, baseCfg, messages, tools, ctx) {
 
 module.exports = {
   DEFAULT_CHAT_PERSONA,
+  DEFAULT_POLISH_PERSONA,
+  DEFAULT_TRANSLATE_PROMPT,
   normalizeChatCfg,
+  normalizeNpcList,
+  normalizePacks,
   passWhitelist,
   shouldReply,
   decorateReply,
+  matchNpc,
+  polishScopeOf,
+  polishAcceptable,
+  buildPolishMessages,
+  matchLangPack,
+  buildTranslateMessages,
   collectImages,
   userContent,
   buildMessages,

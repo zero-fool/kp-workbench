@@ -16,7 +16,9 @@ const FEATURE_OFF_TEXT = {
   optimize: '骰点文本优化已被关闭（可在「骰娘 AI 设置」里开启），本次不调用 AI。',
   interject: '随机插话已被关闭（可在「骰娘 AI 设置」里开启）。',
   meme: '表情包调用已被关闭（可在「骰娘 AI 设置」里开启）。',
-  kpAdvice: 'KP 建议已被关闭（可在「骰娘 AI 设置」里开启）。'
+  kpAdvice: 'KP 建议已被关闭（可在「骰娘 AI 设置」里开启）。',
+  polish: '回复润色已被关闭（可在「骰娘 AI 设置 → 回复润色」里开启），本次不调用 AI。',
+  translate: '自定义语言翻译已被关闭（可在「骰娘 AI 设置 → 语言包」里开启），本次不调用 AI。'
 };
 
 function createDiceAi(ctx) {

@@ -1699,14 +1699,25 @@ function registerIpc() {
     ai: diceAiTransport,              // 骰娘专用传输层：不共用工作台 AI 的凭证 / 用量统计 / 取消注册表
     getContext(feature) {
       const sw = diceAiSwitches();
-      const cfg = diceAiCfg();        // 未配置独立端口 → null，短路，绝不回退工作台 AI
+      let cfg = diceAiCfg();          // 未配置独立端口 → null，短路，绝不回退工作台 AI
+      /* U9-13~U9-15：polish/translate 的开关与独立模型在 aiChat 配置里（不在 aiSwitches.features）；
+       * 模型名覆盖复用「同一中枢连接、只换 model 名」的既有模式（同 summary.model）。 */
+      let enabled = sw.enabled && sw.features[feature] !== false;
+      if (feature === 'polish' || feature === 'translate') {
+        try {
+          const aic = aiChatCore.normalizeChatCfg(((doc.settings && doc.settings.dice) || {}).aiChat);
+          const sub = aic[feature];
+          enabled = sw.enabled && !!(sub && sub.enabled);
+          if (enabled && cfg && sub.model) cfg = Object.assign({}, cfg, { model: sub.model });
+        } catch (_) { enabled = false; }
+      }
       return {
-        enabled: sw.enabled && sw.features[feature] !== false,
+        enabled,
         masterOff: !sw.masterOn,      // U9-1：总开关关闭 → .ai 指令给出明确指引
         cfg,
         buildSystem(f) {
-          // 该 feature 对应的提示词中枢场景：dice→dice / optimize→optimize / interject→interject；其余回退 dice 场景
-          const scene = (f === 'optimize' || f === 'interject' || f === 'kpAdvice') ? f : 'dice';
+          // 该 feature 对应的提示词中枢场景：dice→dice / optimize→optimize / interject→interject / polish / translate；其余回退 dice 场景
+          const scene = (f === 'optimize' || f === 'interject' || f === 'kpAdvice' || f === 'polish' || f === 'translate') ? f : 'dice';
           let sys = promptHub.systemFor(scene, doc.settings, {}, promptHub.readMemory(dataDir, scene, 2200));
           sys = sys + '\n\n你是跑团群里的「骰娘」，负责掷骰、判定与引导剧情推进。请用活泼、亲切、适合 TRPG 玩家阅读的'
             + (f === 'dice' ? '口吻直接回答玩家的问题，涉及检定结果时不要改动数值本身，只做带剧情的润色。' : '口吻辅助。')
@@ -1716,7 +1727,7 @@ function registerIpc() {
         },
         // 记忆自动回写：feature→场景记忆文件，成功后由 dice-ai 调用，把本次关键内容追加
         remember(f, content) {
-          const scene = (f === 'optimize' || f === 'interject' || f === 'kpAdvice') ? f : 'dice';
+          const scene = (f === 'optimize' || f === 'interject' || f === 'kpAdvice' || f === 'polish' || f === 'translate') ? f : 'dice';
           promptHub.appendMemory(dataDir, scene, content);
         }
       };
@@ -1777,7 +1788,23 @@ function registerIpc() {
   const transformReplies = createTransformReplies({
     aiBridge: diceAI,
     memes: memeStore,
-    getConfig() { return diceAiSwitches(); }
+    getConfig() { return diceAiSwitches(); },
+    /* U9-13~U9-15 批次三配置：规范化结果（每次现读，改设置即时生效） */
+    getChatCfg() {
+      try {
+        const d = (doc.settings && doc.settings.dice) || {};
+        return aiChatCore.normalizeChatCfg(d.aiChat);
+      } catch (_) { return null; }
+    },
+    /* U9-15：读取本会话 .lang 设定的语言名（hub 在本函数之后才创建，故惰性取用） */
+    langOf({ msg }) {
+      try {
+        if (!diceWorkbench || !msg) return '';
+        const sid = `${msg.channel || ''}:${msg.groupId || 'private:' + (msg.user && msg.user.id)}`;
+        const session = diceWorkbench.hub.brain.sessions.getSession(sid);
+        return (session && session.lang) || '';
+      } catch (_) { return ''; }
+    }
   });
   const diceWorkbench = createDiceRuntime({
     store: diceStorePort, ai: diceAI, transformReplies,
@@ -1785,6 +1812,15 @@ function registerIpc() {
     dataDir: path.join(dataDir, 'qq'),           // QQ 直连引擎登录态存放目录
     onQqEvent: (payload) => { try { if (win && win.webContents) win.webContents.send('dice-qq:event', payload); } catch (_) {} },
   });
+  /* U9-15：把可用语言包名注入 brain（供 .lang 指令列出）——每次现读，改设置即时生效 */
+  try {
+    diceWorkbench.hub.brain.langPacks = () => {
+      try {
+        const aic = aiChatCore.normalizeChatCfg(((doc.settings && doc.settings.dice) || {}).aiChat);
+        return (aic.translate && aic.translate.enabled) ? (aic.translate.packs || []).map((p) => p.name) : [];
+      } catch (_) { return []; }
+    };
+  } catch (_) {}
   global.diceNetAdapters = diceWorkbench.adapters; // 兼容既有 before-quit 回收逻辑
 
   // 连接中心（分区 2）

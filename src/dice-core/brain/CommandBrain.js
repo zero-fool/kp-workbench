@@ -87,6 +87,8 @@ function makeContext(msg, session, brain, extra) {
     rng,
     ai: brain.ai,
     render: brain.renderer.render.bind(brain.renderer),
+    /* U9-15：可用自定义语言包名（供 .lang 列出）；由主进程经 brain.langPacks 注入 */
+    langPacks: (typeof brain.langPacks === 'function') ? brain.langPacks() : [],
     // 按规则渲染投掷/检定回复：ruleId 缺省取当前会话规则；fallback 为活动规则包给出的原文（未自定义时优先用它）
     ruleReply: (key, vars, ruleId, fallback) => (brain.renderer && typeof brain.renderer.ruleReply === 'function')
       ? brain.renderer.ruleReply(ruleId || (session && session.rule) || 'plain', key, vars || {}, fallback || '')
@@ -175,7 +177,9 @@ class CommandBrain {
     const reply = (text) => ({
       sessionId: session.id,
       segments: [{ type: 'text', text }],
-      at: messageIn.user && messageIn.user.id
+      at: messageIn.user && messageIn.user.id,
+      /* U9-14：回传最终命中的指令名（含别名映射后的真名），供回复润色按 scope 识别来源 */
+      cmd: parsed.name
     });
     const ctx = makeContext(messageIn, session, this, ctxData);
     // 自定义触发词短路：命中优先于内置指令，但不覆盖内置指令（registered trigger ≠ builtin）

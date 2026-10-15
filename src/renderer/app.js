@@ -4480,6 +4480,13 @@
     sec('tools', { rollDice: true, drawDeck: true, getAttr: true, setAttr: false, runCommand: false, searchHelp: true, maxRounds: 3 });
     sec('whitelist', { enabled: false, groups: [], users: [] });
     sec('vision', { model: '', maxImages: 1, directUrl: true, prompt: '' });
+    sec('npc', { enabled: true, list: [] });
+    sec('polish', { enabled: false, model: '', persona: '', scope: { roll: false, deck: false, fun: false, plugin: false } });
+    sec('translate', { enabled: false, model: '', packs: [] });
+    if (!c.polish.scope || typeof c.polish.scope !== 'object') c.polish.scope = {};
+    for (const sk of ['roll', 'deck', 'fun', 'plugin']) if (typeof c.polish.scope[sk] !== 'boolean') c.polish.scope[sk] = false;
+    if (!Array.isArray(c.npc.list)) c.npc.list = [];
+    if (!Array.isArray(c.translate.packs)) c.translate.packs = [];
     return c;
   }
   /* 通用控件：onchange 即改即存（section 为空表示顶层字段） */
@@ -4507,9 +4514,37 @@
     return `<div style="width:100%"><label style="font-size:12px">${esc(label)}</label>
       <textarea rows="${rows || 2}" style="width:100%" placeholder="${esc(ph || '')}" onchange="WB.diceAiChatList('${section}','${key}', this.value)">${esc((v || []).join(sep || '\n'))}</textarea></div>`;
   }
+  /* U9-13 NPC 列表：每行「名字 | 触发词(逗号分隔) | 人设」，勾选启用；底部增删按钮 */
+  function npcListHTML(list) {
+    const rows = list.map((it, i) => `
+      <div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:6px" data-npc-row="${i}">
+        <label style="flex:0 0 auto;margin-top:6px" title="启用该 NPC"><input type="checkbox" ${it.enabled !== false ? 'checked' : ''} onchange="WB.diceAiChatNpc(${i},'enabled',this.checked)"></label>
+        <input style="flex:0 0 110px" value="${esc(it.name || '')}" placeholder="名字" onchange="WB.diceAiChatNpc(${i},'name',this.value)">
+        <input style="flex:0 0 160px" value="${esc((it.triggers || []).join(','))}" placeholder="触发词(逗号分隔)" onchange="WB.diceAiChatNpc(${i},'triggers',this.value)">
+        <input style="flex:1 1 auto" value="${esc(it.persona || '')}" placeholder="人设（留空则仅署名）" onchange="WB.diceAiChatNpc(${i},'persona',this.value)">
+        <button class="ghost" style="flex:0 0 auto" onclick="WB.diceAiChatNpcDel(${i})" title="删除">✕</button>
+      </div>`).join('');
+    const empty = list.length ? '' : '<div class="hint" style="margin-bottom:6px">还没有 NPC：点下方「+ 添加 NPC」，填名字与触发词即可生效</div>';
+    return `<div style="width:100%">${empty}${rows}
+      <div class="toolbar"><button class="ghost" onclick="WB.diceAiChatNpcAdd()">+ 添加 NPC</button></div></div>`;
+  }
+  /* U9-15 语言包列表：每行「语言名 | 翻译要求 | 模型名」；底部增删按钮 */
+  function packListHTML(packs) {
+    const rows = packs.map((p, i) => `
+      <div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:6px">
+        <input style="flex:0 0 110px" value="${esc(p.name || '')}" placeholder="语言名" onchange="WB.diceAiChatPack(${i},'name',this.value)">
+        <input style="flex:1 1 auto" value="${esc(p.prompt || '')}" placeholder="翻译要求（可空，用默认）" onchange="WB.diceAiChatPack(${i},'prompt',this.value)">
+        <input style="flex:0 0 130px" value="${esc(p.model || '')}" placeholder="模型名(可空)" onchange="WB.diceAiChatPack(${i},'model',this.value)">
+        <button class="ghost" style="flex:0 0 auto" onclick="WB.diceAiChatPackDel(${i})" title="删除">✕</button>
+      </div>`).join('');
+    const empty = packs.length ? '' : '<div class="hint" style="margin-bottom:6px">还没有语言包：点下方「+ 添加语言包」，群里就能用 <code>.lang 语言名</code> 切换</div>';
+    return `<div style="width:100%">${empty}${rows}
+      <div class="toolbar"><button class="ghost" onclick="WB.diceAiChatPackAdd()">+ 添加语言包</button></div></div>`;
+  }
   function diceAiChatPanelHTML() {
     const c = diceAiChatData();
     const t = c.trigger, d = c.decor, s = c.summary, m = c.memory, tl = c.tools, wl = c.whitelist, v = c.vision;
+    const npc = c.npc, pol = c.polish, tr = c.translate;
     const hubReady = !!diceAiActiveCfg();
     const emptyWlWarn = wl.enabled && !wl.groups.length && !wl.users.length;
     const grp = (title, body, extra) => `<details class="diceai"><summary class="dsec" style="cursor:pointer;list-style:none">${title}${extra || ''}</summary><div class="airow" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px">${body}</div></details>`;
@@ -4568,6 +4603,24 @@
         + aiChatNum('vision', 'maxImages', v.maxImages, '每条消息图片上限', 1, 5)
         + aiChatChk('vision', 'directUrl', v.directUrl, '直链模式', '实时消息直接用图片 URL（QQ 直连/OneBot 均可取到直链）')
         + aiChatArea('vision', 'prompt', v.prompt, '识别提示词（留空用默认）', 2, '请先描述图片内容，再结合对话语境回应'))}
+      ${grp('🎭 NPC 扮演（U9-13）<span class="hint" style="font-weight:400">命中触发词即以该 NPC 身份回复，优先于普通骰娘对话</span>',
+        aiChatChk('npc', 'enabled', npc.enabled, '启用 NPC 扮演')
+        + `<div style="width:100%">${npcListHTML(npc.list)}</div>`)}
+      ${grp('🖌 回复润色（U9-14）<span class="hint" style="font-weight:400">仅改写·保留数字与结果；失败或超时发原文</span>',
+        aiChatChk('polish', 'enabled', pol.enabled, '启用回复润色')
+        + aiChatTxt('polish', 'model', pol.model, '润色模型名（空=当前聊天模型）', '如 deepseek-chat', true)
+        + `<div style="flex:2;min-width:200px"><label style="font-size:12px">覆盖范围（可多选）</label>
+             <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:2px">
+               ${aiChatChk('polish', 'scope.roll', pol.scope.roll, '掷骰/检定')}
+               ${aiChatChk('polish', 'scope.deck', pol.scope.deck, '牌堆')}
+               ${aiChatChk('polish', 'scope.fun', pol.scope.fun, '趣味指令')}
+               ${aiChatChk('polish', 'scope.plugin', pol.scope.plugin, '插件')}
+             </div></div>`
+        + aiChatArea('polish', 'persona', pol.persona, '润色人设（留空用内置默认）', 3, '改写风格：贴合团氛围、两三句内'))}
+      ${grp('🌐 自定义语言翻译（U9-15）<span class="hint" style="font-weight:400">群内 .lang &lt;语言名&gt; 后，回复按语言包翻译</span>',
+        aiChatChk('translate', 'enabled', tr.enabled, '启用自定义翻译')
+        + aiChatTxt('translate', 'model', tr.model, '翻译模型名（空=当前聊天模型）', '如 deepseek-chat', true)
+        + `<div style="width:100%">${packListHTML(tr.packs)}</div>`)}
       <div class="dh-note" style="margin-top:8px">与「群聊 AI 行为」（表情/插话概率）独立并存：本区块负责「让骰娘开口对话」的完整链路——触发、记忆、工具、修饰；插话表情等增强仍在「群聊 AI 行为」与「骰娘 AI 功能开关」里配置。所有 AI 回复统一过发送节流闸，用量计入上方模型卡片。</div>`;
   }
   function paintDiceAiChatPanel() {
@@ -4576,8 +4629,16 @@
   }
   window.WB.diceAiChatPatch = function (section, key, value) {
     const c = diceAiChatData();
-    if (section) c[section][key] = value;
-    else c[key] = value;
+    if (section) {
+      /* 点号路径：如 section='polish'、key='scope.roll' → c.polish.scope.roll */
+      const parts = String(key).split('.');
+      let o = c[section];
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (!o[parts[i]] || typeof o[parts[i]] !== 'object') o[parts[i]] = {};
+        o = o[parts[i]];
+      }
+      o[parts[parts.length - 1]] = value;
+    } else c[key] = value;
     persist();
   };
   /* 列表字段（关键词/过滤词/白名单）：textarea 每行一条 → 数组 */
@@ -4585,6 +4646,41 @@
     const c = diceAiChatData();
     c[section][key] = String(value || '').split(/\r?\n|[,，]/).map((z) => z.trim()).filter(Boolean);
     persist();
+  };
+  /* U9-13 NPC 增删改（改字段即时存；增删后重绘面板保持索引一致） */
+  window.WB.diceAiChatNpc = function (i, field, value) {
+    const c = diceAiChatData();
+    if (!c.npc.list[i]) return;
+    if (field === 'triggers') c.npc.list[i].triggers = String(value || '').split(/[,，\n]/).map((z) => z.trim()).filter(Boolean);
+    else c.npc.list[i][field] = value;
+    persist();
+  };
+  window.WB.diceAiChatNpcAdd = function () {
+    const c = diceAiChatData();
+    c.npc.list.push({ id: 'npc' + (Date.now() % 100000), name: '', triggers: [], persona: '', enabled: true });
+    persist(); paintDiceAiChatPanel();
+  };
+  window.WB.diceAiChatNpcDel = function (i) {
+    const c = diceAiChatData();
+    c.npc.list.splice(i, 1);
+    persist(); paintDiceAiChatPanel();
+  };
+  /* U9-15 语言包增删改 */
+  window.WB.diceAiChatPack = function (i, field, value) {
+    const c = diceAiChatData();
+    if (!c.translate.packs[i]) return;
+    c.translate.packs[i][field] = value;
+    persist();
+  };
+  window.WB.diceAiChatPackAdd = function () {
+    const c = diceAiChatData();
+    c.translate.packs.push({ name: '', prompt: '', model: '' });
+    persist(); paintDiceAiChatPanel();
+  };
+  window.WB.diceAiChatPackDel = function (i) {
+    const c = diceAiChatData();
+    c.translate.packs.splice(i, 1);
+    persist(); paintDiceAiChatPanel();
   };
   window.WB.diceAiChatLoadDefaultPersona = async function () {
     /* Load default：把内置默认人设回填编辑框（Dice-Next 同语义） */
