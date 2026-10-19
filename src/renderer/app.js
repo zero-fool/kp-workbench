@@ -2802,10 +2802,10 @@
     let content, atts = null, fileReq = '';
     if (hasFiles) {
       atts = S.pendFiles.map(f => ({ name: f.name, chars: f.chars, ext: f.ext }));
-      fileReq = typed.slice(0, 30000);
+      fileReq = clipHeadTail(typed, 30000);
       content = buildAttachMessage(S.pendFiles, typed);
     } else {
-      content = typed.slice(0, 60000);
+      content = clipHeadTail(typed, 60000);   // 长文本限流：保头保尾（补充要求常写在结尾）
     }
     // 清空输入框与待发附件
     if (q('drawerIn')) q('drawerIn').value = '';
@@ -2843,7 +2843,7 @@
       }
     }
     const req = (typed && typed.length)
-      ? '用户附加要求：\n' + typed.slice(0, 30000)
+      ? '用户附加要求：\n' + clipHeadTail(typed, 30000)
       : '请阅读上述可读文件，充分理解后按要求整理 / 分析要点（可结合工作台现有资料），并给出可直接采用的回复。';
     return parts.join('\n\n') + '\n\n' + req;
   }
@@ -2922,16 +2922,28 @@
   }
 
   /* ========== 批次C：AI 自动产出 + 会话记忆沉淀 ========== */
-  /* 汇总“近期故事素材”：最近 40 条对话 + 最近 10 条日志 */
+  /* 超长文本保头保尾截断：结论/补充要求常在结尾，纯头部截断会丢关键信息 */
+  function clipHeadTail(s, cap) {
+    const v = String(s || '');
+    if (!(cap > 0) || v.length <= cap) return v;
+    const head = Math.floor(cap * 0.6), tail = Math.max(0, cap - head - 80);
+    const gone = Math.max(0, v.length - head - tail);
+    return v.slice(0, head) + (gone ? `\n（内容过长，已省略中间 ${gone} 字）\n` : '\n') + (tail ? v.slice(v.length - tail) : '');
+  }
+  /* 汇总“近期故事素材”：最近 40 条对话 + 最近 10 条日志。
+   * 长文本限流：按段分配预算（对话优先 7 / 日志 3），每段各自保头保尾——
+   * 此前整体 slice(0) 会把排在后面的「已有日志」整段静默丢掉。 */
   function recentStoryText(maxChars) {
+    const cap = Math.max(1000, Number(maxChars) || 32000);
     const parts = [];
     const chat = CH.slice(-40).map(m => (m.role === 'user' ? '【KP】' : '【AI】') + '：' + String(m.content || '')).join('\n');
-    if (chat.trim()) parts.push('—— 近期 AI 对话 ——\n' + chat);
+    if (chat.trim()) parts.push('—— 近期 AI 对话 ——\n' + clipHeadTail(chat, Math.floor(cap * 0.7)));
     const logs = ((S.data.entities && S.data.entities.logs) || []).slice(0, 10);
     if (logs.length) {
-      parts.push('—— 已有日志 ——\n' + logs.map(l => '『' + (l.name || l.title || '未命名日志') + '』' + [l.summary, l.content, l.hook, l.note].filter(Boolean).join(' · ').slice(0, 300)).join('\n'));
+      const body = logs.map(l => '『' + (l.name || l.title || '未命名日志') + '』' + [l.summary, l.content, l.hook, l.note].filter(Boolean).join(' · ').slice(0, 300)).join('\n');
+      parts.push('—— 已有日志 ——\n' + clipHeadTail(body, cap - Math.floor(cap * 0.7)));
     }
-    return parts.join('\n\n').slice(0, maxChars || 32000);
+    return parts.join('\n\n');
   }
   /* C1/C3：一键剧情要点总结 → 预览可编辑 → 写入长期记忆 */
   async function plotSummary(fromHint) {
@@ -3810,7 +3822,7 @@
     pick('mobs', ['summary']); pick('lore', ['content', 'summary']);
     const logs = (S.data.entities && S.data.entities.logs) || [];
     if (logs.length) { pick('logs', ['summary', 'hook']); out.push('（已登记日志 ' + logs.length + ' 条）'); }
-    return out.join('\n\n').slice(0, 6000) || '（暂无可用资料）';
+    return clipHeadTail(out.join('\n\n'), 6000) || '（暂无可用资料）';
   }
 
   /* ========== 剧本解析 ========== */
@@ -6265,7 +6277,7 @@
     if (!rulesText) { toast('请先在「规则 / 背景」导入若干规则书或设定内容，再让 AI 依据它生成模板', 'err'); return; }
     toast('AI 正在依据现有规则/设定归纳人物卡模板…');
     try {
-      const r = await window.api.aiGenTemplateForRules(rulesText.slice(0, 16000));
+      const r = await window.api.aiGenTemplateForRules(clipHeadTail(rulesText, 16000));
       if (!r || !r.ok) { toast((r && r.error) || '生成失败，请检查 AI 配置', 'err'); return; }
       const t = r.template || {};
       if (!t.fields || !Array.isArray(t.fields.pcs) || !t.fields.pcs.length) { toast('AI 未归纳出有效字段集', 'err'); return; }
@@ -7742,7 +7754,7 @@
     if (res.textPath && window.api.getFullText) {
       try { const full = await window.api.getFullText(res.textPath); if (full && full.ok && typeof full.text === 'string' && full.text.trim()) body = full.text; } catch (_) {}
     }
-    return { name: res.name || (f && f.name) || '文件', body: cleanText(body.length > 300000 ? body.slice(0, 300000) : body) };
+    return { name: res.name || (f && f.name) || '文件', body: cleanText(body.length > 300000 ? clipHeadTail(body, 300000) : body) };
   }
   /* 从文件导入原始文本，并清理乱码（单文件，可由「导入文件」按钮触发） */
   async function rawImportFile(f) {
@@ -7767,7 +7779,7 @@
       for (const f of list) { parts.push(await rawFileBody(f)); }
       let joined = S.rawText || '';
       for (const p of parts) joined = joined + (joined && p.body ? '\n\n' : '') + p.body;
-      if (joined.length > 300000) joined = joined.slice(0, 300000);
+      if (joined.length > 300000) joined = clipHeadTail(joined, 300000);   // 多文件合并同样保头保尾：后导入文件的结尾不再被整体丢掉
       S.rawText = joined;
       S.rawSuggested = '';
       S.rawScript = null; S.rawShow = 'text';
@@ -11429,7 +11441,7 @@
       if (lr && lr.ok) localOps = Array.isArray(lr.candidates) ? lr.candidates : [];
     } catch (_) { /* 本地推导失败不阻塞 AI 流程 */ }
     try {
-      const payload = { entities: S.data.entities, relations: relData(), raw: String(S.rawText || '').slice(0, 8000) };
+      const payload = { entities: S.data.entities, relations: relData(), raw: clipHeadTail(String(S.rawText || ''), 8000) };
       const res = await window.api.relationsSuggest(payload);
       if (!res || !res.ok) {
         if (localOps.length) { toast('AI 调用失败：' + ((res && res.error) || '未知错误') + '，已展示本地推导候选', 'warn'); relBuildPreview(localOps); }

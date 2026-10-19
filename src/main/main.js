@@ -254,18 +254,18 @@ function buildLoreText() {
   }
   let out = '【世界观背景】\n' + (loreParts.slice(0, 10).join('\n') || '（暂无背景资料）');
   if (ruleParts.length) out += '\n\n【规则要点】\n' + ruleParts.slice(0, 15).join('\n');
-  return String(out).slice(0, 6000);
+  return ai.clipUserInput(out, 6000);   // 长文本限流：保头保尾（后段的规则要点不被纯头部截断丢掉）
 }
 function memoryText() {
   const m = doc.settings && Array.isArray(doc.settings.memory) ? doc.settings.memory : [];
-  return m.map(x => x.text).filter(Boolean).join('\n').slice(0, 4000);
+  return ai.clipUserInput(m.map(x => x.text).filter(Boolean).join('\n'), 4000);   // 保头保尾（最近沉淀的记忆在结尾）
 }
 function userPrefsText() {
   const p = doc.settings && Array.isArray(doc.settings.userPrefs) ? doc.settings.userPrefs : [];
-  const base = p.map(x => x.text).filter(Boolean).join('\n').slice(0, 3000);
+  const base = ai.clipUserInput(p.map(x => x.text).filter(Boolean).join('\n'), 3000);
   /* B2 叙事风格贴合：档案设置里的「叙事风格」作为最高优先级偏好注入上下文 */
-  const narr = doc.settings && doc.settings.narrStyle ? ('为本次团设定了叙事风格，请始终贴合它来写作与润色：' + String(doc.settings.narrStyle).slice(0, 800)) : '';
-  return [narr, base].filter(Boolean).join('\n').slice(0, 3400);
+  const narr = doc.settings && doc.settings.narrStyle ? ('为本次团设定了叙事风格，请始终贴合它来写作与润色：' + ai.clipUserInput(String(doc.settings.narrStyle), 800)) : '';
+  return ai.clipUserInput([narr, base].filter(Boolean).join('\n'), 3400);
 }
 function aiOpFlags() {
   const a = (doc.settings && doc.settings.ai) || {};
@@ -868,7 +868,7 @@ function registerIpc() {
       args = args || {};
       const kind = String(args.kind || 'lore');
       const entName = String(args.entName || '').trim();
-      const ctx = String(args.ctx || '（暂无资料，可自由发挥）').slice(0, 6000);
+      const ctx = ai.clipUserInput(String(args.ctx || '（暂无资料，可自由发挥）'), 6000);   // 保头保尾（最新剧情要求常在结尾）
       const style = String(args.style || '').trim();
       const prompt = '依据下面的现有背景/人物/地区资料，为这个 TRPG 团写出一篇完整、可直接开演的剧本全文。'
         + '要求：结构清晰，分幕写出（序幕+若干幕+结局），含每个场景的时间/地点/出场与关键剧情/线索/事件，人物对白可适当穿插；'
@@ -1728,7 +1728,7 @@ function registerIpc() {
             + (f === 'dice' ? '口吻直接回答玩家的问题，涉及检定结果时不要改动数值本身，只做带剧情的润色。' : '口吻辅助。')
             + '\n\n感谢用户记得你所在团的世界观：\n' + buildLoreText()
             + (userPrefsText() ? '\n\n【KP 偏好】\n' + userPrefsText() : '');
-          return String(sys).slice(0, 6000);
+          return ai.clipUserInput(sys, 6000);   // 保头保尾：system 尾部的【KP 偏好】不能被纯头部截断丢掉
         },
         // 记忆自动回写：feature→场景记忆文件，成功后由 dice-ai 调用，把本次关键内容追加
         remember(f, content) {

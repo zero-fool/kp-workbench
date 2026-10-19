@@ -120,3 +120,27 @@ test('buildExtractMessages：system=抽取提示词，user=近期原文', () => 
   assert.ok(m[1].content.includes('U2：说2'));
   assert.ok(!m[1].content.includes('U1：说1'));
 });
+
+/* ---- 长文本窗口限流（keepRounds 调大 / 单条超长时的请求体积防线） ---- */
+
+test('长文本限流：攒批窗口超预算时保头保尾（摘要与抽取都不撑爆请求）', () => {
+  const chatCore = require('../src/main/dice-ai-chat');
+  const cfg = makeCfg({ summary: { keepRounds: 50, maxChars: 300 } });
+  const lines = Array.from({ length: 50 }, (_, i) => ({
+    user: 'U' + i,
+    text: '场景描写'.repeat(60) + (i === 49 ? '最近一次检定结果为 77 = 大成功，这是本窗口的收尾结论。' : ''),
+  }));
+  const m = mem.buildSummaryMessages(cfg, '旧摘要：'.repeat(300), lines);
+  const content = m[1].content;
+  assert.ok(chatCore.estTokens(content) <= 6200, '摘要请求应有界，实测 estTokens=' + chatCore.estTokens(content));
+  assert.match(content, /已省略中间/);              // 确实发生了裁剪（而非恰好没超）
+  assert.match(content, /U49：/);                    // 最近消息保尾
+  assert.match(content, /77 = 大成功/);              // 收尾结论保尾
+  assert.match(content, /旧摘要/);                   // 头部保头
+  assert.match(content, /请输出不超过 300 字的新摘要。$/); // 输出指令在裁剪之外，永不丢
+
+  const e = mem.buildExtractMessages(cfg, lines);
+  assert.ok(chatCore.estTokens(e[1].content) <= 6000, '抽取请求应有界，实测 estTokens=' + chatCore.estTokens(e[1].content));
+  assert.match(e[1].content, /U49：/);
+  assert.match(e[1].content, /77 = 大成功/);
+});

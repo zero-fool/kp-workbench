@@ -55,7 +55,10 @@ function createAiChatEngine(deps) {
 
   function pushHist(gid, user, text) {
     const arr = histBuf.get(gid) || [];
-    arr.push({ user, text, ts: Date.now() });
+    /* 长文本限流：单条入缓冲的消息超长即保头保尾截断（chatCore.BUDGET_LINE_CHARS）。
+     * 不截断的话，一条几万字的粘贴会独自吃掉整轮上下文预算，把同群其它人的前情挤光。 */
+    const body = chatCore.clipForPrompt(text, chatCore.BUDGET_LINE_CHARS);
+    arr.push({ user, text: body, ts: Date.now() });
     while (arr.length > HIST_MAX) arr.shift();
     histBuf.set(gid, arr);
   }

@@ -14,6 +14,9 @@ const chatCore = require('./dice-ai-chat');
 
 const ROLL_RE = /^[.\。]\s*(?:r|rd|ra|rh)\b/;
 const OFF_HINT = /已关闭|未配置|不可用|尚未配置/;
+/* 长文本限流：源回复超过该字符数就不送润色/翻译（回退原文，不消耗 token）。
+ * 润色源被截后必然对不齐原文数字（判废回退，白烧）；翻译输出等长会被 maxTokens 拦腰截断。 */
+const LONG_SRC_CHARS = 4000;
 
 function textOf(reply) {
   return (reply && reply.segments || []).filter(s => s && s.type === 'text').map(s => s.text).join('\n');
@@ -164,14 +167,16 @@ function createTransformReplies(deps) {
     }
 
     /* 3) 回复润色（U9-14）：按覆盖范围改写回复；硬约束「保留数字与结果」，判废/失败回退原文。
-     *    注意：骰点「优化」是追加描述，润色是改写正文，两者独立并存（可同时开）。 */
+     *    注意：骰点「优化」是追加描述，润色是改写正文，两者独立并存（可同时开）。
+     *    长文本限流：超长回复（多为插件整段输出）不送润色——模型输入被截后必然对不齐原文数字、
+     *    一律判废回退，纯属白烧 token；直接跳过，回退发原文。 */
     if (aiOn && chatCfg && chatCfg.polish && chatCfg.polish.enabled) {
       for (let i = 0; i < out.length; i++) {
         const r = out[i];
         const scope = chatCore.polishScopeOf(r && r.cmd);
         if (!scope || !chatCfg.polish.scope[scope]) continue;   // 不在覆盖范围内 → 原样保留
         const cur = textOf(r);
-        if (!cur || OFF_HINT.test(cur)) continue;
+        if (!cur || OFF_HINT.test(cur) || cur.length > LONG_SRC_CHARS) continue;
         let res = null;
         try {
           res = await deps.aiBridge.chat(
@@ -187,14 +192,16 @@ function createTransformReplies(deps) {
     }
 
     /* 4) 自定义语言翻译（U9-15）：会话 .lang 命中语言包时，把最终回复翻译成该语言；
-     *    翻译失败/超时一律回退原文（绝不因翻译挂掉而丢回复）。 */
+     *    翻译失败/超时一律回退原文（绝不因翻译挂掉而丢回复）。
+     *    长文本限流：超长回复不翻译——译文等长，输出会被 maxTokens 拦腰截断，
+     *    发出半截译文比不翻译更糟；跳过即回退原文。 */
     if (aiOn && chatCfg && chatCfg.translate && chatCfg.translate.enabled) {
       const langName = (typeof deps.langOf === 'function') ? deps.langOf({ msg, replies: out }) : '';
       const pack = chatCore.matchLangPack(chatCfg, langName);
       if (pack) {
         for (let i = 0; i < out.length; i++) {
           const cur = textOf(out[i]);
-          if (!cur || OFF_HINT.test(cur)) continue;
+          if (!cur || OFF_HINT.test(cur) || cur.length > LONG_SRC_CHARS) continue;
           let res = null;
           try {
             res = await deps.aiBridge.chat(
@@ -217,5 +224,6 @@ module.exports = {
   buildInterjReq,
   acceptableOptimize,
   replaceText,
-  ROLL_RE
+  ROLL_RE,
+  LONG_SRC_CHARS
 };

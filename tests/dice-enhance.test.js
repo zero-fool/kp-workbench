@@ -269,3 +269,40 @@ test('U9-15：未命中语言包或翻译关闭 → 不调用 AI', async () => {
   assert.strictEqual(bridge.calls.length, 0);
   assert.ok(textOfRs(r1).includes('45') && textOfRs(r2).includes('45'));
 });
+
+/* ---- 长文本限流：超长回复不送润色/翻译（回退原文，不白烧 token） ---- */
+
+test('长文本限流：超长回复的润色与翻译一律跳过（不调用 AI，原文原样发出）', async () => {
+  const bridge = makePolishBridge('改写稿');
+  const huge = '段落'.repeat(3000) + ' = 45';   // 6000 字 > LONG_SRC_CHARS(4000)
+  const tr = createTransformReplies({
+    aiBridge: bridge,
+    getConfig: () => ({ enabled: true, features: { optimize: false, interject: false, meme: false }, interjectProb: 0 }),
+    getChatCfg: () => chatCoreForPolish.normalizeChatCfg({
+      polish: { enabled: true, scope: { roll: true } },
+      translate: { enabled: true, packs: [{ name: '精灵语' }] },
+    }),
+    langOf: () => '精灵语'
+  });
+  const replies = await tr({
+    msg: { text: '.ra 侦查', user: { id: 'u' } },
+    replies: [{ cmd: 'ra', segments: [{ type: 'text', text: huge }] }]
+  });
+  assert.strictEqual(bridge.calls.length, 0, '超长源不送 AI');
+  assert.strictEqual(textOfRs(replies), huge, '回退发原文');
+
+  /* 未超限的正常回复仍照常润色/翻译（限流不影响常规链路） */
+  const normal = '技能检定：45/60 = 成功';
+  const r2 = await tr({
+    msg: { text: '.ra 侦查', user: { id: 'u' } },
+    replies: [{ cmd: 'ra', segments: [{ type: 'text', text: normal }] }]
+  });
+  assert.ok(bridge.calls.length >= 2, '未超限仍调用润色与翻译');
+  assert.ok(textOfRs(r2).length > 0);
+});
+
+test('LONG_SRC_CHARS 导出且大于常规回复长度', () => {
+  const { LONG_SRC_CHARS } = require('../src/main/dice-enhance');
+  assert.ok(Number.isFinite(LONG_SRC_CHARS) && LONG_SRC_CHARS >= 1000);
+  assert.ok(LONG_SRC_CHARS > '技能检定：45/60 = 成功'.length, '常规回复不受影响');
+});

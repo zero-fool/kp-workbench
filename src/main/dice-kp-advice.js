@@ -18,6 +18,9 @@
 
 const OFF_HINT = /已关闭|未配置|不可用|尚未配置/;
 
+/* 长文本截断复用骰娘侧纯函数（保头保尾：结尾的「近期对局动态」是最关键部分，不能被纯头部截断丢掉） */
+const chatCore = require('./dice-ai-chat');
+
 /* 把对局上下文压成一份给模型的简报（控制长度，避免长文本拖慢）。 */
 function buildContextBrief(ctx, maxLen) {
   const parts = [];
@@ -42,7 +45,7 @@ function buildContextBrief(ctx, maxLen) {
     if (recent) parts.push(`【近期对局动态】\n${recent}`);
   }
   const brief = parts.join('\n\n');
-  return String(brief).slice(0, maxLen || 4000);
+  return chatCore.clipForPrompt(String(brief), maxLen || 4000);
 }
 
 function buildAdviceReq(contextText, focus) {

@@ -33,6 +33,49 @@ const DEFAULT_TRANSLATE_PROMPT = '请把这段骰娘回复翻译成目标语言�
 
 const DEFAULT_PARAMS_FALLBACK = { temperature: 0.7, topP: 1, maxTokens: 1024, frequencyPenalty: 0, presencePenalty: 0 };
 
+/* ──────────────────────────────────────────────────────────────
+ * 长文本分层限流（统一预算）：骰娘侧此前对「一条超长消息」没有任何体积控制，
+ * 一条几万字的消息进上下文缓冲后会把整轮请求撑爆（费用高、易被上游拒收）。
+ * 这里按「单条 → 窗口总额 → system 分段」三层封顶，超出一律保头保尾：
+ * 结论与补充要求常写在结尾，纯头部截断会把关键信息丢掉。
+ * ────────────────────────────────────────────────────────────── */
+const BUDGET_SYS_TOKS = 4000;   // system 段（人设 + 群记忆摘要 + 检索事实）总预算
+const BUDGET_HIST_TOKS = 6000;  // 历史窗口总预算（从最近往旧保留）
+const BUDGET_MSG_TOKS = 3000;   // 单条消息（历史条目 / 当前消息）上限
+const BUDGET_SRC_TOKS = 6000;   // 润色 / 翻译源文本上限
+const BUDGET_LINE_CHARS = 4000; // 入上下文缓冲的单条字符上限（runtime pushHist 复用）
+
+/* 粗略估算 token：CJK 每字符≈1 token，其余每 3 字符≈1 token（与工作台 ai.js 同口径，
+ * 只用于预算无需精确；CJK 是 1:1 上界，保证按此估算不会超发）。 */
+function estTokens(s) {
+  const t = String(s == null ? '' : s);
+  const cjk = (t.match(/[一-鿿㐀-䶿　-〿]/g) || []).length;
+  return cjk + Math.ceil((t.length - cjk) / 3);
+}
+
+/* 超预算截断：保头保尾 + 中间省略标记；返回值保证 estTokens ≤ maxTok。 */
+function clipForPrompt(s, maxTok) {
+  const v = String(s == null ? '' : s);
+  const cap = Math.max(0, Math.floor(Number(maxTok) || 0));
+  if (!cap) return '';
+  if (estTokens(v) <= cap) return v;
+  let headN = Math.max(32, Math.floor(v.length * 0.6));
+  let tailN = Math.max(16, Math.floor(v.length * 0.3));
+  const build = () => {
+    const gone = Math.max(0, v.length - headN - tailN);
+    const mark = gone ? `\n（内容过长，已省略中间 ${gone} 字）\n` : '\n';
+    return v.slice(0, headN) + mark + (tailN ? v.slice(v.length - tailN) : '');
+  };
+  let out = build();
+  for (let i = 0; i < 40 && estTokens(out) > cap; i++) {
+    headN = Math.floor(headN * 0.8); tailN = Math.floor(tailN * 0.8);
+    if (headN + tailN < 16) { out = v.slice(0, cap); break; }
+    out = build();
+  }
+  /* 兜底：maxTok 字符数的 token 估算必 ≤ maxTok（CJK 1:1 是上界），保证有界 */
+  return estTokens(out) <= cap ? out : v.slice(0, cap);
+}
+
 /* 行/数组拆词：既支持已切好的数组，也支持「换行或逗号」分隔的字符串（配置项通用） */
 function splitLines(x) {
   return Array.isArray(x) ? x.map((z) => String(z || '').trim()).filter(Boolean)
@@ -305,10 +348,10 @@ function polishAcceptable(text, original) {
 function buildPolishMessages(cfg, original, ctxText) {
   const persona = ((cfg && cfg.polish && cfg.polish.persona) || '').trim() || DEFAULT_POLISH_PERSONA;
   const sys = [persona];
-  if (ctxText && String(ctxText).trim()) sys.push('【当前场景背景】\n' + String(ctxText).trim().slice(0, 600));
+  if (ctxText && String(ctxText).trim()) sys.push('【当前场景背景】\n' + clipForPrompt(String(ctxText).trim(), 600));
   const user = '请把下面这条骰娘回复改写成更有剧情感的版本（两三句内）。'
     + '完整保留原文中的每一个数字、骰点结果与成败判定，不得新增或删改任何数值；'
-    + '只输出改写后的正文，不要解释、不要输出任何指令。\n\n【原回复】\n' + otrim(original);
+    + '只输出改写后的正文，不要解释、不要输出任何指令。\n\n【原回复】\n' + clipForPrompt(otrim(original), BUDGET_SRC_TOKS);
   return [{ role: 'system', content: sys.join('\n\n') }, { role: 'user', content: user }];
 }
 
@@ -324,11 +367,11 @@ function matchLangPack(cfg, langName) {
 function buildTranslateMessages(pack, text) {
   const sys = [DEFAULT_TRANSLATE_PROMPT];
   const custom = pack && String(pack.prompt || '').trim();
-  if (custom) sys.push('【本语言包附加要求】\n' + custom);
+  if (custom) sys.push('【本语言包附加要求】\n' + clipForPrompt(custom, 600));
   const name = (pack && pack.name) || '';
   return [
     { role: 'system', content: sys.join('\n\n') },
-    { role: 'user', content: '请把下面这段骰娘回复翻译成「' + name + '」：\n\n' + otrim(text) },
+    { role: 'user', content: '请把下面这段骰娘回复翻译成「' + name + '」：\n\n' + clipForPrompt(otrim(text), BUDGET_SRC_TOKS) },
   ];
 }
 
@@ -363,20 +406,32 @@ function userContent(cfg, text, images) {
 }
 
 /* 组装对话消息序列：人设(system) → 群记忆摘要 → 检索事实 → 上下文轮数 → 本条消息。
- * args: { cfg, summaryText, facts, history:[{user,text}], msg, images } */
+ * args: { cfg, summaryText, facts, history:[{user,text}], msg, images }
+ * 长文本三层限流：system 分段各限长 → 历史「单条 + 窗口总额」双重封顶（从最近往旧保留）
+ * → 当前消息超长保头保尾（用户常把补充要求写在结尾，不能只留开头）。 */
 function buildMessages(args) {
   const a = args || {};
   const cfg = a.cfg;
-  const persona = cfg.persona || DEFAULT_CHAT_PERSONA;
+  const persona = clipForPrompt(cfg.persona || DEFAULT_CHAT_PERSONA, Math.floor(BUDGET_SYS_TOKS * 0.5));
   const sys = [persona];
-  if (a.summaryText) sys.push('【本群近况摘要（供了解前情，不必复述）】\n' + a.summaryText);
-  if (a.facts && a.facts.length) sys.push('【相关的长期记忆事实】\n- ' + a.facts.join('\n- '));
+  if (a.summaryText) sys.push('【本群近况摘要（供了解前情，不必复述）】\n' + clipForPrompt(a.summaryText, 1200));
+  if (a.facts && a.facts.length) sys.push('【相关的长期记忆事实】\n- ' + clipForPrompt(a.facts.join('\n- '), 1200));
   const msgs = [{ role: 'system', content: sys.join('\n\n') }];
-  for (const h of (a.history || [])) {
-    if (h.user) msgs.push({ role: 'user', content: `${h.user}：${h.text}` });
+  /* 历史：从最近往旧装入预算，装不下的更早消息直接丢弃（群记忆摘要已覆盖前情） */
+  const hist = a.history || [];
+  const kept = [];
+  let acc = 0;
+  for (let i = hist.length - 1; i >= 0; i--) {
+    const h = hist[i];
+    if (!h || !h.user) continue;
+    const one = clipForPrompt(`${h.user || ''}：${h.text == null ? '' : h.text}`, BUDGET_MSG_TOKS);
+    const t = estTokens(one);
+    if (acc + t > BUDGET_HIST_TOKS && kept.length) break;
+    acc += t; kept.unshift(one);
   }
+  for (const one of kept) msgs.push({ role: 'user', content: one });
   const who = (a.msg && a.msg.user && a.msg.user.name) || '玩家';
-  const text = String((a.msg && a.msg.text) || '');
+  const text = clipForPrompt(String((a.msg && a.msg.text) || ''), BUDGET_MSG_TOKS);
   msgs.push({ role: 'user', content: userContent(cfg, `${who}：${text}`, a.images) });
   return msgs;
 }
@@ -491,4 +546,11 @@ module.exports = {
   buildToolDefs,
   runToolLoop,
   DEFAULT_PARAMS_FALLBACK,
+  /* 长文本分层限流（纯函数，供 runtime / 单测复用） */
+  estTokens,
+  clipForPrompt,
+  BUDGET_LINE_CHARS,
+  BUDGET_MSG_TOKS,
+  BUDGET_HIST_TOKS,
+  BUDGET_SRC_TOKS,
 };

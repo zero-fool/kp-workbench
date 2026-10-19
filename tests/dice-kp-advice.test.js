@@ -88,3 +88,18 @@ test('buildAdviceReq：含上下文与关注点', () => {
   assert.match(req, /如何引入新线索/);
   assert.match(req, /【NPC】镇长/);
 });
+
+test('长文本限流：简报超限时保头保尾——结尾的「近期对局动态」不被纯头部截断丢掉', () => {
+  const chatCore = require('../src/main/dice-ai-chat');
+  const npcs = Array.from({ length: 8 }, (_, i) => ({ name: 'NPC' + i, desc: '人物描写'.repeat(30) }));
+  const logs = [
+    { user: '玩家A', text: '我们先去酒馆打听消息', reply: '酒保欲言又止' },
+    { user: '玩家B', text: '我对他使用侦查', reply: '侦查 12 = 大失败' },
+    { user: 'KP', text: '此刻阴影从教堂钟楼涌出', reply: '团内最新进展：圣物被夺走' },
+  ];
+  const brief = buildContextBrief({ npcs, logs }, 600);
+  assert.ok(chatCore.estTokens(brief) <= 600, '简报应有界，实测 ' + chatCore.estTokens(brief));
+  assert.match(brief, /已省略中间/);
+  assert.match(brief, /NPC0/);                 // 保头
+  assert.match(brief, /圣物被夺走/);            // 结尾的对局动态保尾
+});

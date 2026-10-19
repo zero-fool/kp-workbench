@@ -747,6 +747,7 @@ async function requestOnce(cfg, body, timeoutMs) {
   if (!cfg || !cfg.baseUrl || !cfg.apiKey || !cfg.model) {
     throw new Error('AI 未配置完整（需 baseUrl/apiKey/model）');
   }
+  clampBodyMessages(body); // 请求级最后防线：漏网超长内容在此限长（先于用量估算，口径一致）
   budgetGuard(cfg); // U3-5：超出预算直接熔断，不再发起上游请求
   spendRequest(cfg); // U8-3：请求次数预算扣减，超限直接失败（防重试风暴）
   const url = String(cfg.baseUrl).replace(/\/+$/, '') + '/chat/completions';
@@ -850,6 +851,7 @@ async function apiCall(cfg, system, user) {
  * 预算熔断 / 请求预算 / 取消 / 用量记录与非流式完全一致。 */
 async function streamCompletions(cfg, body, timeoutMs, onDelta) {
   if (!cfg || !cfg.baseUrl || !cfg.apiKey || !cfg.model) throw new Error('AI 未配置完整（需 baseUrl/apiKey/model）');
+  clampBodyMessages(body); // 与 requestOnce 同口径：流式路径同样过请求级限长
   budgetGuard(cfg);
   spendRequest(cfg);
   const url = String(cfg.baseUrl).replace(/\/+$/, '') + '/chat/completions';
@@ -1177,10 +1179,26 @@ function estTokens(s) {
   return cjk + Math.ceil((t.length - cjk) / 3);
 }
 function clipToks(s, max) {
-  let v = String(s || '');
-  if (estTokens(v) <= max) return v;
-  while (estTokens(v) > max && v.length > 2000) v = v.slice(0, Math.floor(v.length * 0.6));
-  return v.slice(0, max * 8);
+  const v = String(s || '');
+  const cap = Math.floor(Number(max) || 0);
+  if (!(cap > 0)) return '';   // ≤0（含 NaN/负数）一律返回空，避免 slice 负步长反向截尾
+  if (estTokens(v) <= cap) return v;
+  /* 保头保尾 + 中间省略标记（与全仓长文本策略一致）：结论/补充要求常在结尾，
+   * 纯头部截断会把关键后半段丢掉；逐步收缩直至估算 token ≤ cap（CJK 1:1 是上界，必收敛）。 */
+  let headN = Math.max(32, Math.floor(v.length * 0.6));
+  let tailN = Math.max(16, Math.floor(v.length * 0.3));
+  const build = () => {
+    const gone = Math.max(0, v.length - headN - tailN);
+    const mark = gone ? `\n（内容过长，已省略中间 ${gone} 字）\n` : '\n';
+    return v.slice(0, headN) + mark + (tailN ? v.slice(v.length - tailN) : '');
+  };
+  let out = build();
+  for (let i = 0; i < 40 && estTokens(out) > cap; i++) {
+    headN = Math.floor(headN * 0.8); tailN = Math.floor(tailN * 0.8);
+    if (headN + tailN < 16) { out = v.slice(0, cap); break; }
+    out = build();
+  }
+  return estTokens(out) <= cap ? out : v.slice(0, cap);
 }
 /* 确定性兜底摘要：每条保留一句要点，零额外 AI 成本 */
 function textDigest(msgs) {
@@ -1264,6 +1282,9 @@ function finalReply(cfg, raw) {
 }
 
 async function chatWithTools(history, cfg, toolContext, timeoutMs) {
+  /* 单个工具返回的字符上限：读文件单块 26000 + 头部说明留余量；
+   * 多轮往返会把历史里的工具返回反复重发，入史即限长可避免体积随轮次滚大。 */
+  const TOOL_RES_MAX = 32000;
   let last = '';
   for (let i = 0; i < MAX_TOOL_ITERS; i++) {
     // U3-1：最后一轮不再携带工具定义，逼迫模型基于已有结果直接作答，
@@ -1285,7 +1306,7 @@ async function chatWithTools(history, cfg, toolContext, timeoutMs) {
       let fn, a;
       try { fn = tc.function && tc.function.name; a = JSON.parse(tc.function.arguments || '{}'); } catch (_) { a = {}; }
       const out = await runTool(fn, a, toolContext);
-      history.push({ role: 'tool', tool_call_id: tc.id || '', content: out });
+      history.push({ role: 'tool', tool_call_id: tc.id || '', content: clipUserInput(out, TOOL_RES_MAX) });
     }
     continue; // 有工具调用则继续往返，直到模型给出最终文本
   }
@@ -1394,7 +1415,7 @@ function stripWrap(s) {
 async function chatRaw(cfg, messages, opts) {
   opts = opts || {};
   const msgs = (messages || []).filter(m => m && (m.role === 'system' || m.role === 'user' || m.role === 'assistant'))
-    .map(m => ({ role: m.role, content: sanitizeStr(m.content, ASSIST_USER_MAX) }));
+    .map(m => ({ role: m.role, content: clipUserInput(m.content, ASSIST_USER_MAX) }));
   if (!msgs.length) throw new Error('无有效消息可发送');
   const j = await requestCompletions(cfg, {
     model: cfg.model,
@@ -1412,7 +1433,7 @@ async function chatRaw(cfg, messages, opts) {
  *   长度失控 —— 清洗内容控制字符、对超长输入做安全截断、对 AI 输出设置字符硬上限，避免界面与数据被撑爆；
  *   幻觉/胡思乱想 —— 结构化输出加 XML-JSON 双保险解析与字段白名单校验，AI 直接返回整段散文时也能抽出 JSON。 */
 const ASSIST_OUT_MAX  = 24000;   // 单次 AI 助手回复保留的字符硬上限
-const ASSIST_USER_MAX = 60000;   // 单次用户提问允许送入的最大字符数（超长只保留开头，避免费用爆炸）
+const ASSIST_USER_MAX = 60000;   // 单次用户提问允许送入的最大字符数（超长保头保尾，避免费用爆炸）
 
 /* 清洗文本：去掉控制字符/空字节、统一换行、按需截断 */
 function sanitizeStr(s, max) {
@@ -1420,6 +1441,34 @@ function sanitizeStr(s, max) {
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
   if (typeof max === 'number' && max > 0 && v.length > max) v = v.slice(0, max);
   return v;
+}
+
+/* 单条用户输入的安全截断（长文本分层限流）：清洗后仍超限则「保头保尾」——
+ * 用户常把补充要求/注意事项写在结尾，纯头部截断会把最关键的后半段丢掉；
+ * 中间插入省略标记，让模型知道内容被省略过。返回值长度保证 ≤ max。 */
+function clipUserInput(s, max) {
+  const v = sanitizeStr(s, 0);   // max=0 ⇒ 只清洗不截断
+  const cap = Math.max(0, Math.floor(Number(max) || 0));
+  if (!cap || v.length <= cap) return v;
+  const head = Math.floor(cap * 0.6);
+  const tail = Math.max(0, cap - head - 96);   // 96 字符余量给省略标记，保证总长有界
+  const gone = Math.max(0, v.length - head - tail);
+  const mark = gone ? `（输入过长，已省略中间 ${gone} 字）` : '';
+  return v.slice(0, head) + '\n' + mark + '\n' + (tail ? v.slice(v.length - tail) : '');
+}
+
+/* 请求级最后防线（与骰娘侧 dice-ai-transport.sanitizeMessages 对称）：
+ * 任何调用方漏网的超长消息内容在此统一限长，避免请求体过大被上游拒收或费用爆炸。
+ * 就地截断（幂等），对未超限的消息零改动；只处理字符串 content，
+ * 多模态数组内容不碰（其中的图片 data URI 必须原样送达）。 */
+function clampBodyMessages(body) {
+  const ms = body && Array.isArray(body.messages) ? body.messages : null;
+  if (!ms) return body;
+  for (const m of ms) {
+    if (!m || typeof m.content !== 'string') continue;
+    if (m.content.length > ASSIST_USER_MAX) m.content = clipUserInput(m.content, ASSIST_USER_MAX);
+  }
+  return body;
 }
 
 /* 轻量文本审核（内容安全）。限于能力，它不追求覆盖万物，只拦截明确、可判定的高危场景，
@@ -1934,7 +1983,7 @@ async function generateEntity(kind, tip, profile, fields, cfg, settings, ctx) {
   const sys = '你是 TRPG《' + world + '》的内容创作助手，正在使用跑团工作台。用户请你生成一条' + label + '。你只能输出一个 JSON 对象（不要 Markdown 代码块、不要任何解释文字），字段键名必须严格使用给定的字段名，缺失内容可省略该键，但名称类字段必须给出。';
   let user = '请为当前工作台创作一条' + (tip ? '「' + tip + '」' : '') + label + '。\n可用的字段（键名·含义）：\n' + fieldInstr
     + '\n请用中文填写/创作这些字段，内容要具体、贴合 TRPG 设定，有辨识度与可用性。';
-  const convText = String(ctx || '').trim().slice(0, 8000);
+  const convText = clipUserInput(ctx, 8000);   // 长文本限流：上下文超长保头保尾（最新待办在结尾）
   if (convText) user += '\n\n以下是我们之前对话/待处理的内容，请优先从中提取相关人物、设定、状态来填写本条卡片，与上下文保持一致：\n' + convText + '\n\n若上下文不足，再据 TRPG 设定合理补全，不要在已有明确信息处随机编造。';
   let lastErr = null;
   let lastIssues = [];
@@ -1994,7 +2043,7 @@ async function generateEntities(kind, tip, profile, fields, cfg, settings, ctx, 
       + '- 若上下文中没有明确的新实体，或上下文为空，则按模板创作恰好 1 条合理、有辨识度的' + label + '；\n'
       + '- 每条卡填写的字段须符合下方 schema。\n可用的字段（键名·含义）：\n' + fieldInstr
       + '\n请用中文填写/创作，内容具体、贴合 TRPG 设定，多张卡片之间要有区分度。';
-  const convText = String(ctx || '').trim().slice(0, 8000);
+  const convText = clipUserInput(ctx, 8000);   // 长文本限流：上下文超长保头保尾（最新待办在结尾）
   if (convText) user += (single
     ? '\n\n以下是可参考的上下文（仅供风格与设定对齐；请只据此创作 1 条新条目，不要从上下文直接复制出多条）：\n'
     : '\n\n以下是我们之前对话/待处理的内容，请优先从中提取条目来填卡片，与上下文保持一致：\n') + convText;
@@ -2038,7 +2087,7 @@ async function genTemplateFromRules(cfg, rulesText) {
     + '{"name":"模板名(如：XXX 人物卡)","note":"一句话说明该模板特点","fields":{"pcs":[{"k":"英文键","l":"中文显示名","t":"text|textarea|number|select|tags",可选"opts":["中文选项",...]}, ...]}}\n要求：\n'
     + '- 每个键 k 用英文(小写、不含空格)，显示名 l 用中文；\n- 类型 t 只能是 text/textarea/number/select/tags 之一；select 必须给出 opts 中文选项；\n'
     + '- 应覆盖该规则的属性/能力值、生命或资源类数值、技能/擅长类别等，数量 8~24 个，贴合该规则的特色系统；\n'
-    + '- 列表开头两项应为「姓名」与「玩家」，随后是属性与数值。\n【规则书内容】\n' + String(rulesText || '').slice(0, 10000); // U3-3：模板生成输入 18000→10000，控制单次成本
+    + '- 列表开头两项应为「姓名」与「玩家」，随后是属性与数值。\n【规则书内容】\n' + clipUserInput(rulesText, 10000); // U3-3：模板生成输入 10000 封顶；保头保尾（职业/法术表常在规则书后段）
   let lastErr = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -2107,7 +2156,7 @@ async function generateBoard(cfg, text, opts) {
     + '- fog 表示被遮住、玩家还没探索到的区域轮廓；region 表示有名字的大区域；两者都是多边形；'
     + '- 若文字没有地图信息，则给出一套通用的开局布局（含 1~3 个 marker 与 1 块 fog）。';
   const user = '底图比例大约是 ' + baseW + ':' + baseH + '。请给下面这段描述设计地图要素（只输出 JSON）：\n【文字】\n'
-    + String(text == null ? '' : text).slice(0, 10000); // U3-3：地图生成输入 18000→10000，控制单次成本
+    + clipUserInput(text, 10000); // U3-3：地图生成输入 10000 封顶；保头保尾（关键要求常写在描述结尾）
   let lastErr = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -2179,7 +2228,7 @@ async function auditData(cfg, doc, world) {
     + '若某类没有发现问题请跳过；若整体未发现问题，最后明确写一行“未发现明显问题”。'
     + '回答只使用中文，条理清晰，不要客套。';
   const user = '数据快照：\n' + JSON.stringify(snapshot, null, 1);
-  const c = await apiCall(cfg, sys, String(user || '').slice(0, 40000));
+  const c = await apiCall(cfg, sys, clipUserInput(user, 40000));   // 超大快照保头保尾，覆盖首尾类别
   return { content: stripWrap(c), model: cfg.model };
 }
 
@@ -2375,7 +2424,7 @@ async function suggestRelations(entities, relations, cfg, rawText) {
   const raw = String(rawText || '').replace(/\s+/g, '\n').trim();
   /* U3-8：摘录不再只取开头 8000 字——按段落命中实体数排序，优先注入「实体共现最密集」的段落，
    * 避免长文本前段的无关系描写把真正的关系线索挤出预算；预算仍封顶 8000 字符防 token 爆炸。 */
-  let excerpt = raw.slice(0, 8000);
+  let excerpt = clipUserInput(raw, 8000);
   if (paraHits.length) {
     paraHits.sort((a, b) => b.hits - a.hits);
     const parts = []; let used = 0;
@@ -2397,7 +2446,7 @@ async function suggestRelations(entities, relations, cfg, rawText) {
     + '· 地点-地点：位于、毗邻、通道相连、包含于、曾是同一处。\n'
     + '清单按【人物】【地区】等类别分节；地点之间、人物与地点之间有明确线索时同样要输出 add，不要因为没有看到显式关系词就一律输出空数组。'
     + '\n\n现有连线（供 add 去重、edit/del 定位）：' + (existingReadable.length ? existingReadable.join('　') : '（暂无）')
-    + '\n\n清单（名称后是卡片关键内容）\n' + lines.join('\n').slice(0, 14000)
+    + '\n\n清单（名称后是卡片关键内容）\n' + clipUserInput(lines.join('\n'), 14000)
     + (excerpt ? '\n\n原始文本摘录\n' + excerpt : '');
   /* P1-4：优先声明 response_format(json_object) 强约束输出 schema（上游不支持时 rawJsonReply 会自动去掉重试）；
    * 解析仍失败再走 P0-2 定向重试。 */
@@ -2489,7 +2538,7 @@ async function suggestScript(text, profile, fields, cfg, settings, opts) {
  * 依据近期会话/日志提炼值得长期记住的要点，输出 {"points":["…",…]}。 */
 async function plotSummary(cfg, content, memoryText) {
   const sys = '你是 TRPG 跑团剧本分析助手。下面给出一段近期跑团对话/日志内容。请提炼其中值得长期记住的剧情要点、人物线索、伏笔与关键设定，输出严格 JSON 对象：{"points":["要点1","要点2",...]}。要求：每条一句话、具体、可独立理解、不要编号前缀，最多 12 条；若内容太少则返回 {"points":[]}。只输出 JSON，不要解释。';
-  const user = '【现有长期记忆（避免重复收录）】\n' + (String(memoryText || '').trim() || '（无）') + '\n\n【近期内容】\n' + String(content || '').slice(0, 16000); // U3-3：剧情要点输入 32000→16000
+  const user = '【现有长期记忆（避免重复收录）】\n' + (String(memoryText || '').trim() || '（无）') + '\n\n【近期内容】\n' + clipUserInput(content, 16000); // U3-3：32000→16000；超长保头保尾（最新剧情在结尾）
   const raw = await rawJsonReply(cfg, sys, user, 1600);
   const obj = extractJsonObject(raw);
   let points = [];
@@ -2513,7 +2562,7 @@ async function suggestStory(cfg, content, existing) {
   const user = '【已存在的 NPC/剧情点名称（避免重复建议）】\n'
     + 'NPC：' + (names.npcs.join('、') || '（无）') + '\n'
     + '日志/剧情点：' + (names.logs.join('、') || '（无）') + '\n\n'
-    + '【近期内容】\n' + String(content || '').slice(0, 16000); // U3-3：剧情建议输入 32000→16000
+    + '【近期内容】\n' + clipUserInput(content, 16000); // U3-3：32000→16000；超长保头保尾
   const raw = await rawJsonReply(cfg, sys, user, 2600);
   const obj = extractJsonObject(raw);
   const result = { entities: { pcs: [], npcs: [], regions: [], logs: [], mobs: [], rules: [], lore: [] }, updates: [] };
@@ -2877,7 +2926,7 @@ async function regenerateScene(cfg, text, scenes, index, opts) {
     + '只输出 JSON，不要输出任何解释文字或 Markdown 代码块。';
   const lines = [];
   lines.push('【剧本正文（节选，供核对剧情）】');
-  lines.push(String(text || '').slice(0, 3000));
+  lines.push(clipUserInput(text, 3000));
   if (prev.length) {
     lines.push('');
     lines.push('【前文已确立（第 ' + (idx - prev.length + 1) + ' 幕起，不得改写）】');
@@ -2912,4 +2961,4 @@ async function regenerateScene(cfg, text, scenes, index, opts) {
   return { ok: true, scene: n, usage: usageByMark(mark) };
 }
 
-module.exports = { DEFAULT_FIELDS, defaultFields, ensureFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, localRelationCandidates, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, regenerateScene, extractScriptBody, usageLog, usageByMark, aggregateUsage, usageReport, healthStats, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, hasEntitySignals, hasNarrativeSignals, aiChunkParams, mergeRoll, buildContinueCtx };
+module.exports = { DEFAULT_FIELDS, defaultFields, ensureFields, effectiveFields, schemaText, chat, chatRaw, parseScript, auditData, profileBlock, KIND_LIST: _K, DEFAULT_PROMPTS, effectivePrompts, renderPrompt, generateContent, generateEntity, generateEntities, genTemplateFromRules, BUILTIN_TEMPLATES, effectiveTemplates, tplSchema, suggestRelations, relationDiag, localRelationCandidates, suggestScript, defaultModRules, generateBoard, clamp01, normPoly, plotSummary, suggestStory, breakdownScenario, regenerateScene, extractScriptBody, usageLog, usageByMark, aggregateUsage, usageReport, healthStats, resetUsage, cancelGroup, recordUsage, setHubContext, hubPrefix, hubSystem, looksLikeNonPersonName, splitByStructure, normName, mergeEntity, hasEntitySignals, hasNarrativeSignals, aiChunkParams, mergeRoll, buildContinueCtx, clipUserInput, clampBodyMessages, clipToks, sanitizeStr, estTokens };

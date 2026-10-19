@@ -2,6 +2,15 @@
 
 > 版本级开发脉络（大事记）；详细实施计划见 `docs/superpowers/plans/`。
 
+## 未发版·全局长文本分层限流优化批次（AI 大文件/长文本重点）
+- 统一截断策略：全仓超长内容一律「保头保尾 + 中间省略标记」——结论与补充要求常写在结尾，纯头部截断会丢掉关键后半段。此前 `ai.js clipToks`、渲染层输入、原始文本导入等多处为纯头部截断，已全部改造。
+- 骰娘侧：`dice-ai-chat` 三层预算（单条 3000 / 历史窗口 6000 / system 4000 tok）+ `clipForPrompt`；`pushHist` 入缓冲即限长（单条 4000 字）；`dice-ai-transport.sanitizeMessages` 作为传输层最后防线；回复润色/翻译源超 4000 字直接跳过不调用 AI（回退发原文，不白烧 token）。
+- 记忆与建议：摘要/事实抽取攒批新增 `MEM_WIN_TOKS=6000` 窗口预算（`keepRounds` 调大不再撑爆请求），输出指令拼在裁剪之外永不丢；KP 建议简报 `buildContextBrief` 改保头保尾（结尾「近期对局动态」不再被纯头部截断丢掉）。
+- 工作台侧：`clipToks` 改为保头保尾（单条超大消息、system 团背景/偏好/记忆注入、压缩摘要全部受益）；新增请求级最后防线 `clampBodyMessages`（接入 `requestOnce` 与 `streamCompletions` 两个发口，与骰娘 transport 对称）；工具返回入史限长 `TOOL_RES_MAX=32000`（读文件单块 26000 不受影响）；规则书模板/地图生成/关系清单/剧本节选等大输入统一 `clipUserInput`。
+- 注入上下文保尾：main 的 `buildLoreText/memoryText/userPrefsText`、写剧本 ctx、骰娘 `buildSystem`（尾部【KP 偏好】此前会被截掉）全部改 `ai.clipUserInput`。
+- 渲染层：聊天输入与附件要求（60000/30000）、档案上下文汇总（6000）、模板规则输入（16000）、关系建议 raw（8000）改 `clipHeadTail`；原始文本导入 300000 上限改保头保尾——多文件合并不再整体丢掉后导入文件的结尾；`recentStoryText` 按对话/日志 7:3 分段预算，排在后面的日志不再被静默丢弃。
+- 验证：npm test 571 全绿（本批次累计新增单测 16 条：三层预算/传输兜底/超长源跳过/缓冲限长 8 条 + 记忆窗口/clipToks/clampBodyMessages/KP 简报 8 条）、回归 391 GREEN · 0 RED（累计新增长文本断言 9 条，382 → 391）、verify 通过（接线审计 + 三方扫描 + 全指令回归）。
+
 ## v3.4.1（补丁·AI 广播断链修复，发版收尾）
 - 修复两条静默断链：`ai:busy` 忙闲广播缺主进程 `ipcMain.on` 中转（全局「AI 处理中」提示条/计时/队列可视化与用量徽标刷新全部失效）、`dice-core:engine-event` 无发送方（骰娘页只能靠 4 秒轮询刷新状态徽标）；两者均补上接线。
 - wiring-audit 新增「1B 单向广播配对」检查（preload send↔ipcMain.on、preload on↔webContents.send），负向验证可精确抓出断链——此前 382 项回归全绿却漏掉它们，根因是旧审计只比对 invoke↔handle。

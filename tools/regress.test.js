@@ -1968,9 +1968,11 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       && /const MEMORY_MAX_TOKENS\s+= 1200;/.test(aiSrc)
       && /clipToks\(String\(opts\.memoryText\), MEMORY_MAX_TOKENS\)/.test(aiSrc) ? true : '上下文预算/注入限长缺失';
   });
-  check('U3-3 大输入瘦身：审查改用轻量清单 + 输入上限 40000', () => {
+  check('U3-3 大输入瘦身：审查改用轻量清单 + 输入上限 40000（超长保头保尾）', () => {
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
-    return /U3-3/.test(aiSrc) && /正文摘要/.test(aiSrc) && /\.slice\(0, 40000\)/.test(aiSrc) ? true : '大输入未瘦身';
+    return /U3-3/.test(aiSrc) && /正文摘要/.test(aiSrc)
+      && /clipUserInput\(user, 40000\)/.test(aiSrc)
+      && /function clipUserInput\(/.test(aiSrc) ? true : '大输入未瘦身';
   });
   check('U3-4 模组解析省 token：分段 15000/重叠 250 + 后续段轻量 schema', () => {
     const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
@@ -2580,6 +2582,92 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
       if (!/fetchImageAsDataUri/.test(mainSrc)) return 'main 未注入图片下载依赖';
       const cfg = chat.normalizeChatCfg({});
       if (cfg.vision.directUrl !== true) return '直链模式应默认开启';
+      return true;
+    });
+
+    /* ---- AI 长文本 / 大文件分层限流（全局 AI 优化） ---- */
+    const diceChatSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'dice-ai-chat.js'), 'utf8');
+    const trSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'dice-ai-transport.js'), 'utf8');
+
+    check('AI 长文本限流·骰娘：三层预算（单条/窗口/system）+ clipForPrompt 保头保尾', () => {
+      if (!/function clipForPrompt\(/.test(diceChatSrc)) return '缺 clipForPrompt';
+      if (!/BUDGET_HIST_TOKS/.test(diceChatSrc) || !/BUDGET_MSG_TOKS/.test(diceChatSrc)) return '缺预算常量';
+      const msgs = chat.buildMessages({
+        cfg: chat.normalizeChatCfg({}),
+        history: [{ user: 'A', text: 'x'.repeat(30000) }],
+        msg: { user: { name: 'B' }, text: 'y'.repeat(30000) + '尾部要求' },
+      });
+      const total = msgs.reduce((n, m) => n + chat.estTokens(typeof m.content === 'string' ? m.content : ''), 0);
+      if (total > 14000) return '整轮请求未被限流，实测 ' + total;
+      const last = msgs[msgs.length - 1].content;
+      if (!String(last).endsWith('尾部要求')) return '超长消息未保尾';
+      return true;
+    });
+    check('AI 长文本限流·缓冲与传输：pushHist 限长 + sanitizeMessages 体积兜底', () => {
+      const rtSrc2 = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'dice-ai-chat-runtime.js'), 'utf8');
+      if (!/clipForPrompt\(text, chatCore\.BUDGET_LINE_CHARS\)/.test(rtSrc2)) return 'pushHist 未限长';
+      if (!/CONTENT_MAX_CHARS/.test(trSrc)) return 'transport 缺 content 兜底';
+      const clipped = trSrc.includes('clipContent(content, CONTENT_MAX_CHARS)');
+      if (!clipped) return 'sanitizeMessages 未过长度兜底';
+      return true;
+    });
+    check('AI 长文本限流·增强链路：超长润色/翻译源跳过（不白烧 token）', () => {
+      if (!/LONG_SRC_CHARS/.test(enhSrc)) return '缺超长源阈值';
+      if (!/cur\.length > LONG_SRC_CHARS/.test(enhSrc)) return '润色/翻译未按阈值跳过';
+      return true;
+    });
+    check('AI 长文本限流·工作台：clipUserInput 保头保尾（chatRaw 与大输入）', () => {
+      const ai2 = require(path.join(__dirname, '..', 'src', 'main', 'ai.js'));
+      const aiSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+      const long = '头'.repeat(100000) + '尾部要求';
+      const out = ai2.clipUserInput(long, 60000);
+      if (out.length > 60000) return '输入未有界，实测 ' + out.length;
+      if (!out.startsWith('头')) return '未保头';
+      if (!out.endsWith('尾部要求')) return '未保尾';
+      if (ai2.clipUserInput('short', 60000) !== 'short') return '短输入被改动';
+      if (!/clipUserInput\(m\.content, ASSIST_USER_MAX\)/.test(aiSrc)) return 'chatRaw 未走保头保尾截断';
+      return true;
+    });
+    check('AI 长文本限流·渲染层：recentStoryText 分段预算（不再整体截断丢日志）', () => {
+      if (!/function clipHeadTail\(s, cap\)/.test(src)) return '渲染层缺保头保尾工具';
+      const m = /function recentStoryText\(maxChars\) \{[\s\S]*?\n {2}\}/.exec(src);
+      if (!m) return '未找到 recentStoryText';
+      if (/\.slice\(0, maxChars \|\| 32000\)/.test(m[0])) return '仍在整体截断（会丢掉排在后面的日志段）';
+      if (!/Math\.floor\(cap \* 0\.7\)/.test(m[0])) return '未按段分配预算';
+      return true;
+    });
+
+    /* ---- 全局 AI 长文本优化·第二轮：请求级防线 / 记忆窗口 / 注入上下文保尾 ---- */
+    const aiSrcB = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ai.js'), 'utf8');
+    const memSrcB = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'dice-ai-memory.js'), 'utf8');
+    const mainSrcB = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.js'), 'utf8');
+    const kpSrcB = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'dice-kp-advice.js'), 'utf8');
+
+    check('AI 长文本·工作台最后防线：clipToks 保头保尾 + clampBodyMessages 接入双发出口', () => {
+      if (!/已省略中间/.test(aiSrcB)) return 'clipToks 仍是纯头部截断';
+      const calls = (aiSrcB.match(/clampBodyMessages\(body\)/g) || []).length;
+      if (calls < 2) return 'requestOnce / streamCompletions 应各接入一次，实测 ' + calls;
+      if (!/TOOL_RES_MAX/.test(aiSrcB)) return '工具返回未限长（多轮往返会滚大）';
+      if (!/clipUserInput\(rulesText, 10000\)/.test(aiSrcB)) return '规则书模板生成仍纯头部截断';
+      return true;
+    });
+    check('AI 长文本·记忆窗口：摘要/抽取攒批超预算保头保尾（keepRounds 调大不撑爆请求）', () => {
+      if (!/MEM_WIN_TOKS/.test(memSrcB)) return '缺窗口预算常量';
+      const n = (memSrcB.match(/clipForPrompt\(/g) || []).length;
+      if (n < 2) return '摘要与抽取都应过 clipForPrompt，实测 ' + n;
+      return true;
+    });
+    check('AI 长文本·注入上下文保尾：main 注入与渲染层输入不再纯头部截断', () => {
+      if (!/ai\.clipUserInput\(sys, 6000\)/.test(mainSrcB)) return '骰娘 system 注入未保尾（【KP 偏好】在结尾）';
+      if (/\.slice\(0, 6000\)/.test(mainSrcB)) return 'main 仍有纯头部 6000 截断';
+      if (/typed\.slice\(0, 60000\)/.test(src)) return '渲染层聊天输入仍纯头部截断';
+      if (!/clipHeadTail\(typed, 60000\)/.test(src)) return '渲染层聊天输入未用保头保尾';
+      if (/joined\.slice\(0, 300000\)/.test(src)) return '原始文本多文件导入仍整体丢尾';
+      if (!/clipHeadTail\(joined, 300000\)/.test(src)) return '原始文本导入未用保头保尾';
+      return true;
+    });
+    check('AI 长文本·KP 建议简报：超限保头保尾（结尾的近期对局动态不丢）', () => {
+      if (!/clipForPrompt\(String\(brief\)/.test(kpSrcB)) return '简报仍纯头部截断';
       return true;
     });
   })();

@@ -346,3 +346,71 @@ test('matchLangPack：大小写不敏感精确命中；buildTranslateMessages �
   assert.ok(m[0].content.includes('用优雅古风'));
   assert.ok(m[1].content.includes('「精灵语」') && m[1].content.includes('掷骰 1d6：3 = 3'));
 });
+
+/* ---- 长文本分层限流（大文件 / 长文本优化）：单条 → 窗口 → system 三层封顶 ---- */
+
+test('clipForPrompt：不超预算原样返回；超预算保头保尾、有省略标记且估算有界', () => {
+  assert.equal(chat.clipForPrompt('短消息没问题', 100), '短消息没问题');
+  assert.equal(chat.clipForPrompt('任意', 0), '');
+  const head = '开头关键信息', tail = '结尾补充要求：数值别改';
+  const long = head + '中'.repeat(20000) + tail;
+  const out = chat.clipForPrompt(long, 1000);
+  assert.ok(chat.estTokens(out) <= 1000, '输出必须有界，实测 ' + chat.estTokens(out));
+  assert.ok(out.startsWith(head), '保留开头');
+  assert.ok(out.endsWith(tail), '保留结尾（结论常在尾部）');
+  assert.match(out, /已省略中间 \d+ 字/);
+  /* 纯 ASCII 长文本同样有界（非 CJK 按 3 字符≈1 token 估算） */
+  assert.ok(chat.estTokens(chat.clipForPrompt('a'.repeat(100000), 500)) <= 500);
+  /* 正常中文的 token 口径：4 字 = 4 token */
+  assert.equal(chat.estTokens('你好世界'), 4);
+});
+
+test('buildMessages：超长当前消息/历史/摘要/事实全部按预算裁剪，短消息完全不变', () => {
+  const cfg = chat.normalizeChatCfg({});
+  const msgs = chat.buildMessages({
+    cfg,
+    summaryText: '摘'.repeat(5000),
+    facts: ['事实' + '丙'.repeat(5000)],
+    history: [
+      { user: 'A', text: '旧消息' + '甲'.repeat(6000) },
+      { user: 'B', text: '中消息' + '乙'.repeat(6000) },
+      { user: 'C', text: '新消息' + '丁'.repeat(6000) },
+    ],
+    msg: { user: { name: '阿琳' }, text: '头'.repeat(20000) + '结尾指令' },
+  });
+  const tok = (m) => chat.estTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+  const total = msgs.reduce((n, m) => n + tok(m), 0);
+  assert.ok(total <= 14000, '整轮请求必须有界，实测 ' + total);   // system 4000 + 历史 6000 + 单条 3000
+  const last = msgs[msgs.length - 1].content;
+  assert.ok(String(last).endsWith('结尾指令'), '当前消息保头保尾');
+  assert.ok(tok(msgs[msgs.length - 1]) <= chat.BUDGET_MSG_TOKS, '单条消息不超预算');
+  assert.ok(chat.estTokens(msgs[0].content) <= 4100, 'system 分段限长');
+  assert.ok(msgs.some((m) => String(m.content).includes('新消息')), '最近历史优先保留');
+  assert.ok(!msgs.some((m) => String(m.content).includes('旧消息')), '装不下的更早历史被裁掉');
+
+  /* 短消息回归：完全原样、顺序不变 */
+  const plain = chat.buildMessages({
+    cfg, history: [{ user: '大帝', text: '先睡觉' }], msg: { user: { name: '阿琳' }, text: '开始吧' },
+  });
+  assert.deepEqual(plain[1], { role: 'user', content: '大帝：先睡觉' });
+  assert.deepEqual(plain[2], { role: 'user', content: '阿琳：开始吧' });
+});
+
+test('buildPolishMessages / buildTranslateMessages：超长源文本限长且保尾，短文本原样', () => {
+  const long = '原文' + '字'.repeat(30000) + '结尾数字 42';
+  const pm = chat.buildPolishMessages(chat.normalizeChatCfg({}), long, '场景' + '背'.repeat(9000));
+  assert.ok(chat.estTokens(pm[1].content) <= chat.BUDGET_SRC_TOKS + 80, '润色源有界');
+  assert.ok(pm[1].content.endsWith('结尾数字 42'), '润色源保尾');
+  assert.ok(chat.estTokens(pm[0].content) <= 800, '场景背景限长');
+
+  const tm = chat.buildTranslateMessages({ name: '精灵语', prompt: '附加' + '要'.repeat(5000) }, long);
+  assert.ok(tm[1].content.includes('「精灵语」'));
+  assert.ok(chat.estTokens(tm[1].content) <= chat.BUDGET_SRC_TOKS + 80, '翻译源有界');
+  assert.ok(tm[1].content.endsWith('结尾数字 42'), '翻译源保尾');
+  assert.ok(chat.estTokens(tm[0].content) <= 750, '语言包附加要求限长');
+
+  /* 短源原样，不加任何标记 */
+  const pm2 = chat.buildPolishMessages(chat.normalizeChatCfg({}), '掷骰 1d100：45 = 45', '');
+  assert.ok(pm2[1].content.includes('掷骰 1d100：45 = 45'));
+  assert.ok(!/已省略中间/.test(pm2[1].content));
+});

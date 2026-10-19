@@ -327,3 +327,33 @@ test('U9-13：NPC 无人设 → 退化为署名身份（不以骰娘口吻作答
   assert.ok(sys.content.includes('老爹'));
   assert.ok(!sys.content.includes('骰子机器人少女') === false || sys.content.includes('老爹'));  // 有署名即可
 });
+
+/* ---- 长文本分层限流（大文件 / 长文本优化） ---- */
+
+test('超长消息：入上下文缓冲即被限长，整轮请求 token 有界且保尾', async () => {
+  const env = makeEnv();
+  const huge = '粘贴'.repeat(20000) + '最后叮嘱';   // 4 万字粘贴
+  await env.engine.onMessage(groupMsg(huge), env.channel);   // 不触发：只入缓冲
+  assert.equal(env.calls.length, 0, '未触发不调用 AI');
+
+  await env.engine.onMessage(groupMsg('@10000 好了吗'), env.channel);
+  assert.equal(env.calls.length, 1);
+  const contents = env.calls[0].messages.filter((m) => typeof m.content === 'string').map((m) => m.content);
+  const total = contents.reduce((n, s) => n + chatCore.estTokens(s), 0);
+  assert.ok(total <= 8000, '整轮请求必须有界，实测 ' + total);
+  const hist = contents[1];                                  // 历史那条 = 先前的超长消息
+  assert.ok(hist.includes('最后叮嘱'), '历史消息保尾（结论在结尾）');
+  assert.ok(chatCore.estTokens(hist) <= chatCore.BUDGET_LINE_CHARS + 64,
+    '入缓冲的消息有界，实测 ' + chatCore.estTokens(hist));
+});
+
+test('超长单条消息作为当前输入：按单条预算发送，尾部要求不丢', async () => {
+  const env = makeEnv();
+  await env.engine.onMessage(groupMsg('@10000 ' + '正文'.repeat(30000) + '务必保留数值 42'), env.channel);
+  assert.equal(env.calls.length, 1);
+  const last = env.calls[0].messages[env.calls[0].messages.length - 1];
+  const text = typeof last.content === 'string' ? last.content : JSON.stringify(last.content);
+  assert.ok(text.endsWith('务必保留数值 42'), '当前消息保尾');
+  assert.ok(chatCore.estTokens(text) <= chatCore.BUDGET_MSG_TOKS + 32,
+    '单条消息不超预算，实测 ' + chatCore.estTokens(text));
+});

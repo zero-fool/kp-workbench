@@ -15,6 +15,12 @@
  * 纯逻辑无 IO：AI 调用由调用侧注入，保证可单测。
  */
 
+/* 长文本窗口预算：摘要/事实抽取的「攒批原文」体积必须有界——keepRounds 可配置，
+ * 有人调大后 keep×单条上限会把请求撑爆（费用高、易被上游拒收）。
+ * 复用骰娘侧 clipForPrompt（纯函数、无循环依赖），超出保头保尾。 */
+const chatCore = require('./dice-ai-chat');
+const MEM_WIN_TOKS = 6000;   // 摘要/抽取窗口 token 预算（与骰娘对话历史窗口同口径）
+
 /* 余弦相似度（零依赖，向量维度不一致按短边截断） */
 function cosine(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || !a.length || !b.length) return 0;
@@ -83,18 +89,19 @@ function summaryPrompt(cfg) {
   return (p || DEFAULT_SUMMARY_PROMPT).replace(/\{maxChars\}/g, String(maxChars));
 }
 
-/* 组装摘要请求 messages：system=提示词，user=旧摘要+新增原文 */
+/* 组装摘要请求 messages：system=提示词，user=旧摘要+新增原文（窗口超预算时保头保尾裁剪，
+ * 结尾的「最新动态」与输出指令不丢） */
 function buildSummaryMessages(cfg, oldSummary, newLines) {
   const maxChars = (cfg.summary && cfg.summary.maxChars) || 300;
   const keep = (cfg.summary && cfg.summary.keepRounds) || 10;
   const lines = (newLines || []).slice(-keep).map((l) => `${l.user}：${l.text}`);
+  const body = [
+    oldSummary ? `【旧摘要】\n${oldSummary}` : '【旧摘要】（暂无，这是第一份摘要）',
+    `【新增聊天记录】\n${lines.join('\n') || '（无）'}`,
+  ].join('\n\n');
   return [
     { role: 'system', content: summaryPrompt(cfg) },
-    { role: 'user', content: [
-      oldSummary ? `【旧摘要】\n${oldSummary}` : '【旧摘要】（暂无，这是第一份摘要）',
-      `【新增聊天记录】\n${lines.join('\n') || '（无）'}`,
-      `请输出不超过 ${maxChars} 字的新摘要。`,
-    ].join('\n\n') },
+    { role: 'user', content: chatCore.clipForPrompt(body, MEM_WIN_TOKS) + `\n\n请输出不超过 ${maxChars} 字的新摘要。` },
   ];
 }
 
@@ -135,13 +142,13 @@ function parseFactsJSON(text) {
   return [];
 }
 
-/* 抽取请求 messages：system=提示词，user=近期原文 */
+/* 抽取请求 messages：system=提示词，user=近期原文（同摘要：窗口超预算保头保尾裁剪） */
 function buildExtractMessages(cfg, lines) {
   const keep = (cfg.summary && cfg.summary.keepRounds) || 10;
   const rows = (lines || []).slice(-keep).map((l) => `${l.user}：${l.text}`);
   return [
     { role: 'system', content: extractPrompt(cfg) },
-    { role: 'user', content: '【聊天记录】\n' + (rows.join('\n') || '（无）') },
+    { role: 'user', content: chatCore.clipForPrompt('【聊天记录】\n' + (rows.join('\n') || '（无）'), MEM_WIN_TOKS) },
   ];
 }
 

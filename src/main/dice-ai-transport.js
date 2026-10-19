@@ -77,14 +77,31 @@ function postJson(url, headers, body, timeoutMs, outerSignal) {
   });
 }
 
+/* 单条 content 字符硬上限（最后防线）：与骰娘纯逻辑层的 token 预算互补——
+ * 任何调用方漏网的超长内容都必须在发出前兜住，避免请求体过大被上游拒收或费用爆炸。
+ * 超限时保头保尾（结论/补充要求常在结尾），并插入省略标记让模型知道被截了。 */
+const CONTENT_MAX_CHARS = 60000;
+function clipContent(v, max) {
+  if (typeof v !== 'string' || v.length <= max) return v;
+  const head = Math.floor(max * 0.6), tail = Math.max(0, max - head - 64);
+  return v.slice(0, head) + `\n（内容过长，已省略中间 ${v.length - head - tail} 字）\n` + v.slice(v.length - tail);
+}
+
 /* 消息透传（批次二 U9-10/U9-12）：兼容多模态数组 content、assistant.tool_calls、tool 结果消息。
- * 白名单式复制，防止调用方把无关字段塞进请求体。 */
+ * 白名单式复制，防止调用方把无关字段塞进请求体；content 统一过长度兜底。 */
 function sanitizeMessages(messages) {
   const out = [];
   for (const m of messages || []) {
     if (!m || typeof m.role !== 'string') continue;
     if (!['system', 'user', 'assistant', 'tool'].includes(m.role)) continue;
-    const item = { role: m.role, content: m.content === undefined || m.content == null ? '' : m.content };
+    let content = m.content === undefined || m.content == null ? '' : m.content;
+    if (typeof content === 'string') content = clipContent(content, CONTENT_MAX_CHARS);
+    else if (Array.isArray(content)) {
+      /* 多模态数组：逐段复制，只对 text 段限长（image_url 等原样透传） */
+      content = content.map((p) => (p && p.type === 'text' && typeof p.text === 'string')
+        ? Object.assign({}, p, { text: clipContent(p.text, CONTENT_MAX_CHARS) }) : p);
+    }
+    const item = { role: m.role, content };
     if (Array.isArray(m.tool_calls) && m.tool_calls.length) item.tool_calls = m.tool_calls;
     if (m.role === 'tool' && m.tool_call_id) item.tool_call_id = String(m.tool_call_id);
     if (m.name) item.name = String(m.name).slice(0, 64);
@@ -218,4 +235,4 @@ async function fetchImageAsDataUri(url, timeoutMs = 8000, signal) {
   });
 }
 
-module.exports = { chatRaw, chat, probe, embeddingsRaw, sanitizeMessages, normalizeCfg, fetchImageAsDataUri };
+module.exports = { chatRaw, chat, probe, embeddingsRaw, sanitizeMessages, normalizeCfg, fetchImageAsDataUri, clipContent, CONTENT_MAX_CHARS };

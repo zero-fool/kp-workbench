@@ -166,3 +166,26 @@ test('U9-4：probe 失败不抛错，返回 ok=false 与可读错误；空地址
     assert.match(empty.error, /地址为空/);
   } finally { srv.close(); }
 });
+
+/* ---- 长文本最后防线：单条 content 体积兜底（保头保尾，多模态只限文本段） ---- */
+
+test('sanitizeMessages：超长 content 有界且保头保尾，短文本原样、不污染入参', () => {
+  const { sanitizeMessages, CONTENT_MAX_CHARS } = require('../src/main/dice-ai-transport');
+  const long = '头'.repeat(1000) + '中'.repeat(120000) + '尾部指令';
+  const src = [{ role: 'user', content: long }, { role: 'assistant', content: '短回复' }];
+  const out = sanitizeMessages(src);
+  assert.ok(out[0].content.length <= CONTENT_MAX_CHARS, '超长必须有界，实测 ' + out[0].content.length);
+  assert.ok(out[0].content.startsWith('头'), '保头');
+  assert.ok(out[0].content.endsWith('尾部指令'), '保尾（结论常在结尾）');
+  assert.match(out[0].content, /已省略中间 \d+ 字/);
+  assert.equal(out[1].content, '短回复');
+  assert.equal(src[0].content, long, '入参不得被就地修改');
+
+  /* 多模态数组：text 段限长，image_url 段原样透传 */
+  const parts = sanitizeMessages([{
+    role: 'user',
+    content: [{ type: 'text', text: long }, { type: 'image_url', image_url: { url: 'http://x/a.png' } }],
+  }]);
+  assert.ok(parts[0].content[0].text.length <= CONTENT_MAX_CHARS);
+  assert.equal(parts[0].content[1].image_url.url, 'http://x/a.png');
+});
