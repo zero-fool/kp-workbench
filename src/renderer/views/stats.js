@@ -70,7 +70,7 @@
     let mx = 1; for (const r of grid) for (const v of r) mx = Math.max(mx, v);
     const cell = 22, gap = 2, pad = 30, ch = cell * 7 + gap * 6;
     let s = `<svg viewBox="0 0 ${pad + 24 * (cell + gap) + 8} ${ch + 18}" style="width:100%;max-width:760px;display:block">
-      ${WD.map((dd, d) => `<text x="4" y="${pad + d * (cell + gap) + cell - 6}" font-size="11" fill="var(--ink-faint)">${dd}</text>`).join('')}
+      ${WD.map((dd, d) => `<text x="4" y="${d * (cell + gap) + cell - 6}" font-size="11" fill="var(--ink-faint)">${dd}</text>`).join('')}
       ${grid.map((row, d) => row.map((v, h) => {
         const t = v ? Math.max(1, Math.round((v / mx) * 100)) : 0;
         const col = t <= 0 ? 'var(--bg3)' : (t < 25 ? 'color-mix(in srgb,var(--accent) 28%,var(--bg3))' : t < 55 ? 'color-mix(in srgb,var(--accent) 55%,var(--bg3))' : t < 85 ? 'color-mix(in srgb,var(--accent) 78%,var(--bg3))' : 'var(--accent)');
@@ -108,12 +108,17 @@
     const area = `${px(0)},${H} ${pts} ${px(W - 1)},${H}`;
     // 最近若干天为时间轴刻度
     const ticks = [0, Math.floor((W - 1) / 3), Math.floor(2 * (W - 1) / 3), W - 1];
+    // 首尾刻度用 start/end 内收：middle 锚点会左右溢出 viewBox 被裁成错误日期
     return { days: W, byDay,
       html: `<div class="stat-activity">
         <svg viewBox="0 0 ${VW} ${H + 18}" style="width:100%;max-width:740px;display:block">
           <polyline points="${area}" fill="color-mix(in srgb,var(--accent) 22%,transparent)" stroke="none"></polyline>
           <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"></polyline>
-          ${ticks.map(i => `<text x="${px(i)}" y="${H + 12}" font-size="10" fill="var(--ink-faint)" text-anchor="middle">${byDay[i].d.getMonth() + 1}/${byDay[i].d.getDate()}</text>`).join('')}
+          ${ticks.map(i => {
+            const anchor = i === 0 ? 'start' : i === W - 1 ? 'end' : 'middle';
+            const x = i === 0 ? 2 : i === W - 1 ? VW - 2 : px(i);
+            return `<text x="${x}" y="${H + 12}" font-size="10" fill="var(--ink-faint)" text-anchor="${anchor}">${byDay[i].d.getMonth() + 1}/${byDay[i].d.getDate()}</text>`;
+          }).join('')}
           <text x="${VW}" y="10" font-size="10" fill="var(--ink-faint)" text-anchor="end">累计 ${series[series.length - 1]}</text>
         </svg></div>` };
   }

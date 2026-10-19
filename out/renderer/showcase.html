@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="parchment">
+<head>
+<meta charset="UTF-8">
+<title>视觉走查 · 现代卷宗 v4</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  /* 本页仅供设计走查陈列，不属于产品源码（构建时会被清除） */
+  .ws-wrap{max-width:1140px;margin:0 auto}
+  .ws-block{margin-top:26px}
+  .ws-two{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+  .ws-dock{position:fixed;right:14px;bottom:44px;z-index:300;display:flex;gap:6px;padding:7px;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--el-2)}
+  .ws-dock b{font-size:11px;color:var(--ink-faint);align-self:center;margin-right:2px}
+  .ws-chat{height:280px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel2)}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- 顶栏 -->
+  <header class="topbar" id="winBar">
+    <div class="brand" title="拖拽此区域可移动窗口">
+      <span class="logo" id="appLogo"><img src="assets/emblem.jpg" alt="残火纪徽记"></span>
+      <div class="brand-text">
+        <b>KP 跑团工作台</b>
+        <span class="sub" id="appSub">残火纪 · 烬中寻火</span>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span class="profile-chip" id="topProfile" title="当前 AI 人设">人设 · 凯尔希的书记官</span>
+      <select id="themeSelect" title="主题皮肤">
+        <option value="parchment" selected>现代卷宗（当前）</option>
+        <option value="ember">余烬红</option>
+        <option value="lite">浅色</option>
+        <option value="neon">霓虹</option>
+        <option value="dusk">暮光</option>
+      </select>
+      <button class="ghost"><svg class="ic" aria-hidden="true"><use href="#i-rows"></use></svg>密度</button>
+      <button class="ghost"><svg class="ic" aria-hidden="true"><use href="#i-bolt"></use></svg>开团</button>
+      <button class="ghost"><svg class="ic" aria-hidden="true"><use href="#i-pen"></use></svg>便签</button>
+      <button class="ghost"><svg class="ic" aria-hidden="true"><use href="#i-db"></use></svg>备份</button>
+      <button class="ghost"><svg class="ic" aria-hidden="true"><use href="#i-folder"></use></svg>文件夹</button>
+    </div>
+    <div class="win-ctl" id="winCtl">
+      <button class="wc" id="wcMin" title="最小化"><svg class="ic" aria-hidden="true"><use href="#i-min"></use></svg></button>
+      <button class="wc" id="wcMax" title="最大化/还原"><svg class="ic" aria-hidden="true"><use href="#i-max"></use></svg></button>
+      <button class="wc wc-close" id="wcClose" title="关闭"><svg class="ic" aria-hidden="true"><use href="#i-close"></use></svg></button>
+    </div>
+  </header>
+
+  <div class="body">
+    <!-- 侧栏（静态结构复刻） -->
+    <nav class="sidebar" id="sidebar">
+      <div class="gsearch" title="Ctrl+K 呼出命令面板">
+        <span class="gf"><svg class="ic" aria-hidden="true"><use href="#i-search"></use></svg></span><input id="glSearch" placeholder="全局搜索 (Ctrl+K)…">
+      </div>
+      <div class="sect">总 览</div>
+      <button data-view="dash" class="nav active"><svg class="ic" aria-hidden="true"><use href="#i-overview"></use></svg><span class="navt">总览看板</span></button>
+      <div class="sep"></div>
+      <details class="snav" data-grp="work" open><summary><svg class="ic" aria-hidden="true"><use href="#i-toolbox"></use></svg><span class="navt">工作台功能</span></summary>
+        <button data-view="pcs" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-person"></use></svg><span class="navt">人物卡</span><span class="navc" data-nc="pcs">12</span></button>
+        <button data-view="npcs" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-hood"></use></svg><span class="navt">NPC 图鉴</span><span class="navc" data-nc="npcs">24</span></button>
+        <button data-view="regions" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-peaks"></use></svg><span class="navt">地区场景</span></button>
+        <button data-view="logs" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-book"></use></svg><span class="navt">战役日志</span></button>
+        <button data-view="mobs" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-skull"></use></svg><span class="navt">怪物图鉴</span></button>
+        <button data-view="maps" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-map"></use></svg><span class="navt">地图</span></button>
+        <button data-view="encounter" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-bolt"></use></svg><span class="navt">临场战斗</span></button>
+        <button data-view="stats" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-chart"></use></svg><span class="navt">统计分析</span></button>
+      </details>
+      <details class="snav" data-grp="workai"><summary><svg class="ic" aria-hidden="true"><use href="#i-sparkle"></use></svg><span class="navt">工作台 AI 功能</span></summary>
+        <button data-view="ai" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-sparkle"></use></svg><span class="navt">AI 助手</span></button>
+        <button data-view="persona" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-mask"></use></svg><span class="navt">AI 设定</span></button>
+      </details>
+      <details class="snav" data-grp="dice"><summary><svg class="ic" aria-hidden="true"><use href="#i-d20"></use></svg><span class="navt">骰娘功能</span></summary>
+        <button data-view="dice" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-die"></use></svg><span class="navt">本地掷骰</span></button>
+        <button data-view="dicework" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-compass"></use></svg><span class="navt">骰娘工作台</span></button>
+      </details>
+      <div class="sep"></div>
+      <button id="btnChatToggle" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-chat"></use></svg><span class="navt">AI 对话</span></button>
+      <button id="btnSidebarToggle" class="nav"><svg class="ic" aria-hidden="true"><use href="#i-collapse"></use></svg><span class="navt">折叠侧栏</span></button>
+    </nav>
+
+    <!-- 主内容：组件陈列 -->
+    <main class="content" id="content">
+      <div class="ws-wrap">
+
+        <!-- A 战役头图 + 页标题 + 工具条 -->
+        <section class="dash-hero">
+          <img class="dh-img" src="assets/hero.jpg" alt="" aria-hidden="true">
+          <div class="dh-cap">
+            <span class="dh-kicker">战役总览</span>
+            <h2 class="dh-title">残火纪</h2>
+            <p class="dh-sub">残火纪 · 烬中寻火 · KP 团工作台</p>
+          </div>
+        </section>
+
+        <div class="page-title"><h2>总览</h2><span class="hint">资料总计：人物卡 12 · NPC 24 · 地区 8 · 日志 30 · 怪物 6 · 背景 10 · 规则 4　拖拽卡片可自由排序</span></div>
+        <div class="toolbar">
+          <button>＋ 新建卡片</button>
+          <button class="ghost">⬇ 导出统计文本</button>
+          <button class="ghost small">前往 ▸</button>
+          <button class="danger">删除</button>
+          <a class="linkbtn" href="javascript:void(0)">获取 API Key</a>
+          <span class="grow"></span>
+          <span class="hint">数据含投骰与遭遇等全部档案维度</span>
+          <span class="profile-chip">人设 · 凯尔希的书记官</span>
+        </div>
+
+        <!-- B 今天要处理 -->
+        <div class="ws-block ws-two">
+          <div class="dash-today">
+            <div class="dt-head"><span class="dot"></span>今天要处理</div>
+            <div class="dt-row"><div class="dt-lbl"><div class="dt-t">进行中的遭遇 (2)</div>
+              <div class="dt-d">灰雾酒馆伏击、码头撤退战 · 投骰会自动并入其流水</div></div>
+              <span class="dash-pill warn">待临场</span><button class="mini-btn">前往 ▸</button></div>
+            <div class="dt-row"><div class="dt-lbl"><div class="dt-t">常用收藏 (5)</div>
+              <div class="dt-d">你的高频资料已置顶，点击即达</div></div><span class="dash-pill quiet">收藏</span></div>
+            <div class="dt-row"><div class="dt-lbl"><div class="dt-t">开始建卡</div>
+              <div class="dt-d">档案还是空的，先建立第一个角色卡，把故事铺开</div></div>
+              <span class="dash-pill danger">新手上路</span><button class="mini-btn">去建 ▸</button></div>
+          </div>
+
+          <!-- 战局概览 + 分布环（脚本按真实模板生成） -->
+          <div class="dash-today" style="display:block">
+            <div class="dt-head"><span class="dot"></span>资料分布</div>
+            <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+              <div id="wsRing"></div>
+              <div class="dash-legend" id="wsLegend"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- C 战局概览统计卡 -->
+        <div class="ws-block dash-ov" id="wsOv"></div>
+
+        <!-- D 磁贴 -->
+        <div class="ws-block tiles" id="dashTiles">
+          <div class="tile" data-k="pcs"><div class="tname">⛧ 人物卡</div><div class="tnum">12</div><div class="tsub">人物卡 登记</div><div class="handle">⠿ 拖拽排序</div></div>
+          <div class="tile" data-k="npcs"><div class="tname">🧙 NPC</div><div class="tnum">24</div><div class="tsub">NPC 登记</div><div class="handle">⠿ 拖拽排序</div></div>
+          <div class="tile" data-k="regions"><div class="tname">⛰ 地区</div><div class="tnum">8</div><div class="tsub">地区 登记</div><div class="handle">⠿ 拖拽排序</div></div>
+          <div class="tile" data-k="logs"><div class="tname">🕮 日志</div><div class="tnum">30</div><div class="tsub">日志 登记</div><div class="handle">⠿ 拖拽排序</div></div>
+          <div class="tile" data-k="mobs"><div class="tname">☠ 怪物</div><div class="tnum">6</div><div class="tsub">怪物 登记</div><div class="handle">⠿ 拖拽排序</div></div>
+          <div class="tile" data-k="ai"><div class="tname">✧ AI 助手</div><div class="tnum">—</div><div class="tsub">凯尔希的书记官 待命</div><div class="handle">⠿ 拖拽排序</div></div>
+          <div class="tile" data-k="persona"><div class="tname">♜ AI 设定</div><div class="tnum">—</div><div class="tsub">凯尔希的书记官</div><div class="handle">⠿ 拖拽排序</div></div>
+        </div>
+
+        <!-- E 设置卡 + 表单 -->
+        <div class="ws-block page-title"><h2>设置卡与表单</h2><span class="hint">setcard · row 表单行 · 降级卡 · 工具条</span></div>
+        <div class="ws-two">
+          <div class="setcard">
+            <h4>接口连接</h4>
+            <div class="row"><label>服务商</label><select><option>DeepSeek</option><option>通义千问</option></select></div>
+            <div class="row"><label>API 地址</label><input type="text" value="https://api.deepseek.com/v1"></div>
+            <div class="row"><label>API Key</label><input type="text" value="sk-••••••••••••3f7a" /></div>
+            <div class="row"><label>叙事风格</label><textarea rows="2">克制的克苏鲁调查风，短句推进，少用感叹号。</textarea></div>
+            <div class="toolbar" style="margin:4px 0 0">
+              <button>保存并测试</button><button class="ghost">测试连通</button>
+              <span class="grow"></span><span class="hint">三步配好：选服务商 → 粘 Key → 保存</span>
+            </div>
+          </div>
+          <div class="ws-two" style="grid-template-columns:1fr">
+            <div class="setcard ai-degrade">
+              <h4>AI 尚未配置（不影响离线功能）</h4>
+              <div class="note">离线可用：掷骰 / 建档 / 地图 / 日志 / 备份全部正常。填好 API Key 后 AI 对话与自动建档即刻生效。</div>
+              <div class="toolbar" style="margin:10px 0 0"><button class="ghost small">前往配置</button></div>
+            </div>
+            <div class="setcard">
+              <h4>AI 行为开关</h4>
+              <div class="row"><label>自动建档（对话提取资料卡）</label><input type="checkbox" checked></div>
+              <div class="row"><label>回复润色</label><input type="checkbox"></div>
+              <div class="row"><label>单条字数上限</label><input type="number" value="600"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- F 统计分析 -->
+        <div class="ws-block page-title"><h2>统计分析</h2><span class="hint">KPI · 构成条 · 投骰热力图 · 活跃曲线</span></div>
+        <div class="stat-kpis">
+          <div class="stat-kpi"><b>94</b><span>资料总数</span></div>
+          <div class="stat-kpi"><b>30</b><span>日志</span></div>
+          <div class="stat-kpi"><b>412</b><span>投骰次数</span></div>
+          <div class="stat-kpi"><b>3</b><span>遭遇场次</span></div>
+          <div class="stat-kpi"><b>58</b><span>近30天投骰</span></div>
+          <div class="stat-kpi"><b>1.9</b><span>日均(近30天)</span></div>
+        </div>
+        <div class="ws-two">
+          <div class="setcard"><h4>数据构成（各类型资料条数 / 占比）</h4><div class="stat-bars" id="wsBars"></div></div>
+          <div class="setcard"><h4>投骰热力图 <span class="hint">一周内不同时段的投骰频次</span></h4><div class="stat-heat" id="wsHeat"></div></div>
+        </div>
+        <div class="setcard ws-block" style="margin-top:14px"><h4>数据活跃曲线 <span class="hint">近 30 天累计投骰 / 事件数</span></h4><div class="stat-activity" id="wsAct"></div></div>
+
+        <!-- G 资料卡 -->
+        <div class="ws-block page-title"><h2>资料卡片</h2><span class="hint">card 悬浮上浮 · 搜索命中 · 标签卡</span></div>
+        <div class="ws-two">
+          <div class="card search-item"><div class="cname"><span class="cnm">艾琳·卡特</span><span class="ctag">人物卡</span></div>
+            <div class="hint" style="margin-top:6px">私家侦探 · 观察 70 · 意志 65 · 被引用 3 次</div></div>
+          <div class="card tag-card" data-tag="主线"><div class="cname"><span class="cnm"># 主线</span><span class="ctag">12 张卡</span></div>
+            <div class="hint" style="margin-top:6px">点击筛选使用该标签的全部资料</div></div>
+        </div>
+
+        <!-- H AI 对话抽屉 -->
+        <div class="ws-block page-title"><h2>AI 对话</h2><span class="hint">消息气泡 · 引用 · 建卡动作 · 输入区</span></div>
+        <aside class="chatdrawer" style="position:static;height:380px;border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--el-1)">
+          <div class="chathead">
+            <span>AI 对话</span>
+            <span class="cd-profile" id="drawerProfile">人设 · 凯尔希的书记官</span>
+            <button id="btnChatClose" title="收起">»</button>
+          </div>
+          <div class="chatlog" id="drawerLog">
+            <div class="msg user">今晚我们去码头伏击老陈，需要做哪些准备？</div>
+            <div class="msg ai">建议分三步：先让侦查员确认潮汐时刻表，再安排两名近战手卡住栈桥入口，最后由你持铳压阵。
+              <div class="embed">相关资料：码头区 · 老陈（NPC）· 潮汐表（规则）</div>
+              <div class="ai-actions"><button class="ghost small">⇥ 把这条建为工作台资料卡</button></div>
+            </div>
+            <div class="msg user">那帮我把「栈桥入口」建成地区卡。</div>
+            <div class="msg ai think-ind">思考中…</div>
+          </div>
+          <div class="chatinput">
+            <button id="drawerUpload" title="添加文字文件为附件">📎</button>
+            <div id="pendFiles" class="pend-slot" hidden></div>
+            <textarea id="drawerIn" class="autoarea" maxlength="60000" rows="1" placeholder="向 AI 提问…（Enter 发送）"></textarea>
+            <span class="ai-tok-hint" id="drawerInTok"></span>
+            <button id="drawerExport" title="导出最近 AI 回复为 .txt">⬇</button>
+            <button id="drawerSend" title="发送">发送</button>
+          </div>
+        </aside>
+
+        <!-- I 遭遇战 -->
+        <div class="ws-block page-title"><h2>临场战斗</h2><span class="hint">遭遇卡 · 单位面板 · 血条 · 状态徽标</span></div>
+        <div class="setcard enc-card">
+          <div class="wizard-head" style="cursor:pointer;user-select:none">
+            <b>⚔ 灰雾酒馆伏击</b> <b class="enc-badge live">进行中</b>
+            <span class="grow"></span>
+            <button class="ghost small">继续</button>
+            <button class="ghost small">✕</button>
+          </div>
+          <div class="row long" style="margin-top:6px"><span class="hint">第三次交锋，增援会在第 3 轮从后门进入。</span></div>
+        </div>
+        <div class="setcard enc-board" style="margin-top:10px">
+          <div class="wizard-head"><b>⚔ 灰雾酒馆伏击</b><span class="hint">第 2 轮 · 行动者：守卫队长</span><span class="grow"></span>
+            <button class="ghost small">◀ 上一轮</button><button class="ghost small">下一轮 ▶</button></div>
+          <div class="enc-units">
+            <div class="enc-unit cur" data-uid="u1">
+              <div class="enc-unit-head">
+                <b class="enc-mark">▶</b>
+                <b class="enc-uname">守卫队长</b><span class="hint">怪物</span>
+                <span class="grow"></span>
+                <button class="ghost small">查看卡</button>
+                <button class="ghost small">📍 已绑</button>
+                <button class="ghost small">✕</button>
+              </div>
+              <div class="enc-hpbar"><div class="enc-hpfill" style="width:62%"></div></div>
+              <div class="enc-unit-body">
+                <span class="enc-hp">HP 31 / 50</span>
+                <button class="ghost small">−1</button><button class="ghost small">−5</button>
+                <button class="ghost small">＋1</button><button class="ghost small">＋5</button>
+                <span class="enc-status" data-st="blood">血流</span>
+                <span class="grow"></span>
+                <button class="ghost small">昏</button>
+              </div>
+            </div>
+            <div class="enc-unit" data-uid="u2">
+              <div class="enc-unit-head">
+                <button class="ghost small">▶ 转</button>
+                <b class="enc-uname">艾琳·卡特</b><span class="hint">人物卡</span>
+                <span class="grow"></span>
+                <button class="ghost small">查看卡</button>
+                <button class="ghost small">📍 令牌</button>
+                <button class="ghost small">✕</button>
+              </div>
+              <div class="enc-hpbar"><div class="enc-hpfill" style="width:100%"></div></div>
+              <div class="enc-unit-body">
+                <span class="enc-hp">HP 12 / 12</span>
+                <button class="ghost small">−1</button><button class="ghost small">−5</button>
+                <button class="ghost small">＋1</button><button class="ghost small">＋5</button>
+                <span class="grow"></span>
+                <button class="ghost small">昏</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- J 骰娘 -->
+        <div class="ws-block page-title"><h2>骰娘</h2><span class="hint">鉴定输出 · 会话气泡 · 连接卡 · 指令流水</span></div>
+        <div class="ws-two">
+          <div class="dicepanel">
+            <div class="diceout">
+              <div class="dreshead"><b>侦查 · 1d100</b><span class="hint">难易度 固定 60 · 优势骰</span></div>
+              <div class="drestotal">72</div>
+              <div class="drolls"><span class="dr">72</span><span class="dr">34</span></div>
+              <span class="dgrade gok big">困难成功</span>
+              <div class="dnote">你察觉了吧台下的暗格——边缘有新鲜的划痕。</div>
+            </div>
+            <div class="diceout">
+              <div class="dreshead"><b>意志 · 1d100</b><span class="hint">难易度 固定 65</span></div>
+              <div class="drestotal">91</div>
+              <div class="drolls"><span class="dr">91</span></div>
+              <span class="dgrade gfail big">失败</span>
+              <div class="dnote err">恐惧蔓延：你无法控制地后退了一步。</div>
+            </div>
+          </div>
+          <div class="ws-two" style="grid-template-columns:1fr">
+            <div class="dice-channel-card">
+              <div class="wizard-head"><b>QQ 直连 · 侠客行</b><span class="dice-light on">在线</span><span class="grow"></span><span class="hint">平板协议 aPad</span></div>
+              <div class="hint" style="margin-top:6px">发送指标：会话间隔 2.1s · 队列 0 · 连续失败 0</div>
+            </div>
+            <div>
+              <div class="dice-chat">
+                <div class="dice-bubble-user">.rd 侦查</div>
+                <div class="dice-bubble-bot">【侦查】1d100 = 34 / 困定 60 → 困难成功</div>
+                <div class="dice-bubble-user">晚上好</div>
+                <div class="dice-bubble-bot">（AI 待命中）愿主保佑你，博士——今天也要开团吗？</div>
+              </div>
+              <div class="dice-chat-input"><input style="flex:1" placeholder="向骰娘发指令…"><button>发送</button></div>
+            </div>
+            <div class="dice-cmd-log">
+              <div class="dice-log-row"><span>21:04</span><span>群 773…</span><span>.rd</span><span>1d100=34</span><span>困难成功</span></div>
+              <div class="dice-log-row"><span>21:05</span><span>群 773…</span><span>.ra 侦查</span><span>1d100=72</span><span>成功</span></div>
+              <div class="dice-log-row"><span>21:07</span><span>私聊</span><span>.bot on</span><span>—</span><span>已启用</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- K 收藏 / 空态 / 提示 -->
+        <div class="ws-block page-title"><h2>收藏 · 空态 · 反馈</h2><span class="hint">favchip · empty · toast · AI 处理中</span></div>
+        <div class="setcard">
+          <div><b style="font-size:13px">★ 常用收藏</b><span class="hint"> · 共 4 条</span></div>
+          <div class="favtiles">
+            <div class="favchip"><span class="fc-x">×</span>艾琳·卡特</div>
+            <div class="favchip"><span class="fc-x">×</span>灰雾酒馆</div>
+            <div class="favchip"><span class="fc-x">×</span>老陈</div>
+            <div class="favchip"><span class="fc-x">×</span>主线线索表</div>
+          </div>
+        </div>
+        <div class="setcard" style="margin-top:10px">
+          <div class="empty">暂无资料，先到各类型页新增内容即可看到占比。</div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- 底部状态条 -->
+  <footer class="statusbar" id="statusBar">
+    <span class="sb-item" id="sbDice"><span class="sb-dot off"></span>骰娘未连接</span>
+    <span class="sb-item sb-dim" id="sbDiceCh">—</span>
+    <span class="sb-sp"></span>
+    <span class="sb-item" id="sbAi">AI：—</span>
+    <span class="sb-item sb-dim" id="sbArchive">档案：main</span>
+    <span class="sb-item" id="sbBackup">尚未备份</span>
+    <span class="sb-item sb-dim" id="sbTheme">主题：现代卷宗</span>
+    <span class="sb-item sb-dim" id="sbVersion">v3.4.1</span>
+  </footer>
+</div>
+
+<!-- 浮层（静态展示，由右下控制坞打开） -->
+<div class="modal-mask" id="noteMask" hidden>
+  <div class="modal note-modal" id="noteBox">
+    <h3>随手便签</h3>
+    <div class="note">任意界面随时记一句；团后点右侧按钮一键归档为「日志 / 伏笔 / NPC」。Ctrl+Enter 记下，Esc 关闭。</div>
+    <textarea id="noteInput" rows="3" placeholder="例：老陈的怀表停在 3:07 —— 可能是时间线关键线索。"></textarea>
+    <div class="foot">
+      <button class="ghost">关闭</button>
+      <span class="grow"></span>
+      <button class="ghost">全部→日志</button>
+      <button>记下</button>
+    </div>
+    <div id="noteList" class="note-list"><div class="note-row">老陈的怀表停在 3:07<span class="grow"></span><button class="ghost small">归档</button></div></div>
+  </div>
+</div>
+<div class="palette-mask" id="paletteMask" hidden>
+  <div class="palette" id="paletteBox">
+    <div class="pal-input"><span class="pp"><svg class="ic" aria-hidden="true"><use href="#i-search"></use></svg></span><input id="palIn" placeholder="输入要跳转的页面 / 资料…（↑↓ 选择 Enter 打开 Esc 关闭）"></div>
+    <div class="pal-list" id="palList">
+      <div class="search-item" style="cursor:pointer"><div class="cname"><span class="cnm">总览看板</span><span class="ctag">页面</span></div></div>
+      <div class="search-item" style="cursor:pointer"><div class="cname"><span class="cnm">艾琳·卡特</span><span class="ctag">人物卡</span></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- AI 处理中提示（点击控制坞切换） -->
+<div class="ai-busy" id="aiBusy" role="status" hidden>
+  <span class="ai-busy-spin"></span>
+  <b id="aiBusyText">AI 处理中</b>
+  <span id="aiBusySec">12s</span>
+  <span class="ai-busy-tip">请勿重复点击，完成后自动关闭</span>
+  <button class="ghost small" id="aiBusyCancel">✕ 取消任务</button>
+  <button class="ghost small" id="aiQueueClear">清空排队</button>
+  <div class="ai-queue" id="aiQueue">
+    <div class="aiq-row"><span>剧本分幕 · 第 3 幕</span><span class="hint">排队中</span></div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<!-- 走查控制坞（仅本页） -->
+<div class="ws-dock">
+  <b>走查</b>
+  <button class="ghost small" onclick="document.getElementById('noteMask').hidden=false">便签</button>
+  <button class="ghost small" onclick="document.getElementById('paletteMask').hidden=false">命令面板</button>
+  <button class="ghost small" onclick="var b=document.getElementById('aiBusy');b.hidden=!b.hidden">AI 提示</button>
+  <button class="ghost small" onclick="wkToast('已记下，可在「便签」里归档','ok')">成功 Toast</button>
+  <button class="ghost small" onclick="wkToast('该组合已被占用','err')">错误 Toast</button>
+  <button class="ghost small" onclick="document.getElementById('noteMask').hidden=true;document.getElementById('paletteMask').hidden=true">关闭浮层</button>
+</div>
+
+<script>
+/* 图标精灵自 index.html 注入（本页无精灵副本） */
+fetch('index.html').then(r => r.text()).then(t => {
+  const m = t.match(/<svg class="iconsprite"[\s\S]*?<\/svg>/);
+  if (m) document.body.insertAdjacentHTML('afterbegin', m[0]);
+}).catch(function () {});
+
+function wkToast(msg, type) {
+  const t = document.createElement('div');
+  t.className = 'toast ' + (type || '');
+  t.textContent = msg;
+  document.getElementById('toasts').appendChild(t);
+  setTimeout(() => t.remove(), 3200);
+}
+document.getElementById('noteMask').addEventListener('click', function (e) { if (e.target === this) this.hidden = true; });
+document.getElementById('paletteMask').addEventListener('click', function (e) { if (e.target === this) this.hidden = true; });
+/* Esc 关闭浮层（与产品全局快捷键语义一致） */
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') { document.getElementById('noteMask').hidden = true; document.getElementById('paletteMask').hidden = true; }
+  if (e.key === 'Enter' && !document.getElementById('paletteMask').hidden && document.activeElement === document.getElementById('palIn')) {
+    document.getElementById('paletteMask').hidden = true;
+  }
+});
+new MutationObserver(function () {
+  if (!document.getElementById('paletteMask').hidden) document.getElementById('palIn').focus();
+}).observe(document.getElementById('paletteMask'), { attributes: true, attributeFilter: ['hidden'] });
+
+/* —— 以下按真实模板（stats.js / app.js）生成图表 —— */
+const KINDS = [['pcs', '人物卡', 12, '#e3c072'], ['npcs', 'NPC', 24, '#c79a3e'], ['regions', '地区', 8, '#b9822a'],
+  ['logs', '日志', 30, '#6b9fd1'], ['mobs', '怪物', 6, '#a8361d'], ['lore', '背景', 10, '#7a9a6a'], ['rules', '规则', 4, '#8a7bb5']];
+
+/* 战局概览 stat 卡 */
+document.getElementById('wsOv').innerHTML = KINDS.map(([k, n, v, c]) =>
+  `<div class="dash-stat dash-click" data-k="${k}" style="--stat-glow:${c}" tabindex="0" role="button">
+     <div class="num">${v}</div><div class="cap"><span class="ccore" style="background:${c}"></span>${n}</div></div>`).join('');
+
+/* 分布环 + 图例 */
+(function () {
+  const C = 2 * Math.PI * 70, total = KINDS.reduce((a, x) => a + x[2], 0);
+  let segs = '', acc = 0;
+  for (const [, , v, c] of KINDS) {
+    const frac = v / total, len = frac * C;
+    segs += `<circle r="70" cx="85" cy="85" fill="none" stroke="${c}" stroke-width="20" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" transform="rotate(${(acc * 360).toFixed(2)} 85 85)" stroke-linecap="butt"/>`;
+    acc += frac;
+  }
+  document.getElementById('wsRing').innerHTML =
+    `<svg viewBox="0 0 170 170" style="width:150px;height:150px;display:block">${segs}</svg>`;
+  document.getElementById('wsLegend').innerHTML =
+    KINDS.map(([, n, v, c]) => `<div class="li"><span class="sw" style="background:${c}"></span>${n}<b>${v}</b></div>`).join('');
+})();
+
+/* 构成条 */
+document.getElementById('wsBars').innerHTML = (function () {
+  const max = Math.max(...KINDS.map(x => x[2]));
+  return KINDS.map(([, n, v, c]) => `<div class="stat-barrow">
+    <span class="stat-bar-name">${n}</span>
+    <span class="stat-bar-track"><i style="width:${(v / max * 100).toFixed(1)}%;background:${c}"></i></span>
+    <span class="stat-bar-val">${v}<em>${(v / 94 * 100).toFixed(1)}%</em></span></div>`).join('');
+})();
+
+/* 投骰热力图（同 stats.js stsHeatmap 模板，固定演示数据） */
+document.getElementById('wsHeat').innerHTML = (function () {
+  const grid = []; for (let d = 0; d < 7; d++) grid.push(new Array(24).fill(0));
+  [[0, 9], [0, 14], [0, 20], [1, 3], [1, 9], [1, 14], [1, 18], [2, 10], [2, 21], [2, 22],
+   [3, 8], [3, 15], [3, 22], [3, 23], [4, 12], [4, 20], [4, 21], [5, 10], [5, 19], [5, 23],
+   [6, 11], [6, 16]].forEach(([d, h]) => grid[d][h]++);
+  const WD = ['一', '二', '三', '四', '五', '六', '日'];
+  let mx = 1; for (const r of grid) for (const v of r) mx = Math.max(mx, v);
+  const cell = 22, gap = 2, pad = 30, ch = cell * 7 + gap * 6;
+  let s = `<svg viewBox="0 0 ${pad + 24 * (cell + gap) + 8} ${ch + 18}" style="width:100%;max-width:760px;display:block">
+    ${WD.map((dd, d) => `<text x="4" y="${d * (cell + gap) + cell - 6}" font-size="11" fill="var(--ink-faint)">${dd}</text>`).join('')}
+    ${grid.map((row, d) => row.map((v, h) => {
+      const t = v ? Math.max(1, Math.round((v / mx) * 100)) : 0;
+      const col = t <= 0 ? 'var(--bg3)' : (t < 25 ? 'color-mix(in srgb,var(--accent) 28%,var(--bg3))' : t < 55 ? 'color-mix(in srgb,var(--accent) 55%,var(--bg3))' : t < 85 ? 'color-mix(in srgb,var(--accent) 78%,var(--bg3))' : 'var(--accent)');
+      return `<rect x="${pad + h * (cell + gap)}" y="${d * (cell + gap)}" width="${cell}" height="${cell}" rx="3" fill="${col}"><title>周${WD[d]} ${h} 时：${v} 次</title></rect>`;
+    }).join('')).join('')}
+    ${Array.from({ length: 24 }, (_, h) => h % 3 === 0 ? `<text x="${pad + h * (cell + gap) + 4}" y="${ch + 14}" font-size="10" fill="var(--ink-faint)">${h}</text>` : '').join('')}
+  </svg>`;
+  return s + `<div class="hint" style="margin-top:6px">共 44 次投骰 · 密集时段：周日 · 20 时（3 次）· 深色=更频繁</div>`;
+})();
+
+/* 活跃曲线（同 stats.js stsActivity 模板） */
+document.getElementById('wsAct').innerHTML = (function () {
+  const seeds = [2, 1, 4, 0, 3, 5, 1, 2, 6, 3, 0, 2, 4, 7, 3, 1, 2, 5, 4, 2, 3, 6, 1, 4, 5, 2, 3, 4, 6, 8];
+  const byDay = seeds.map((n, i) => ({ d: new Date(2026, 9, 19 - (29 - i)), n }));
+  let cum = 0; const series = byDay.map(x => { cum += x.n; return cum; });
+  const W = byDay.length, H = 120, pad = 8, VW = 600, maxC = Math.max(1, series[W - 1]);
+  const px = i => pad + (i / Math.max(1, W - 1)) * (VW - pad * 2);
+  const py = v => H - pad - (v / maxC) * (H - pad - 8);
+  const pts = series.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
+  const area = `${px(0)},${H} ${pts} ${px(W - 1)},${H}`;
+  const ticks = [0, Math.floor((W - 1) / 3), Math.floor(2 * (W - 1) / 3), W - 1];
+  return `<svg viewBox="0 0 ${VW} ${H + 18}" style="width:100%;max-width:740px;display:block">
+    <polyline points="${area}" fill="color-mix(in srgb,var(--accent) 22%,transparent)" stroke="none"></polyline>
+    <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"></polyline>
+    ${ticks.map(i => {
+      const anchor = i === 0 ? 'start' : i === W - 1 ? 'end' : 'middle';
+      const x = i === 0 ? 2 : i === W - 1 ? VW - 2 : px(i);
+      return `<text x="${x}" y="${H + 12}" font-size="10" fill="var(--ink-faint)" text-anchor="${anchor}">${byDay[i].d.getMonth() + 1}/${byDay[i].d.getDate()}</text>`;
+    }).join('')}
+    <text x="${VW}" y="10" font-size="10" fill="var(--ink-faint)" text-anchor="end">累计 ${series[W - 1]}</text>
+  </svg>`;
+})();
+</script>
+</body>
+</html>

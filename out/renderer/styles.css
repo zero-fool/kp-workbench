@@ -1,14 +1,15 @@
 /* ===== 主题皮肤（CSS 变量驱动，一键切换） ===== */
 :root[data-theme="ember"]{
-  --bg:#171109; --bg2:#1f170d; --bg3:#2a1e11;
-  --panel:#221809; --panel2:#2c2010; --panel3:#37281200;
-  --card:#2b1f10; --card2:#332612;
-  --ink:#ece0c4; --ink-soft:#b3a077; --ink-faint:#9e8e6f;
-  --accent:#c79a3e; --accent2:#e3c072; --line:#4d3d22;   /* 边框提亮一档：暗底卡片分层更清晰 */
-  --danger:#e06a4a; --ok:#7fb069; --warn:#d8a24a;
+  --bg:#151009; --bg2:#1d170e; --bg3:#261d12;
+  --panel:#211a10; --panel2:#2a2115; --panel3:#332817;
+  --card:#282013; --card2:#302617;
+  --ink:#efe3c6; --ink-soft:#bdab81; --ink-faint:#a89770;
+  --accent:#c89a3f; --accent2:#e6c579; --line:#4b3c22;   /* 边框提亮一档：暗底卡片分层更清晰 */
+  --danger:#e4744f; --ok:#8ab76e; --warn:#dda84e;
   --shadow:0 10px 30px rgba(0,0,0,.5); --radius:12px;
-  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
-  --serif:Georgia,"Songti SC","STSong",serif;
+  --font:"Avenir Next","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --serif:"Songti SC","STSong","Source Han Serif SC","Noto Serif SC",Georgia,serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
 }
 /* 现代卷宗：暖纸质底 + 火漆红强调，柔和层次替代硬投影（顶级桌面软件观感） */
 :root[data-theme="parchment"]{
@@ -224,9 +225,11 @@ input.search{min-width:220px}
 .dash-today .dt-d{font-size:12px;color:var(--ink-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dash-today .dt-calm{display:flex;align-items:center;gap:8px;color:var(--ink-faint);font-size:13px;padding:6px 4px}
 .dash-pill{flex:0 0 auto;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:99px;white-space:nowrap}
-.dash-pill.ok{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok);border:1px solid color-mix(in srgb,var(--ok) 40%,transparent)}
-.dash-pill.warn{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn);border:1px solid color-mix(in srgb,var(--warn) 45%,transparent)}
-.dash-pill.danger{background:color-mix(in srgb,var(--danger) 16%,transparent);color:var(--danger);border:1px solid color-mix(in srgb,var(--danger) 45%,transparent)}
+.dash-pill.ok{background:color-mix(in srgb,var(--ok) 16%,transparent);color:color-mix(in srgb,var(--ok) 74%,var(--ink));border:1px solid color-mix(in srgb,var(--ok) 40%,transparent)}
+/* tint 底徽标文字：向 var(--ink) 混合提对比——亮主题 ink 深使文字更深、暗主题 ink 亮使文字更亮，
+   五套主题下均提升（原纯色文字在浅 tint 上仅 2.9~4.3:1）。danger/ok 系混 26%，warn 黄系基线更亮、混 34% */
+.dash-pill.warn{background:color-mix(in srgb,var(--warn) 18%,transparent);color:color-mix(in srgb,var(--warn) 66%,var(--ink));border:1px solid color-mix(in srgb,var(--warn) 45%,transparent)}
+.dash-pill.danger{background:color-mix(in srgb,var(--danger) 16%,transparent);color:color-mix(in srgb,var(--danger) 74%,var(--ink));border:1px solid color-mix(in srgb,var(--danger) 45%,transparent)}
 .dash-pill.quiet{background:color-mix(in srgb,var(--ink-faint) 12%,transparent);color:var(--ink-soft);border:1px solid var(--line)}
 .dash-today .mini-btn{flex:0 0 auto;padding:5px 11px;border-radius:8px;background:var(--panel);border:1px solid var(--line);color:var(--accent2);font-size:12px;cursor:pointer}
 .dash-today .mini-btn:hover{border-color:var(--accent);color:var(--accent)}
@@ -417,8 +420,8 @@ input.search{min-width:220px}
 .fieldrow select{flex:0 0 96px}
 .danger-zone{display:flex;gap:8px;flex-wrap:wrap}
 
-/* toast */
-.toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:90}
+/* toast：bottom 避开 32px 状态条，不压底部信息 */
+.toasts{position:fixed;right:16px;bottom:44px;display:flex;flex-direction:column;gap:8px;z-index:90}
 .toast{padding:10px 14px;border-radius:10px;font-size:13px;background:var(--panel2);
   border:1px solid var(--line);box-shadow:var(--shadow);animation:slidein .2s ease}
 .toast.ok{border-left:3px solid var(--ok)}
@@ -427,7 +430,7 @@ input.search{min-width:220px}
 
 /* ================= 全局「AI 处理中」提示 ================= */
 /* 任意界面发起 AI 请求时亮起；z-index 高于普通弹窗(50)与 toast(90)，保证在模态里也能看见 */
-.ai-busy{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:200;
+.ai-busy{position:fixed;left:50%;bottom:44px;transform:translateX(-50%);z-index:200;
   display:flex;align-items:center;gap:10px;max-width:min(92vw,660px);
   padding:10px 16px;border-radius:999px;background:var(--panel);
   border:1px solid var(--accent);box-shadow:var(--shadow);font-size:13px;color:var(--ink)}
@@ -500,9 +503,10 @@ pre.jsonview{background:var(--panel2);border:1px solid var(--line);border-radius
 .drolls .dr{min-width:30px;padding:4px 8px;text-align:center;background:var(--bg3);border-radius:8px;
   font-family:monospace;font-size:15px;border:1px solid var(--line)}
 .dgrade{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12.5px;font-weight:600}
-.dgrade.gok,.gok{background:color-mix(in srgb,var(--ok) 22%,transparent);color:var(--ok)}
-.dgrade.gwin,.gwin{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok)}
-.dgrade.gfail,.gfail{background:color-mix(in srgb,var(--danger) 20%,transparent);color:var(--danger)}
+/* 鉴定评级徽标：文字向 ink 混合提升 tint 底上的对比度（同 dash-pill 策略） */
+.dgrade.gok,.gok{background:color-mix(in srgb,var(--ok) 22%,transparent);color:color-mix(in srgb,var(--ok) 74%,var(--ink))}
+.dgrade.gwin,.gwin{background:color-mix(in srgb,var(--ok) 14%,transparent);color:color-mix(in srgb,var(--ok) 74%,var(--ink))}
+.dgrade.gfail,.gfail{background:color-mix(in srgb,var(--danger) 20%,transparent);color:color-mix(in srgb,var(--danger) 74%,var(--ink))}
 .dgrade.big{font-size:16px;padding:6px 16px;margin-top:8px}
 .dnote{white-space:pre-wrap;font-size:13px;color:var(--ink-soft);margin-top:8px;line-height:1.6}
 .dnote.err{color:var(--danger)}
@@ -894,6 +898,8 @@ button.ghost.small-secondary{opacity:.85}
 .setcard .row input[type=text],.setcard .row input[type=number],.setcard .row input[type=time],.setcard .row input[type=date],.setcard .row select,.setcard .toolbar input[type=text]{
   flex:1 1 140px;min-width:140px;max-width:100%}
 .setcard .row textarea{flex:1 1 260px;min-width:200px;align-self:flex-start;max-width:100%}   /* 文本域随行伸展，不再挤成小方块 */
+/* 行内复选框：接火漆红 accent（此前仅 ai-toggle 等 8 处容器有 accent-color，.row 行内是系统裸蓝） */
+.setcard .row input[type=checkbox],.setcard .toolbar input[type=checkbox]{accent-color:var(--accent);width:16px;height:16px;flex:0 0 auto}
 .setcard .toolbar{margin-bottom:8px}
 .setcard .toolbar .grow{flex:1}
 .setcard .hint{display:block;margin-top:2px}
@@ -1081,11 +1087,12 @@ button.ghost.small-secondary{opacity:.85}
 .enc-hpfill{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--ok),var(--accent))}
 .enc-unit-body{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .enc-hp{font-family:monospace;font-size:13px;color:var(--ink-soft);margin-right:2px}
+/* 状态徽标：tint 底上文字向 ink 混合提对比（同 dash-pill 策略），边框保持本色 */
 .enc-status{font-size:11px;padding:2px 7px;border-radius:20px;background:color-mix(in srgb,var(--danger) 18%,transparent);
-  color:var(--danger);border:1px solid color-mix(in srgb,var(--danger) 35%,transparent)}
-.enc-status[data-st="ok"]{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok);
+  color:color-mix(in srgb,var(--danger) 74%,var(--ink));border:1px solid color-mix(in srgb,var(--danger) 35%,transparent)}
+.enc-status[data-st="ok"]{background:color-mix(in srgb,var(--ok) 16%,transparent);color:color-mix(in srgb,var(--ok) 74%,var(--ink));
   border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
-.enc-status[data-st="down"]{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn);
+.enc-status[data-st="down"]{background:color-mix(in srgb,var(--warn) 18%,transparent);color:color-mix(in srgb,var(--warn) 66%,var(--ink));
   border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
 .enc-flow{margin:8px 0 4px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
   background:color-mix(in srgb,var(--panel2) 50%,transparent)}
@@ -1653,8 +1660,11 @@ select:focus,input:focus,textarea:focus{border-color:var(--accent);box-shadow:va
 .chatdrawer{border-left:1px solid var(--line);background:var(--panel);
   animation:drawerIn .26s var(--ease) both}
 @keyframes drawerIn{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
+/* busyIn：与 toastIn 同节奏，但终值保留 translateX(-50%) 居中——
+   若复用 toastIn（to{transform:none}）会把 431 行的居中位移动画结束时清掉，整条右偏半屏 */
 .ai-busy{background:var(--panel);border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);
-  border-radius:99px;box-shadow:var(--el-3);animation:toastIn .3s var(--ease) both}
+  border-radius:99px;box-shadow:var(--el-3);animation:busyIn .3s var(--ease) both}
+@keyframes busyIn{from{opacity:0;transform:translate(-50%,12px) scale(.98)}to{opacity:1;transform:translate(-50%,0) scale(1)}}
 
 /* ---- 9. 底部状态条：毛玻璃 + 呼吸状态灯 ---- */
 .statusbar{background:color-mix(in srgb,var(--bg2) 86%,transparent);
