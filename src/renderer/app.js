@@ -1299,7 +1299,7 @@
   }
   function contentInner(html) {
     const c = q('content');
-    c.classList.remove('cab-mode');   // 档案柜外壳仅在资料视图内显式加回，其余视图一律复位
+    c.classList.remove('cab-mode', 'ai-mode');   // 档案柜外壳/AI 弹性布局仅在对应视图内显式加回，其余视图一律复位
     c.innerHTML = html;
   }
 
@@ -1370,7 +1370,8 @@
   /* ---------- 顶栏 ---------- */
   function buildThemeSelect() {
     const sel = q('themeSelect');
-    sel.innerHTML = THEMES.map(([k, l]) => `<option value="${k}" ${S.settings.theme === k ? 'selected' : ''}>${l} ${k}</option>`).join('');
+    /* 只显示中文皮肤名：内部 key（parchment/ember…）对用户是无意义噪音 */
+    sel.innerHTML = THEMES.map(([k, l]) => `<option value="${k}" ${S.settings.theme === k ? 'selected' : ''}>${l}</option>`).join('');
   }
   let _themeT = null; // P1-11：主题切换过渡 class 的移除定时器
   function applyTheme(name, skipPersist) {
@@ -1788,6 +1789,7 @@
   async function paintHomeArchives() {
     const box = q('homeArList'); if (!box) return;
     let list; try { list = await window.api.archives.list(); } catch (_) { box.innerHTML = ''; return; }
+    if (!Array.isArray(list)) list = [];   /* IPC 返回空值/异常结构时不抛错，走空态而不是留白 */
     const cur = (S.meta && S.meta.archive) || storeName_Fallback();
     let h = '';
     for (const a of list) {
@@ -1969,7 +1971,7 @@
     const fav = isFav(kind, it.id);
     return `<div class="cab-dhead">
         <div class="dh-t"><h2>${esc(name)}</h2>
-          <div class="dh-sub">${esc(DATA_TYPE[kind] || kind)} · ${esc(it.id || '')}</div>
+          <div class="dh-sub" title="条目 ID：${esc(it.id || '')}">${esc(DATA_TYPE[kind] || kind)}</div>
           <div class="dh-tags">${selVals}${tplTag}${it.source ? `<span class="ctag">${esc(it.source)}</span>` : ''}${xrefBadgeHTML(name, kind, it.id)}</div>
         </div>
         <span class="cab-stamp">ARCHIVED</span>
@@ -2713,6 +2715,8 @@
       <span class="ai-tok-hint" id="aiInTok" title="本次发送的大致输入 token 估算，仅供参考"></span>
       <button onclick="WB.aiSend()">发送</button></div></div>`;
     contentInner(html);
+    /* AI 页改弹性列布局：聊天区撑满剩余高度、输入区始终贴底可见（此前固定高度会把输入框顶出视口） */
+    q('content').classList.add('ai-mode');
     q('aiIn').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); WB.aiSend(); } });
     q('aiIn').addEventListener('input', () => updTokHint('aiIn', 'aiInTok')); // U3-5：实时预估输入 token
     refreshChat();
@@ -3015,7 +3019,28 @@
     if (n >= 30 && th < n) {
       html += `<div class="chat-hint">对话已累计 ${n} 条，较早内容将被自动压缩。建议把要点沉淀进长期记忆：<button class="ghost small" onclick="WB.plotSummary(true)">☉ 总结并沉淀</button><button class="ghost small" onclick="WB.dismissChatHint()">忽略</button></div>`;
     }
+    /* 空对话欢迎态：首次进入给出身份说明 + 快捷提问入口，避免整块白板像未完成页面 */
+    if (!html && n === 0) {
+      html = `<div class="chat-empty">
+        <span class="ce-ic"><svg class="ic" aria-hidden="true"><use href="#i-sparkle"></use></svg></span>
+        <h4>还没有对话，从一个问题开始</h4>
+        <p>我可以生成 NPC、润色日志、续写剧情、整理线索——左侧工具条也提供一键调用。</p>
+        <div class="ce-quick">
+          <button class="ghost" onclick="WB.aiFill('为本次团设计 3 个待调查的神秘事件钩子，各含一个反转。')">🎲 生成剧情钩子</button>
+          <button class="ghost" onclick="WB.aiFill('把最近一条战役日志润色成可以直接朗读的叙述。')">✍ 润色最近日志</button>
+          <button class="ghost" onclick="WB.aiFill('根据当前人物卡，给出这个角色本幕的私人目标建议。')">🧭 角色目标建议</button>
+        </div>
+      </div>`;
+    }
     return html;
+  }
+  /* 空态快捷提问：把预设问题填入当前打开的输入框（主视图或侧栏抽屉），由用户确认后发送 */
+  function aiFill(text) {
+    const el = q('aiIn') || q('drawerIn');
+    if (!el) return;
+    el.value = text;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.focus();
   }
 
   /* ========== 侧栏常驻 AI 对话抽屉 ========== */
@@ -6047,6 +6072,7 @@
   async function paintArchives() {
     const box = q('archiveList'); if (!box) return;
     let list; try { list = await window.api.archives.list(); } catch (_) { box.innerHTML = ''; return; }
+    if (!Array.isArray(list)) list = [];   /* IPC 返回空值/异常结构时不抛错，走空态而不是留白 */
     const cur = (S.meta && S.meta.archive) || storeName_Fallback();
     let h = '';
     for (const a of list) {
@@ -6564,20 +6590,23 @@
   }
 
   /* ===== Ctrl+K 命令面板：页面跳转 + 实体直达 + 全局搜索入口 ===== */
+  /* ic 与侧栏同源（SVG 雪碧图 id），全应用一套线性图标体系，杜绝 emoji 混排 */
   const PAL_COMMANDS = [
-    { v: 'dash', ic: '◈', t: '总览看板' }, { v: 'pcs', ic: '⛧', t: '人物卡' }, { v: 'npcs', ic: '🧙', t: 'NPC 图鉴' },
-    { v: 'regions', ic: '⛰', t: '地区场景' }, { v: 'logs', ic: '🕮', t: '战役日志' }, { v: 'mobs', ic: '☠', t: '怪物图鉴' },
-    { v: 'rules', ic: '▤', t: '规则速查' }, { v: 'lore', ic: '☷', t: '背景城设' }, { v: 'relations', ic: '☸', t: '关系网' },
-    { v: 'tags', ic: '＃', t: '标签' }, { v: 'maps', ic: '🗺', t: '地图' },
-    { v: 'ai', ic: '✧', t: 'AI 助手' }, { v: 'persona', ic: '♜', t: 'AI 设定' },
-    { v: 'aiconf', ic: '⇅', t: 'AI 配置' }, { v: 'polish', ic: '✍', t: '记录润色' }, { v: 'rawtext', ic: '↯', t: '原始文本' },
-    { v: 'dicehost', ic: '🎲', t: '连 QQ 骰娘' }, { v: 'dice', ic: '⚀', t: '本地掷骰' }, { v: 'dicework', ic: '🧭', t: '骰娘工作台' },
-    { v: 'diceai', ic: '🎛', t: '骰娘 AI 功能开关' }, { v: 'diceaihub', ic: '🧠', t: 'AI 中枢（模型管理）' }, { v: 'diceaichat', ic: '💬', t: '群聊 AI 行为' }, { v: 'dicememe', ic: '🖼', t: '表情包库' },
-    { v: 'encounter', ic: '⚔', t: '临场战斗' }, { v: 'stats', ic: '📊', t: '统计分析' },
-    { v: 'gm', ic: '⚡', t: '开团模式（集中驾驶舱）' },
-    { v: 'settings', ic: '⚙', t: '偏好设置' }, { v: 'help', ic: '❓', t: '帮助中心' },
-    { v: 'changelog', ic: '⌘', t: '更新公告' }, { v: 'runlog', ic: '📜', t: '运行记录' }
+    { v: 'dash', ic: 'i-overview', t: '总览看板' }, { v: 'pcs', ic: 'i-person', t: '人物卡' }, { v: 'npcs', ic: 'i-hood', t: 'NPC 图鉴' },
+    { v: 'regions', ic: 'i-peaks', t: '地区场景' }, { v: 'logs', ic: 'i-doc', t: '战役日志' }, { v: 'mobs', ic: 'i-skull', t: '怪物图鉴' },
+    { v: 'rules', ic: 'i-book', t: '规则速查' }, { v: 'lore', ic: 'i-castle', t: '背景城设' }, { v: 'relations', ic: 'i-network', t: '关系网' },
+    { v: 'tags', ic: 'i-tag', t: '标签' }, { v: 'maps', ic: 'i-map', t: '地图' },
+    { v: 'ai', ic: 'i-sparkle', t: 'AI 助手' }, { v: 'persona', ic: 'i-mask', t: 'AI 设定' },
+    { v: 'aiconf', ic: 'i-cpu', t: 'AI 配置' }, { v: 'polish', ic: 'i-pen', t: '记录润色' }, { v: 'rawtext', ic: 'i-lines', t: '原始文本' },
+    { v: 'dicehost', ic: 'i-bubbles', t: '连 QQ 骰娘' }, { v: 'dice', ic: 'i-die', t: '本地掷骰' }, { v: 'dicework', ic: 'i-compass', t: '骰娘工作台' },
+    { v: 'diceai', ic: 'i-toggle', t: '骰娘 AI 功能开关' }, { v: 'diceaihub', ic: 'i-db', t: 'AI 中枢（模型管理）' }, { v: 'diceaichat', ic: 'i-chat', t: '群聊 AI 行为' }, { v: 'dicememe', ic: 'i-picture', t: '表情包库' },
+    { v: 'encounter', ic: 'i-bolt', t: '临场战斗' }, { v: 'stats', ic: 'i-chart', t: '统计分析' },
+    { v: 'gm', ic: 'i-d20', t: '开团模式（集中驾驶舱）' },
+    { v: 'settings', ic: 'i-sliders', t: '偏好设置' }, { v: 'help', ic: 'i-help', t: '帮助中心' },
+    { v: 'changelog', ic: 'i-megaphone', t: '更新公告' }, { v: 'runlog', ic: 'i-clock', t: '运行记录' }
   ];
+  /* 资料直达结果的分类图标（同侧栏雪碧图） */
+  const PAL_ENT_IC = { pcs: 'i-person', npcs: 'i-hood', regions: 'i-peaks', logs: 'i-doc', mobs: 'i-skull', rules: 'i-book', lore: 'i-castle' };
   let _palIdx = 0;
   function _palItems(q_) {
     const kw = (q_ || '').trim().toLowerCase();
@@ -6592,14 +6621,14 @@
           if (!_locHit(e, kw)) continue;
           const nm = (S.data.entities[k] || []).find(x => x.id === e.id);
           if (!nm) continue;
-          ents.push({ k, id: e.id, ic: '', t: DATA_TYPE[k] + ' · ' + entityNameOf(nm) });
+          ents.push({ k, id: e.id, ic: PAL_ENT_IC[k] || '', t: DATA_TYPE[k] + ' · ' + entityNameOf(nm) });
         }
       }
     }
     const cmds = PAL_COMMANDS
       .filter(c => !kw || c.t.toLowerCase().includes(kw))
       .map(c => ({ kind: 'page', ...c }));
-    return cmds.concat(ents.slice(0, 12)).concat(kw ? [{ kind: 'search', ic: '⌕', t: '全局搜索 “' + kw + '”' }] : []);
+    return cmds.concat(ents.slice(0, 12)).concat(kw ? [{ kind: 'search', ic: 'i-search', t: '全局搜索 “' + kw + '”' }] : []);
   }
   function openPalette() {
     const m = q('paletteMask'); const list = q('palList'); const input = q('palIn');
@@ -6611,8 +6640,16 @@
     const list = q('palList'); const q_ = q('palIn').value;
     const items = _palItems(q_);
     if (_palIdx >= items.length) _palIdx = 0; if (_palIdx < 0) _palIdx = items.length - 1;
-    list.innerHTML = items.map((it, i) =>
-      `<div class="pal-item${i === _palIdx ? ' sel' : ''}" data-i="${i}">${it.ic ? '<span class="pal-ic">' + esc(it.ic) + '</span>' : ''}<span>${esc(it.t)}</span>${it.kind === 'page' ? '<span class="pal-kind">页面</span>' : it.kind === 'search' ? '<span class="pal-kind">跳转</span>' : '<span class="pal-kind">资料</span>'}</div>`).join('');
+    /* 图标渲染：雪碧图 id → <svg><use>（与侧栏同一套线性图标）；右侧类型章只保留「资料/跳转」，
+     * 页面结果不再挂重复的「页面」章，减少每一行的视觉噪音 */
+    list.innerHTML = items.map((it, i) => {
+      const ic = String(it.ic || '');
+      const icHtml = ic ? (ic.startsWith('i-')
+        ? '<span class="pal-ic"><svg class="ic" aria-hidden="true"><use href="#' + ic + '"></use></svg></span>'
+        : '<span class="pal-ic">' + esc(ic) + '</span>') : '';
+      const kindHtml = it.kind === 'page' ? '' : '<span class="pal-kind">' + (it.kind === 'search' ? '跳转' : '资料') + '</span>';
+      return `<div class="pal-item${i === _palIdx ? ' sel' : ''}" data-i="${i}">${icHtml}<span>${esc(it.t)}</span>${kindHtml}</div>`;
+    }).join('');
     const sel = list.querySelector('.pal-item.sel');
     if (sel) sel.scrollIntoView({ block: 'nearest' });
   }
@@ -10400,7 +10437,7 @@
   /* 合并而非整对象替换：保证此前已通过「window.WB.xxx =」挂载的运行时方法（骰娘 AI 开关、
    * 表情包库管理）不被覆盖、加载期不抛错。 */
   window.WB = Object.assign(window.WB, {
-    go, search, add, edit, del, closeModal, saveEdit, setTheme, aiSend, aiGen, aiClear: () => { CH.length = 0; S.pendFiles = []; renderPendStrip(); if (S.settings) { S.settings.chat = []; S.settings.chatArchive = ''; S.settings.chatSumAt = 0; } refreshChat(); persist(); },
+    go, search, add, edit, del, closeModal, saveEdit, setTheme, aiSend, aiGen, aiFill, aiClear: () => { CH.length = 0; S.pendFiles = []; renderPendStrip(); if (S.settings) { S.settings.chat = []; S.settings.chatArchive = ''; S.settings.chatSumAt = 0; } refreshChat(); persist(); },
     setViewSort, setViewSrc, setViewTpl, editSetTpl,
     aiUpload, aiExportLast, addLongMemory, delLongMemory, saveMemoModal, addModRule, delModRule,
     addUserPref, editUserPref, saveUserPrefModal, delUserPref,

@@ -4,7 +4,7 @@
   --panel:#221809; --panel2:#2c2010; --panel3:#37281200;
   --card:#2b1f10; --card2:#332612;
   --ink:#ece0c4; --ink-soft:#b3a077; --ink-faint:#9e8e6f;
-  --accent:#c79a3e; --accent2:#e3c072; --line:#3b2e18;
+  --accent:#c79a3e; --accent2:#e3c072; --line:#4d3d22;   /* 边框提亮一档：暗底卡片分层更清晰 */
   --danger:#e06a4a; --ok:#7fb069; --warn:#d8a24a;
   --shadow:0 10px 30px rgba(0,0,0,.5); --radius:12px;
   --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
@@ -43,7 +43,7 @@
   --panel:#0f1830; --panel2:#14203e; --panel3:#182648;
   --card:#111b33; --card2:#16233f;
   --ink:#d9e8ff; --ink-soft:#7e9ac4; --ink-faint:#7990b5;
-  --accent:#22e0c0; --accent2:#ff5bd0; --line:#1d2f4f;
+  --accent:#22e0c0; --accent2:#ff5bd0; --line:#2c4470;   /* 边框提亮一档：暗底卡片分层更清晰 */
   --danger:#ff5b6a; --ok:#39e07f; --warn:#ffc857;
   --shadow:0 10px 30px rgba(0,0,0,.55); --radius:12px;
   --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
@@ -54,7 +54,7 @@
   --panel:#221d21; --panel2:#2a2428; --panel3:#322b30;
   --card:#251f24; --card2:#2d262b;
   --ink:#e6dfd0; --ink-soft:#a89f8c; --ink-faint:#9c9586;
-  --accent:#d3a24c; --accent2:#e6c07a; --line:#3a3237;
+  --accent:#d3a24c; --accent2:#e6c07a; --line:#4c4249;   /* 边框提亮一档：暗底卡片分层更清晰 */
   --danger:#e07a5f; --ok:#8fab67; --warn:#d9b04a;
   --shadow:0 10px 30px rgba(0,0,0,.5); --radius:12px;
   --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
@@ -117,7 +117,7 @@ body{font-family:var(--font);color:var(--ink);
 .brand-text{display:flex;flex-direction:column;line-height:1.15}
 .brand-text b{font-size:15px}
 .brand-text .sub{font-size:11px;color:var(--ink-faint)}
-.top-actions{display:flex;align-items:center;gap:8px}
+.top-actions{display:flex;align-items:center;gap:8px;margin-left:auto}   /* 工具组右贴窗口控制，消除顶栏中段空洞 */
 .profile-chip{font-size:12px;padding:5px 10px;border:1px solid var(--line);
   border-radius:20px;background:var(--panel);color:var(--ink-soft);max-width:220px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -231,7 +231,7 @@ input.search{min-width:220px}
 .dash-today .mini-btn{flex:0 0 auto;padding:5px 11px;border-radius:8px;background:var(--panel);border:1px solid var(--line);color:var(--accent2);font-size:12px;cursor:pointer}
 .dash-today .mini-btn:hover{border-color:var(--accent);color:var(--accent)}
 
-.dash-ov{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px}
+.dash-ov{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}  /* 150 起步：宽屏下 7 张分类卡正好一行，不再出现末卡孤行 */
 .dash-stat{background:linear-gradient(160deg,var(--card),var(--card2));border:1px solid var(--line);border-radius:var(--radius);
   box-shadow:var(--shadow);padding:13px 15px;display:flex;flex-direction:column;gap:2px;position:relative;overflow:hidden}
 .dash-stat::after{content:"";position:absolute;right:-18px;top:-18px;width:70px;height:70px;border-radius:50%;
@@ -890,9 +890,10 @@ button.ghost.small-secondary{opacity:.85}
 .setgrid{max-width:860px;width:100%;justify-content:flex-start}
 .setcard h4{display:flex;align-items:center;gap:8px;margin:0 0 12px}
 .setcard .row{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
-.setcard .row label{flex:0 0 150px;color:var(--ink-soft);font-size:12.5px}
-.setcard .row input[type=text],.setcard .row input[type=number],.setcard .row select,.setcard .toolbar input[type=text]{
+.setcard .row label{flex:0 1 240px;min-width:140px;color:var(--ink-soft);font-size:12.5px}   /* 标签列可伸缩：长标签少折行 */
+.setcard .row input[type=text],.setcard .row input[type=number],.setcard .row input[type=time],.setcard .row input[type=date],.setcard .row select,.setcard .toolbar input[type=text]{
   flex:1 1 140px;min-width:140px;max-width:100%}
+.setcard .row textarea{flex:1 1 260px;min-width:200px;align-self:flex-start;max-width:100%}   /* 文本域随行伸展，不再挤成小方块 */
 .setcard .toolbar{margin-bottom:8px}
 .setcard .toolbar .grow{flex:1}
 .setcard .hint{display:block;margin-top:2px}
@@ -1121,8 +1122,9 @@ button.ghost.small-secondary{opacity:.85}
 .stat-bar-track{flex:1;height:12px;border-radius:6px;background:color-mix(in srgb,var(--line) 45%,transparent);overflow:hidden}
 .stat-bar-track i{display:block;height:100%;border-radius:6px;
   background:linear-gradient(90deg,var(--accent),var(--accent2))}
-.stat-bar-val{flex:0 0 78px;text-align:right;font-size:13px;font-weight:600}
-.stat-bar-val em{display:block;font-style:normal;font-size:11px;color:var(--ink-faint);font-weight:400}
+.stat-bar-val{flex:0 0 96px;text-align:right;font-size:13px;font-weight:600}
+.stat-bar-val em{display:inline;font-style:normal;font-size:11px;color:var(--ink-faint);font-weight:400;margin-left:5px}
+.stat-bar-val em::before{content:'· ';opacity:.55}   /* 「2 · 18.2%」同行右对齐，右列不再拆行错位 */
 .stat-activity svg{display:block}
 
 /* ============ 骰娘 · 连 QQ（引擎托管） ============ */
@@ -1392,8 +1394,10 @@ button.ghost.small-secondary{opacity:.85}
 .cab-dhead .dh-sub{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
 .cab-dhead .dh-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .cab-dhead .dh-acts{display:flex;gap:6px;flex:0 0 auto;flex-wrap:wrap}
-.cab-stamp{flex:0 0 auto;font-family:var(--mono);font-size:11px;padding:3px 9px;letter-spacing:.1em;
-  color:var(--accent);border:2px solid var(--accent);border-radius:3px;transform:rotate(3deg);opacity:.72}
+/* ARCHIVED 印章：文字取实色 accent（不用 opacity 压淡，保证五套主题下对比度均达标 ≥4.5:1），
+   印章感交给 mono 全大写 + 字距 + 斜置 + 描边，而非牺牲可读性。 */
+.cab-stamp{flex:0 0 auto;font-family:var(--mono);font-size:11px;font-weight:600;padding:3px 9px;letter-spacing:.1em;
+  color:var(--accent);border:2px solid var(--accent);border-radius:3px;transform:rotate(3deg)}
 .cab-fields{display:grid;grid-template-columns:repeat(auto-fill,minmax(258px,1fr));gap:10px}
 .cab-field{padding:9px 11px;border:1px solid var(--line);border-left:4px double var(--accent);
   background:var(--card2);border-radius:var(--radius-sm);min-width:0}
@@ -1613,9 +1617,11 @@ select:focus,input:focus,textarea:focus{border-color:var(--accent);box-shadow:va
 .cab-dhead{border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:16px}
 .cab-dhead h2{font-family:var(--serif);font-size:22px;letter-spacing:.01em;color:var(--ink)}
 .cab-dhead .dh-sub{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
-.cab-stamp{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--accent);
-  border:1px solid color-mix(in srgb,var(--accent) 55%,transparent);border-radius:var(--r-xs);
-  padding:3px 9px;transform:rotate(-2deg);opacity:.85}
+/* 印章提级：10px/.85 透明度下暗色主题（ember/dusk）与羊皮纸上的对比度均在 4.2~4.9 边缘，
+   改为实色文字 + 11px/600 字重，描边 70% accent（opacity 仅剩柔和度则由描边与斜置承担）。 */
+.cab-stamp{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.12em;color:var(--accent);
+  border:1px solid color-mix(in srgb,var(--accent) 70%,transparent);border-radius:var(--r-xs);
+  padding:3px 9px;transform:rotate(-2deg)}
 .cab-field{border:1px solid var(--line);border-left:2px solid color-mix(in srgb,var(--accent) 42%,transparent);
   background:var(--panel2);border-radius:var(--r-sm);
   transition:border-color var(--d2) var(--ease),transform var(--d2) var(--ease),box-shadow var(--d2) var(--ease)}
@@ -1899,3 +1905,57 @@ h2>.helptip,h4>.helptip{width:15px;height:15px;font-size:10px}
 .ds-chips{display:flex;flex-wrap:wrap;gap:8px}
 .ds-chip{padding:4px 10px;border-radius:14px;border:1px solid var(--line2);background:var(--panel2);font-size:12.5px;color:var(--ink-soft)}
 .ds-chip b{color:var(--ink)}
+
+/* ===== 界面设计打磨批次（全站） ===== */
+
+/* 1) AI 助手页弹性列布局：聊天区自动撑满剩余高度、输入区永远贴底可见。
+      此前 .chatwrap 固定 calc(100vh-150px) 未计入页标题/工具条/内边距，
+      1440×900 下输入框会被顶出视口，首屏只剩一块白板。 */
+.content.ai-mode{display:flex;flex-direction:column;overflow:hidden}
+.content.ai-mode>.page-title,.content.ai-mode>.toolbar{flex:0 0 auto}
+.content.ai-mode .chatwrap{flex:1 1 auto;height:auto;min-height:0}
+.content.ai-mode .chatlog{min-height:0}
+
+/* 2) AI 空对话欢迎态：身份说明 + 快捷提问入口，替代“整块白板像未完成页面”的观感 */
+.chat-empty{margin:auto;max-width:580px;width:100%;text-align:center;padding:40px 34px;
+  border:1px dashed var(--line2);border-radius:var(--radius);
+  background:color-mix(in srgb,var(--panel2) 72%,transparent);
+  display:flex;flex-direction:column;align-items:center;gap:8px}
+.chat-empty .ce-ic{display:grid;place-items:center;width:54px;height:54px;border-radius:50%;
+  background:color-mix(in srgb,var(--accent) 15%,transparent);color:var(--accent);
+  border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);margin-bottom:4px}
+.chat-empty .ce-ic .ic{width:26px;height:26px;stroke-width:1.5}
+.chat-empty h4{margin:0;font-family:var(--serif);font-size:17px;font-weight:700;color:var(--ink);letter-spacing:.6px}
+.chat-empty p{margin:0;max-width:430px;font-size:13px;line-height:1.75;color:var(--ink-soft)}
+.chat-empty .ce-quick{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:12px}
+.chat-empty .ce-quick .ghost{font-size:12.5px}
+
+/* 3) 档案详情头的来源/模板标签：补上此前缺失的胶囊样式（原先 16px 裸文本混进 10px 标签行） */
+.cab-dhead .dh-tags .ctag{display:inline-flex;align-items:center;padding:2px 9px;
+  border:1px solid var(--line2);border-radius:999px;
+  background:color-mix(in srgb,var(--accent) 11%,var(--panel2));
+  color:var(--ink-soft);font-family:var(--font);font-size:11px;font-weight:500;line-height:1.55;letter-spacing:.2px}
+.cab-dhead .dh-tags .ctag.tpl{background:color-mix(in srgb,var(--blue,#2f4a6b) 14%,var(--panel2));
+  border-color:color-mix(in srgb,var(--blue,#2f4a6b) 40%,var(--line2));color:var(--ink-soft)}
+
+/* 4) 命令面板行图标：与侧栏同一套线性 SVG（雪碧图），替换 emoji 混排 */
+.pal-item .pal-ic{display:inline-flex;align-items:center;justify-content:center}
+.pal-item .pal-ic .ic{width:15px;height:15px;stroke-width:1.7}
+
+/* 5) 页标题火漆印记：全站页标题的品牌签名（红/金渐变小竖印），衬线标题+印记构成统一的开题节奏 */
+.page-title h2::before{content:'';display:inline-block;width:5px;height:.8em;margin-right:10px;
+  border-radius:3px;vertical-align:-.04em;
+  background:linear-gradient(180deg,var(--accent),var(--accent2));
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 28%,transparent)}
+
+/* 6) 设置/统计卡片补齐悬停反馈：与 card/tile/dash-stat 同级的微抬升语言 */
+.setcard{transition:border-color .18s var(--ease-out),box-shadow .18s var(--ease-out),transform .18s var(--ease-out)}
+.setcard:hover{border-color:color-mix(in srgb,var(--accent) 30%,var(--line));
+  box-shadow:0 12px 28px -20px rgba(0,0,0,.45)}
+.setcard:has(button:focus-visible),.setcard:has(input:focus-visible){border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+
+/* 7) 状态栏提级：10.5px → 11.5px 并补字距，暗色主题下更易读 */
+.statusbar{font-size:11.5px;letter-spacing:.2px}
+
+/* 8) 快捷提问按钮（空态）等价 ghost，仅收敛尺寸差异 */
+.chat-empty .ce-quick .ghost{height:30px;padding:0 12px}

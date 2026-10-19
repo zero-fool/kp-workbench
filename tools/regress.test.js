@@ -1767,7 +1767,7 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
   /* ---- U0-1 开团模式（集中驾驶舱） ---- */
   check('U0-1 入口：顶栏「开团」按钮 + F2 快捷键 + 命令面板直达', () => {
     return /id: 'gmMode',[\s\S]{0,120}def: 'F2'/.test(src)
-      && /\{ v: 'gm', ic: '⚡', t: '开团模式（集中驾驶舱）' \}/.test(src)
+      && /\{ v: 'gm', ic: 'i-d20', t: '开团模式（集中驾驶舱）' \}/.test(src)   /* 图标已统一为侧栏同源 SVG 雪碧图 */
       && /id="btnGmMode"/.test(U0html) && /WB\.toggleGmMode\(\)/.test(U0html) && /id="gmBtnLabel"/.test(U0html)
       ? true : '开团模式入口缺失';
   });

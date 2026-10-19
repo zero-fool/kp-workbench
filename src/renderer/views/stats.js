@@ -39,15 +39,19 @@
     contentInner(html);
   }
   /* 数据构成：横向条形（SVG/纯 HTML 均可读） */
+  /* 与总览「资料分布环」同源的分类色板：跨页同一套色相，图表间可直接对照；
+     暗色主题（ember/neon/dusk）下该组暖亮色同样可辨 */
+  const BARC = { pcs: '#e3c072', npcs: '#c79a3e', regions: '#b9822a', logs: '#6b9fd1', mobs: '#a8361d', lore: '#7a9a6a', rules: '#8a7bb5' };
   function stsComposition(comp, tots) {
     if (!tots) return `<div class="empty">暂无资料，先到各类型页新增内容即可看到占比。</div>`;
     const max = Math.max(1, ...comp.map(c => c[1]));
     const rows = comp.filter(c => c[0] !== 'encounters').map(([k, n]) => {
       const pct = (tots ? (n / tots * 100) : 0);
       const w = Math.max(0, n / max * 100);
+      const col = BARC[k] ? 'background:' + BARC[k] + ';' : '';
       return `<div class="stat-barrow">
         <span class="stat-bar-name">${DATA_TYPE[k] || k}</span>
-        <span class="stat-bar-track"><i style="width:${w}%"></i></span>
+        <span class="stat-bar-track"><i style="width:${w}%;${col}"></i></span>
         <span class="stat-bar-val">${n}<em>${pct.toFixed(1)}%</em></span>
       </div>`;
     }).join('');
