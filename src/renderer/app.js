@@ -16,8 +16,15 @@
   const KINDS = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
   const TPL_KINDS = ['pcs', 'npcs', 'mobs']; // 仅「卡片类」实体支持切换模板（模板改变显示字段集）
   const THEMES = [['ember', '残火纪·暗黑'], ['parchment', '现代卷宗'], ['lite', '极简浅色'], ['neon', '赛博霓虹'], ['dusk', '暮光护眼']];
-  const APP_VERSION = '3.4.1';
+  const APP_VERSION = '3.4.2';
   const CHANGELOG = [
+    { version: '3.4.2', date: '2026-10-20', type: '补丁版·界面重构与动效体系（现代卷宗设计系统）', items: [
+      '界面全面重构：新增 v3「现代卷宗」设计系统覆盖层——统一圆角三级、发丝线、el-1/2/3 分层阴影与 color-mix 焦点环等设计令牌，五套主题共用同一套结构观感（配色交给主题令牌，换肤后仍是同一套现代观感）；顶栏加高至 56px 毛玻璃化，旧主题厚黑投影与 2px 直角经同特异性覆盖统一收敛，选择器基线 1248 条一字未删。',
+      '毛玻璃分层体系：按空间层级给三档强度——底部状态条 blur(14px) > 顶栏 blur(10px) > 浮层遮罩 blur(6px) > 置顶标签栏 blur(4px)，全部 saturate(1.1~1.2) 防止模糊发灰；半透明背景（color-mix 86%/42%/90%）与 backdrop-filter 两件套配合，遮罩模糊随 fadeIn 淡入自然生效。',
+      '完整动效单元体系：三档时长令牌（d1 .14s 微反馈 / d2 .24s 常规过渡 / d3 .42s 强调）+ 统一主缓动曲线 cubic-bezier(.2,.8,.2,1)，22 个 keyframes / 40 处 transition / 28 处 animation 分五族——页面入场（视图切换上浮淡入 + 列表 nth-child .012s 级联落位）、浮层（遮罩淡入与内容弹入分离，busyIn 保留居中位移特例）、悬停按压（抬升 + 阴影升档 + 按压 .08s 回弹）、状态指示（导航指示条生长、选中行拉伸、状态灯呼吸、流式光标闪烁）、一次性定位闪光（起止回归常态不留残影）；prefers-reduced-motion 一键全关。',
+      '非 Electron 预览态稳定性修复：window.api 缺失导致 DOMContentLoaded 初始化中断（winCtrl 判空）、数据未就绪时 switchView / 仪表盘更新 / 地点构建 / 全局搜索读 null 崩溃共 5 处判空补齐，主题下拉与 Ctrl+K 等在无主进程环境下正常可用。',
+      '验证：npm test + npm run verify 全绿（回归清单 391 GREEN · 0 RED），headless Chrome 1440×900 七阶段终验 0 JS 错误，动效令牌与毛玻璃（blur(10px) saturate(1.2)）、22 keyframes、67 条动效规则实测生效；所有 id、事件挂钩、IPC 通道、JS 动态状态类零丢失。',
+    ]},
     { version: '3.4.1', date: '2026-10-15', type: '补丁版·AI 广播断链修复（发版收尾）', items: [
       '修复全局「AI 处理中」提示条始终不亮的问题：preload 广播 ai:busy 后主进程此前没有 ipcMain.on 中转，消息被静默丢弃，导致提示条、计时、任务队列可视化与 AI 收尾时的预算核对及用量徽标刷新全部失效；现补上中转链路，任意界面发起 AI 任务均正常显示进度。',
       '补上 dice-core:engine-event 推送：骰娘页状态徽标改为事件驱动即时刷新（此前该通道有监听无发送，只能靠 4 秒轮询兜底）。',
