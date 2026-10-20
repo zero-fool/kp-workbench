@@ -1452,6 +1452,9 @@
     // 自动展开当前视图所在的分组
     const activeNav = document.querySelector('#sidebar .nav[data-view="' + view + '"]');
     if (activeNav) { const grp = activeNav.closest('details.snav'); if (grp) grp.open = true; }
+    /* 数据未就位（启动竞态 / 非 Electron 预览）时只完成导航高亮、不进入渲染链，
+       避免 renderDash / entities 读到 null 抛 TypeError；数据到位后 init 会重新渲染。 */
+    if (!S.data) return;
     if (view === 'dash') renderDash();
     else if (view === 'search') renderGlobalSearch();
     else if (S.data.entities[view]) renderDataView(view);
@@ -3278,6 +3281,8 @@
   const _loc = { gen: -1, byKind: {} };   // byKind[kind] = [{id, lo, tag, py}]
   function _locBuild() {
     if (_loc.gen === _xref.gen) return _loc.byKind;
+    /* 数据未就位：返回既有索引（初值 {}）且不提交代数，就绪后下次调用仍会重建 */
+    if (!S.data || !S.data.entities) return _loc.byKind;
     _loc.gen = _xref.gen; _loc.byKind = {};
     for (const k of KINDS) {
       const box = [];
@@ -6574,7 +6579,11 @@
     S.settings.layout = {};
     persist(); updateDashIfShown();
   }
-  function updateDashIfShown() { if (S.view === 'dash') renderDash(); if (S.view === 'settings') { paintFieldEditor(S.editFieldKind); } }
+  function updateDashIfShown() {
+    /* S.data 未就位（启动竞态 / 非 Electron 预览）时跳过看板重绘，避免读 entities 抛空引用 */
+    if (S.view === 'dash' && S.data && S.data.entities) renderDash();
+    if (S.view === 'settings') { paintFieldEditor(S.editFieldKind); }
+  }
   function go(v) { switchView(v); }
 
   /* ===== 侧栏折叠（图标态） ===== */
@@ -6687,6 +6696,8 @@
   const _gsIdx = { gen: -1, entities: [], relNodes: [], relEdges: [], maps: [], rawLower: '', mem: [] };
   function gsIndex() {
     if (_gsIdx.gen === _xref.gen) return _gsIdx;
+    /* 数据未就位：返回既有空索引（形状完整）且不提交代数，避免 Ctrl+K/Ctrl+Shift+F 读 null.entities */
+    if (!S.data || !S.data.entities) return _gsIdx;
     _gsIdx.gen = _xref.gen;
     const ents = S.data.entities || {};
     const entArr = [];
@@ -12017,13 +12028,16 @@
       _gIdx = parseInt(item.dataset.i, 10); _gPick();
     });
     if (gMask) gMask.addEventListener('click', (ev) => { if (ev.target === gMask) closeGlobalSearch(); });
-    /* 无边框窗口控制 */
-    q('wcMin').addEventListener('click', () => window.api.winCtrl.minimize());
-    q('wcMax').addEventListener('click', () => window.api.winCtrl.toggleMax());
-    q('wcClose').addEventListener('click', () => window.api.winCtrl.close());
-    if (window.api.winCtrl.onMaximized) {
-      window.api.winCtrl.onMaximized((m) => { q('wcMax').textContent = m ? '❐' : '▢'; });
-      window.api.winCtrl.isMaximized().then((r) => { if (r && r.maximized) q('wcMax').textContent = '❐'; }).catch(() => {});
+    /* 无边框窗口控制：winCtrl 缺失（非 Electron 预览 / 旧 preload）时静默降级，
+       不能让这里的空引用中断整个 DOMContentLoaded，否则 init() 永远不跑、
+       页面会死在「加载中…」——init 内部本有 !window.api 的友好提示要送达。 */
+    const wcApi = window.api && window.api.winCtrl;
+    q('wcMin').addEventListener('click', () => { if (wcApi) wcApi.minimize(); });
+    q('wcMax').addEventListener('click', () => { if (wcApi) wcApi.toggleMax(); });
+    q('wcClose').addEventListener('click', () => { if (wcApi) wcApi.close(); });
+    if (wcApi && wcApi.onMaximized) {
+      wcApi.onMaximized((m) => { q('wcMax').textContent = m ? '❐' : '▢'; });
+      wcApi.isMaximized().then((r) => { if (r && r.maximized) q('wcMax').textContent = '❐'; }).catch(() => {});
     }
     q('drawerSend').addEventListener('click', () => aiSend());
     q('drawerUpload').addEventListener('click', aiUpload);
@@ -12125,6 +12139,9 @@
     try { mo.observe(document.body, { childList: true, subtree: true }); } catch (_) {}
   }
   async function init() {
+    /* 先建主题下拉并套用当前主题：非 Electron 预览（无 window.api）也能正常换肤，
+       不必等数据加载——applyTheme 只依赖 THEMES/S.settings，paintStatusBar 已判空。 */
+    applyTheme(S.settings.theme || 'parchment', true);
     if (!window.api) { contentInner('<div class="empty">需要 Electron 环境运行（请直接打开 EXE）</div>'); return; }
     try {
       const r = await window.api.getAll();
