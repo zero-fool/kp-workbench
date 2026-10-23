@@ -1852,6 +1852,8 @@ function registerIpc() {
   ipcMain.handle('diceQq:confirmQr', () => diceWorkbench.qqConfirmQr());
   ipcMain.handle('diceQq:slider', async (e, ticket) => diceWorkbench.qqSubmitSlider(ticket));
   ipcMain.handle('diceQq:sms', async (e, code) => diceWorkbench.qqSubmitSms(code));
+  ipcMain.handle('diceQq:sendSms', () => diceWorkbench.qqSendSms());
+  ipcMain.handle('diceQq:verifyDone', () => diceWorkbench.qqVerifyDone());
   ipcMain.handle('diceQq:logout', () => diceWorkbench.qqLogout());
   ipcMain.handle('diceQq:status', () => diceWorkbench.qqStatus());
   // U1-19：签名服务连通性自检（无签名服务时 icqq 登录极易触发风控）
@@ -1909,12 +1911,22 @@ function registerIpc() {
     aiChatEngine.onMessage(m, ch).catch(() => {});
   });
   /* 骰娘引擎事件 → 渲染层（骰娘页订阅 onEngineEvent 做即时刷新）。
-   * hub 事件流覆盖 message/replies/suppressed，即任何入站消息都是一次「引擎活动」。 */
+   * hub 事件流覆盖 message/replies/suppressed——每条入站消息会广播 2~3 个事件。
+   * 卡顿修复：按 400ms 合并推送。旧实现逐事件 webContents.send，QQ 群消息一多渲染层被
+   * IPC 往返打满（每条事件还触发一次 engine.status() 回查），表现为打字卡、按钮点不动；
+   * 状态徽标刷新容忍 ≤400ms 延迟，不影响任何功能语义。 */
+  let engEvTimer = null, engEvType = '';
   diceWorkbench.hub.onEvent((ev) => {
     if (!ev) return;
-    try {
-      if (win && win.webContents) win.webContents.send('dice-core:engine-event', { type: ev.type, at: Date.now() });
-    } catch (_) {}
+    engEvType = ev.type || engEvType;
+    if (engEvTimer) return;
+    engEvTimer = setTimeout(() => {
+      engEvTimer = null;
+      const t = engEvType; engEvType = '';
+      try {
+        if (win && win.webContents) win.webContents.send('dice-core:engine-event', { type: t, at: Date.now() });
+      } catch (_) {}
+    }, 400);
   });
   /* AI 对话配置 IPC：摘要库/事实库 View·Clear（U9-8/U9-9）+ 默认值回填（U9-7 Load default） */
   ipcMain.handle('diceAiChat:memView', () => aiChatEngine.memView());

@@ -6,7 +6,9 @@ const { planApiCalls } = require('./api');
 
 function createOnebot11Adapter(deps) {
   const cfg = deps.cfg.onebot11 || {};
-  const mode = cfg.mode === 'client' ? 'client' : 'server';
+  /* 连接模式按次读取：适配器在启动装配时创建，而 mode/url 由连接中心在「启动」前才写进 cfg，
+   * 若构造时固化 const mode，用户改完模式点启动仍走旧模式（正连/反连切换不生效）。 */
+  const mode = () => (cfg.mode === 'client' ? 'client' : 'server');
   let cb = null;
   let server = null;
   let state = 'stopped';
@@ -49,7 +51,13 @@ function createOnebot11Adapter(deps) {
   return {
     id: 'onebot11',
     async start() {
-      if (mode === 'client') {
+      /* 重复启动 / 模式切换（正连⇄反连）前先回收旧连接：否则旧 TCP 服务或重连定时器泄漏 */
+      if (server || clientSock) { try { await this.stop(); } catch (_) {} }
+      if (mode() === 'client') {
+        /* 正连模式：必须给出协议端 WS 地址，否则静默「运行中」却什么都没连（用户以为坏了） */
+        if (!String(cfg.url || '').trim()) {
+          throw new Error('正连（客户端）模式需要填写协议端 WS 地址，如 ws://127.0.0.1:3001；或改回服务端（反连）模式监听端口');
+        }
         stopped = false;
         state = 'running';
         connectClient();
@@ -117,7 +125,7 @@ function createOnebot11Adapter(deps) {
       for (const call of calls) {
         const echo = `m2-${++seq}`;
         const frame = JSON.stringify({ action: call.action, params: call.params, echo });
-        if (mode === 'client') {
+        if (mode() === 'client') {
           if (clientSock && clientSock.readyState === WebSocket.OPEN) clientSock.send(frame);
         } else {
           for (const c of conns) c.send(frame);
@@ -131,7 +139,7 @@ function createOnebot11Adapter(deps) {
       });
     },
     status() {
-      return { state, connections: conns.size, reconnects, lastError };
+      return { state, mode: mode(), connections: conns.size, reconnects, lastError };
     },
   };
 }

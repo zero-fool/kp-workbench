@@ -964,6 +964,16 @@
     h.className = 'ai-tok-hint' + (n > 12000 ? ' over' : (n > 4000 ? ' warn' : ''));
     h.title = '本次输入约 ' + fmtNum(n) + ' token（粗估，随对话历史增大而更高）；发送后清零';
   }
+  /* 输入卡顿修复：token 预估 200ms 尾沿防抖。旧实现 input 事件逐键对全文正则扫描 + 更新 4 个 DOM 属性，
+   * 长文本时每按一键都整篇扫描，输入发卡；预估提示容忍 ~200ms 延迟，语义不变（发送后清零仍走 updTokHint 直调）。 */
+  const _tokHintTimers = {};
+  function debouncedTokHint(inputId, hintId) {
+    if (_tokHintTimers[inputId]) clearTimeout(_tokHintTimers[inputId]);
+    _tokHintTimers[inputId] = setTimeout(() => {
+      _tokHintTimers[inputId] = null;
+      updTokHint(inputId, hintId);
+    }, 200);
+  }
   /* U3-5：状态栏实时用量徽标（累计 token + 估算花费 + 预算占比），点击打开用量面板 */
   let _aiUsageBadgeAt = 0;
   function aiUsageBadgeRefresh(force) {
@@ -1229,7 +1239,7 @@
    * 返回 Promise，调用方可选择 await 或不等。
    * 差量传输：每次保存仅携带「哈希发生变化的实体分片 + 关系网 + 高频小字段」，
    * 未变动的实体类型不再整段序列化/传输，大档案在 IPC 与 JSON 序列化上显著省时。 */
-  let _saveTimer = null, _saveResolve = null, _pendSave = false;
+  let _saveTimer = null, _pendSave = false, _saveAge = 0, _saveWaiters = [];
   /* 上个已送达校验和：实体按类型、关系网按整体。空档表示首次/换档案后需全量。 */
   const _lastSent = { ent: {}, rel: null };
   let wsListen = null; // 大列表窗口化增量加载的滚动回调引用，重复进出视图时先解绑再绑定
@@ -1279,8 +1289,11 @@
   function clearWriteError() { _lastWriteErr = null; }
   async function _doSave() {
     _saveTimer = null;
+    _saveAge = 0;
     if (!_pendSave) return;
     _pendSave = false;
+    /* 快照本轮等待者：保存 await 期间新到的 persist() 归下一轮兑付（它们的改动还没进本次载荷） */
+    const ws = _saveWaiters; _saveWaiters = [];
     try {
       const res = await window.api.save(makeSavePayload());
       if (res && res.ok === false) reportWriteError(res.error);
@@ -1288,17 +1301,34 @@
     } catch (e) {
       reportWriteError(e);   // IPC 层异常同样视为未落盘
     } finally {
-      if (_saveResolve) { const r = _saveResolve; _saveResolve = null; r(); }
+      /* 兑现全部等待者。旧实现只存最后一个 resolve——await persist() 期间任何新的 persist()
+       * 都会覆盖它，先到的 await 永远挂起（按钮点完没反应、后续逻辑不执行）。 */
+      for (const r of ws) { try { r(); } catch (_) { /* 单个等待者异常不影响其余 */ } }
     }
   }
+  /* 轻量落盘标志：纯配置输入（连接中心等）不改实体数据，跳过侧栏计数重绘。
+   * 不能给 persist() 加参数——tools/regress.test.js T17/T18 用 /function persist\(\)/ 正则抽取函数体。 */
+  let _lightPersist = false;
   function persist() {
     _xrefBump();
-    paintNavCounts();          // 数据变更后同步侧栏档案索引计数
+    if (!_lightPersist) paintNavCounts();   // 数据变更后同步侧栏档案索引计数
     _pendSave = true;
     return new Promise((resolve) => {
-      _saveResolve = resolve;
-      if (!_saveTimer) _saveTimer = setTimeout(_doSave, 300);
+      _saveWaiters.push(resolve);
+      /* 输入卡顿修复：尾沿防抖。旧实现在首个调用后 300ms 必落盘（计时期间不再顺延），
+       * 连续打字时每 300ms 就全量哈希 + IPC + 主进程同步写盘一轮，渲染层被反复冻结；
+       * 现改为「停手 300ms 才落盘」，连续输入保底 2s 强制落一轮，兼顾手感与防丢。 */
+      const now = Date.now();
+      if (!_saveAge) _saveAge = now;
+      const wait = (now - _saveAge >= 2000) ? 0 : 300;
+      if (_saveTimer) clearTimeout(_saveTimer);
+      _saveTimer = setTimeout(_doSave, wait);
     });
+  }
+  /* 配置类持久化：无实体变更，跳过 paintNavCounts（每次按键全侧栏 querySelectorAll 是输入卡顿源之一） */
+  function persistCfg() {
+    _lightPersist = true;
+    try { return persist(); } finally { _lightPersist = false; }
   }
   function pushAudit(op, kind, name) {
     S.data.audit.unshift({ t: new Date().toISOString(), op, kind, name, at: '工作台' });
@@ -2728,7 +2758,7 @@
     /* AI 页改弹性列布局：聊天区撑满剩余高度、输入区始终贴底可见（此前固定高度会把输入框顶出视口） */
     q('content').classList.add('ai-mode');
     q('aiIn').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); WB.aiSend(); } });
-    q('aiIn').addEventListener('input', () => updTokHint('aiIn', 'aiInTok')); // U3-5：实时预估输入 token
+    q('aiIn').addEventListener('input', () => debouncedTokHint('aiIn', 'aiInTok')); // U3-5：实时预估输入 token（200ms 防抖）
     refreshChat();
     renderPendStrip();
   }
@@ -6333,14 +6363,25 @@
   /* ========== 全局动作 ========== */
   function search(v) {
     S.search = v;
-    switchView(S.view);
-    /* 视图整体重绘会销毁原输入框，重绘后把焦点与光标还给搜索框，保证连续输入不中断 */
-    const el = document.querySelector('#content .toolbar input.search');
-    if (el) { try { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } catch (_) {} }
+    /* 输入卡顿修复：150ms 尾沿防抖（同 globalSearch）。旧实现逐键 switchView 全视图重绘，
+     * 大档案下每按一键都整页重建 + 焦点回填，输入明显发卡；防抖后合一次重绘。
+     * 重绘仍照做（过滤结果要跟上），但仅当焦点还停在搜索框里才回填焦点——
+     * 若用户已点走/切视图，本次重绘不抢焦点。 */
+    if (_searchDeb) clearTimeout(_searchDeb);
+    _searchDeb = setTimeout(() => {
+      _searchDeb = null;
+      const had = !!(document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('search'));
+      switchView(S.view);
+      if (had) {
+        const el = document.querySelector('#content .toolbar input.search');
+        if (el) { try { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } catch (_) {} }
+      }
+    }, 150);
   }
   /* 全局跨实体搜索（侧栏输入） */
   /* P1-12：150ms 防抖——高频按键合并到一次检索，不再逐键对全库做扫描（2.8.2 已优化序列化，此处再压触发频率） */
   let _gsDeb = null;
+  let _searchDeb = null; // 视图内搜索框防抖（见 search()）
   function globalSearch(v) {
     if (_gsDeb) clearTimeout(_gsDeb);
     _gsDeb = setTimeout(() => { _gsDeb = null; runGlobalSearch(String(v || '')); }, 150);
@@ -7844,13 +7885,18 @@
       toast('已导入 ' + list.length + ' 个文件并入原始文本，共 ' + fmtNum(S.rawText.length) + ' 字', 'ok');
     } catch (e) { toast('导入失败：' + ((e && e.message) || e), 'err'); }
   }
+  let _rawRedrawT = null;
   function rawInput() {
     const ti = q('rawInput'); if (!ti) return;
     S.rawText = cleanText(ti.value);
     S.rawSuggested = '';
     S.rawScript = null;                    // 原文变化后旧分幕/建议已失配，清空切回纯净
     S.rawShow = 'text';
-    rawRedrawOut();
+    /* 输入卡顿修复：200ms 防抖后重绘输出区。旧实现逐键对全文 cleanText + rawBodyHtml 整段
+     * esc + #rawOut 全量 innerHTML——几万字时每按一键都重建整篇 DOM，页面直接发死。
+     * S.rawText 已即时更新（供保存/建议按钮读取），只推迟视觉重绘。 */
+    if (_rawRedrawT) clearTimeout(_rawRedrawT);
+    _rawRedrawT = setTimeout(() => { _rawRedrawT = null; rawRedrawOut(); }, 200);
     const btn = q('rawSuggestBtn'); if (btn) btn.disabled = !S.rawText;
   }
   function rawRedrawOut() {
@@ -9699,24 +9745,37 @@
   const _dw = { simMsgs: [], logPanel: null, replyPack: null, filter: '' };
   function dwApi() { return (window.api && window.api.diceCore) ? window.api.diceCore : null; }
   function dwNetCfg() {
-    if (!S.settings.diceNet) S.settings.diceNet = { qqdirect: { uin: '' }, onebot11: { host: '127.0.0.1', port: 6700 }, qqofficial: {}, sim: {} };
+    if (!S.settings.diceNet) S.settings.diceNet = { qqdirect: { uin: '' }, onebot11: { host: '127.0.0.1', port: 6700, mode: 'server', url: '' }, qqofficial: {}, sim: {} };
     if (!S.settings.diceNet.qqdirect) S.settings.diceNet.qqdirect = { uin: '' };
+    if (!S.settings.diceNet.onebot11) S.settings.diceNet.onebot11 = { host: '127.0.0.1', port: 6700, mode: 'server', url: '' };
     return S.settings.diceNet;
   }
   /* ===== QQ 直连登入：状态面板重绘 + 动作分发 =====
    * 只替换 #qqdPanel 片段，不重建账号输入框（避免用户输入被抹掉）；状态一律以主进程 status() 为准，
-   * 因为它持有二维码 / 验证阶段的权威状态，登录事件到达时也会经 onQqEvent 主动推送。 */
+   * 因为它持有二维码 / 验证阶段的权威状态，登录事件到达时也会经 onQqEvent 主动推送。
+   * 卡顿修复：① 内容哈希未变则完全跳过 innerHTML 重写（此前 5s 轮询 + 每条事件都重建面板，
+   * 二维码 base64 图被反复解码）；② 确需重写时保留用户已输入的验证码/票据。 */
   function paintQqDirect() {
     const panel = document.getElementById('qqdPanel'); if (!panel) return;
     const CC = window.DiceUIConnCenter || {};
     const st = Object.assign({}, _dw.qqStatus || { state: 'stopped' }, { signCheck: _dw.qqSignCheck || null, sendGate: _dw.sendMetrics || null });
-    panel.innerHTML = (CC.renderQqDirectPanel || (() => ''))(st);
+    const html = (CC.renderQqDirectPanel || (() => ''))(st);
+    const ph = String(docHash(html));
     const light = document.getElementById('qqdLight');
     if (light) {
       const running = st.state === 'running', err = st.state === 'error';
       light.className = 'dice-light ' + (running ? 'on' : (err ? 'fail' : 'off'));
       light.textContent = running ? '在线' : (err ? '异常' : '未在线');
     }
+    if (panel.dataset.ph === ph) return;                        // 面板内容无变化：不重绘（保留输入/二维码节点）
+    const keep = {};
+    for (const id of ['qqdSms', 'qqdSlider']) {
+      const el = document.getElementById(id);
+      if (el && el.value) keep[id] = el.value;
+    }
+    panel.innerHTML = html;
+    panel.dataset.ph = ph;
+    for (const id in keep) { const el = document.getElementById(id); if (el) el.value = keep[id]; }
   }
   async function refreshQqDirect() {
     const api = dwApi();
@@ -9744,7 +9803,9 @@
   function qqDirectCfgFromCard() {
     const card = document.querySelector('[data-channel="qqdirect"]');
     const cfg = dwNetCfg().qqdirect;
-    if (card) card.querySelectorAll('input[data-field]').forEach((inp) => { cfg[inp.getAttribute('data-field')] = inp.type === 'checkbox' ? inp.checked : inp.value; });
+    if (card) card.querySelectorAll('input[data-field], select[data-field]').forEach((inp) => {
+      cfg[inp.getAttribute('data-field')] = inp.tagName === 'SELECT' ? inp.value : (inp.type === 'checkbox' ? inp.checked : inp.value);
+    });
     return cfg;
   }
   /* 签名服务开关联动：关闭时禁用地址输入（配置仍在，重新勾选即恢复）。 */
@@ -9753,6 +9814,14 @@
     const cb = card.querySelector('input[data-field="signEnabled"]');
     const addr = card.querySelector('input[data-field="signApiAddr"]');
     if (cb && addr) addr.disabled = !cb.checked;
+  }
+  /* OneBot 正连/反连联动：按所选模式显示对应输入区（server=监听 host/port，client=协议端 ws url），并同步卡片标题。 */
+  function applyObMode(card, mode) {
+    if (!card) return;
+    const m = mode === 'client' ? 'client' : 'server';
+    card.querySelectorAll('[data-mode-when]').forEach((box) => { box.hidden = box.getAttribute('data-mode-when') !== m; });
+    const lab = card.querySelector('[data-ob-mode]');
+    if (lab) lab.textContent = m === 'client' ? '客户端（正连）' : '服务端（反连）';
   }
   async function qqDirectAct(act) {
     const api = dwApi();
@@ -9769,9 +9838,21 @@
         if (!password) { toast('请填写密码，或改用扫码登录', 'err'); return; }
         toast('正在登录…', ''); await api.diceQq.login({ mode: 'password', uin, password, cfg });
         if (pwdEl) pwdEl.value = ''; // 密码不落地、不驻留
-      } else if (act === 'qq-confirm') { await api.diceQq.confirmQr(); }
+      } else if (act === 'qq-confirm') {
+        const ok = await api.diceQq.confirmQr();
+        if (ok === false) toast('二维码还没有扫码确认：请先用手机 QQ 扫码，并在手机上点「登录」', 'err');
+      }
       else if (act === 'qq-slider') { await api.diceQq.slider((document.getElementById('qqdSlider') || {}).value || ''); }
       else if (act === 'qq-sms') { await api.diceQq.sms((document.getElementById('qqdSms') || {}).value || ''); }
+      else if (act === 'qq-sms-send') {
+        toast('正在发送短信验证码…', '');
+        await api.diceQq.sendSms();
+        toast('短信验证码已发送，请查收（60 秒内不可重复发送）', 'ok');
+      }
+      else if (act === 'qq-verified') {
+        toast('验证页已完成，正在继续登录…', '');
+        await api.diceQq.verifyDone();
+      }
       else if (act === 'qq-logout') { await api.diceQq.logout(); _dw.qqSignCheck = null; toast('已退出 QQ 登录', 'ok'); }
       else if (act === 'qq-signcheck') {
         toast('正在自检签名服务…', '');
@@ -9820,12 +9901,18 @@
     el.querySelectorAll('[data-channel]').forEach((card) => {
       const ch = card.getAttribute('data-channel');
       if (!cfg[ch]) cfg[ch] = {};
-      card.querySelectorAll('input[data-field]').forEach((inp) => {
+      card.querySelectorAll('input[data-field], select[data-field]').forEach((inp) => {
         const f = inp.getAttribute('data-field');
-        if (inp.type === 'checkbox') {
-          inp.addEventListener('change', () => { cfg[ch][f] = inp.checked; persist(); applySignEnabled(card); });
+        if (inp.tagName === 'SELECT') {
+          inp.addEventListener('change', () => {
+            cfg[ch][f] = inp.value;
+            if (f === 'mode') applyObMode(card, inp.value);   // OneBot 正连/反连：按模式切换输入区
+            persistCfg();
+          });
+        } else if (inp.type === 'checkbox') {
+          inp.addEventListener('change', () => { cfg[ch][f] = inp.checked; persistCfg(); applySignEnabled(card); });
         } else {
-          inp.addEventListener('input', () => { cfg[ch][f] = inp.value; persist(); });
+          inp.addEventListener('input', () => { cfg[ch][f] = inp.value; persistCfg(); });
         }
       });
     });
@@ -9842,9 +9929,11 @@
           let patch;
           if (act === 'start' && cfg[ch]) {
             // 启动前把该卡当前输入收集进配置，并作为最新配置传给主进程（主进程据此合并后 start）
-            card.querySelectorAll('input[data-field]').forEach((inp) => { cfg[ch][inp.getAttribute('data-field')] = inp.value; });
+            card.querySelectorAll('input[data-field], select[data-field]').forEach((inp) => {
+              cfg[ch][inp.getAttribute('data-field')] = inp.type === 'checkbox' ? inp.checked : inp.value;
+            });
             patch = Object.assign({}, cfg[ch]);
-            persist();
+            persistCfg();
           }
           await (act === 'start' ? api.diceNet.start(ch, patch) : api.diceNet.stop(ch));
           toast((act === 'start' ? '已启动 ' : '已停止 ') + ch + ' 通道', 'ok');
@@ -9957,8 +10046,19 @@
   function paintSessionChat(rows) {
     const SC = window.DiceUISessionCenter || {};
     const el = document.getElementById('dice-session-chat'); if (!el) return;
-    el.innerHTML = (SC.sessionChatHTML || (() => ''))(rows || []);
-    el.scrollTop = el.scrollHeight;
+    const html = (SC.sessionChatHTML || (() => ''))(rows || []);
+    /* 输入卡顿修复：内容哈希未变则跳过重绘。旧实现 5s 轮询无条件 innerHTML + 强制滚底，
+     * 即使没有任何新消息也整段重建聊天气泡、并把用户上翻的阅读位置拽回底部。 */
+    const ph = String(docHash(html));
+    const sid = String(_dw.sessActive || '');
+    if (el.dataset.ph === ph && el.dataset.sid === sid) return;
+    /* 切换会话无条件滚到底；同会话内仅当用户本来就贴在底部才跟随滚底——
+     * 上翻阅读中来了新消息保持原位（同主聊天 P6-E1 口径）。 */
+    const atBottom = el.dataset.sid !== sid || (el.scrollHeight - el.scrollTop - el.clientHeight < 64);
+    el.dataset.ph = ph;
+    el.dataset.sid = sid;
+    el.innerHTML = html;
+    if (atBottom) el.scrollTop = el.scrollHeight;
   }
   async function refreshSessionChat() {
     const api = dwApi();
@@ -10028,7 +10128,9 @@
       } catch (e) { toast('打开失败：' + ((e && e.message) || e), 'err'); }
     };
   }
-  /* U8-8/U8-3：发送观测指标 + 诊断常态化轮询（连接状态/群聊新消息 5s 刷新） */
+  /* U8-8/U8-3：发送观测指标 + 诊断常态化轮询（连接状态/群聊新消息 5s 刷新）
+   * 卡顿修复：指标内容未变化时不写 innerHTML、不触发 QQ 面板重绘——此前每 5s 无条件双写
+   * #dwSendMetrics/#sessMetrics 并 paintQqDirect()（渲染整段面板 HTML 再哈希对比），轮询白烧 CPU。 */
   async function refreshSendMetrics() {
     const api = dwApi();
     if (!api || !api.diceNet || !api.diceNet.sendMetrics) return;
@@ -10037,9 +10139,13 @@
       const m = await api.diceNet.sendMetrics();
       _dw.sendMetrics = m;
       const html = (SC.sendMetricsHTML || (() => ''))(m);
-      const a = document.getElementById('dwSendMetrics'); if (a) a.innerHTML = html;
-      const b = document.getElementById('sessMetrics'); if (b) b.innerHTML = html;
-      paintQqDirect(); // 诊断块同步发送观测行
+      const mh = String(docHash(html));
+      if (_dw.sendMetricsPh !== mh) {
+        _dw.sendMetricsPh = mh;
+        const a = document.getElementById('dwSendMetrics'); if (a) a.innerHTML = html;
+        const b = document.getElementById('sessMetrics'); if (b) b.innerHTML = html;
+        paintQqDirect(); // 诊断块同步发送观测行（指标变化才需要）
+      }
     } catch (_) {}
   }
   function startDwPolling() {
@@ -12050,7 +12156,7 @@
     q('drawerUpload').addEventListener('click', aiUpload);
     q('drawerExport').addEventListener('click', aiExportLast);
     q('drawerIn').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); aiSend(); } });
-    q('drawerIn').addEventListener('input', () => updTokHint('drawerIn', 'drawerInTok')); // U3-5：实时预估输入 token
+    q('drawerIn').addEventListener('input', () => debouncedTokHint('drawerIn', 'drawerInTok')); // U3-5：实时预估输入 token（200ms 防抖）
     /* 侧栏「自动建卡」控件：结合上方对话生成 / 把最近回复建为资料卡 */
     const dgt = q('drawerGenType');
     if (dgt) dgt.addEventListener('change', () => { S.aiGenType = dgt.value; });

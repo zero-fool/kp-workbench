@@ -25,7 +25,9 @@ test('各平台字符串/数字均归一化为 icqq 数字枚举', async () => {
   for (const [input, want] of [['aPad', 2], ['ipad', 5], ['1', 1], ['android', 1], ['tim', 6]]) {
     const seen = [];
     const adapter = makeAdapter({ platform: input }, seen);
-    await adapter.start({ mode: 'qr', uin: 0 });
+    // 无参 start 只装配客户端（验证归一化）；Tim 走扫码登录会被前置拦截（拦截行为另有专测），
+    // 故这里不带 mode:'qr' 触发登录链路。
+    await adapter.start();
     assert.equal(seen.length, 1);
     assert.equal(seen[0].platform, want, `${input} → ${want}`);
   }

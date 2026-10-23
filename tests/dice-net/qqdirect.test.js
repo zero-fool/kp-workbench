@@ -122,6 +122,7 @@ function fakeEngine() {
     c.logout = (keep) => { log.push(['logout', keep]); return Promise.resolve(); };
     c.submitSlider = (t) => { log.push(['slider', t]); return Promise.resolve(); };
     c.submitSmsCode = (t) => { log.push(['sms', t]); return Promise.resolve(); };
+    c.sendSmsCode = () => { log.push(['sendSms']); return Promise.resolve(); };
     c.queryQrcodeResult = () => Promise.resolve({ retcode: 0 });
     c.qrcodeLogin = () => { log.push(['qrcodeLogin']); return Promise.resolve(); };
     c.sendGroupMsg = (gid, m) => { log.push(['group', gid, m]); return Promise.resolve(); };
@@ -206,9 +207,81 @@ test('适配器：滑动/短信验证进入待验证态并可提交', async () =
   c.emit('system.login.device', { phone: '138****0000' });
   assert.strictEqual(adapter.status().need, 'device');
   assert.strictEqual(adapter.status().phone, '138****0000');
+  // 核心修复：device 事件到达即自动下发短信（旧实现从不调用 sendSmsCode，用户永远收不到）
+  await new Promise((r) => setTimeout(r, 5));
+  assert.ok(fe.log.some((r) => r[0] === 'sendSms'), 'device 事件应自动触发 sendSmsCode');
+  assert.strictEqual(adapter.status().smsSent, true);
   assert.strictEqual(await adapter.submitSms('123456'), true);
   assert.ok(fe.log.some((r) => r[0] === 'sms' && r[1] === '123456'));
   await adapter.stop();
+});
+
+test('适配器：sendSms 手动重发受 60s 频控，verifyDone 走 URL 验证后重登', async () => {
+  const { adapter, fe } = makeAdapter();
+  await adapter.start();
+  const c = fe.clients[0];
+  c.emit('system.login.device', { phone: '138****0000', url: 'http://verify/device' });
+  await new Promise((r) => setTimeout(r, 5));
+  // 频控：60s 内手动重发应被拒
+  await assert.rejects(() => adapter.sendSms(), /频繁|60/);
+  // URL 验证完成 → 重新拉起登录
+  assert.strictEqual(await adapter.verifyDone(), true);
+  assert.ok(fe.log.some((r) => r[0] === 'login'));
+  await adapter.stop();
+});
+
+test('适配器：短信验证码错误（162/163）原地重试不进 error 态', async () => {
+  const { adapter, fe } = makeAdapter();
+  await adapter.start();
+  const c = fe.clients[0];
+  c.emit('system.login.device', { phone: '138****0000', url: 'http://v' });
+  await new Promise((r) => setTimeout(r, 5));
+  c.emit('system.login.error', { code: 163, message: '验证码错误' });
+  const st = adapter.status();
+  assert.strictEqual(st.state, 'awaiting-sms');
+  assert.strictEqual(st.need, 'device');
+  assert.strictEqual(st.errCategory, 'sms');
+  // 原地重试后仍可直接提交验证码
+  assert.strictEqual(await adapter.submitSms('654321'), true);
+  assert.ok(fe.log.some((r) => r[0] === 'sms' && r[1] === '654321'));
+  await adapter.stop();
+});
+
+test('适配器：confirmQr 未扫码返回 false 并恢复轮询，已扫码走 qrcodeLogin', async () => {
+  const { adapter, fe } = makeAdapter();
+  await adapter.start();
+  const c = fe.clients[0];
+  c.emit('system.login.qrcode', { image: Buffer.from('qr') });
+  assert.strictEqual(adapter.status().state, 'awaiting-scan');
+  // 未扫码确认（retcode=53 等待确认）：返回 false，不触发 qrcodeLogin
+  c.queryQrcodeResult = () => Promise.resolve({ retcode: 53 });
+  assert.strictEqual(await adapter.confirmQr(), false);
+  assert.ok(!fe.log.some((r) => r[0] === 'qrcodeLogin'));
+  // 已扫码确认（retcode=0）：走 qrcodeLogin（旧实现调无参 login() 会被 password_md5 劫持）
+  c.queryQrcodeResult = () => Promise.resolve({ retcode: 0 });
+  assert.strictEqual(await adapter.confirmQr(), true);
+  assert.ok(fe.log.some((r) => r[0] === 'qrcodeLogin'));
+  await adapter.stop();
+});
+
+test('适配器：Tim 协议前置拦截扫码登录并清除账密残留', async () => {
+  const { adapter } = makeAdapter({ platform: 'tim' });
+  await adapter.start();
+  await assert.rejects(() => adapter.loginQr(12345), /Tim.*扫码|不支持扫码/);
+  await adapter.stop();
+  // 默认平台：扫码登录会显式清掉 password_md5（防账密分支劫持）。
+  // 真实路径是「账密登录（uin=12345）失败残留 → 同 uin 扫码」：confKey 含 sessionDir（由 uin 决定），
+  // 必须同 uin 两次进入登录，才能命中「复用同一实例并清残留」这条链路（异 uin 会重建客户端）。
+  // loginMinInterval=1ms + 10ms 间隔：绕过默认 3s 连点频控（loginGuard 用真实时钟，不走 now 注入）。
+  const { adapter: a2, fe: fe2 } = makeAdapter({ loginMinInterval: 1 });
+  await a2.loginQr(12345);                       // 首次扫码：按 uin 建活跃实例（sessionDir=dataDir/12345）
+  const c2 = fe2.clients[fe2.clients.length - 1];
+  c2.password_md5 = 'residue';                   // 模拟账密登录失败后的残留
+  await new Promise((r) => setTimeout(r, 10));   // 跨过 1ms 连点间隔
+  await a2.loginQr(12345);                       // 同 uin 再次扫码：confKey 不变 → 复用同一实例
+  assert.strictEqual(fe2.clients.length, 1, '同配置应复用同一客户端（清除必须落在活跃实例上）');
+  assert.strictEqual(c2.password_md5, undefined);
+  await a2.stop();
 });
 
 test('适配器：登录错误进入 error 态并带原因', async () => {

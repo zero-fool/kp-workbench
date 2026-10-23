@@ -5,7 +5,8 @@
  * 本通道把协议端内嵌进主进程（默认引擎 icqq），登录态、二维码、验证码全部在本应用内完成。
  *
  * 契约：ChannelAdapter（{ id, start, stop, onInbound, send, status }）之外，额外提供登录编排：
- *   loginQr() / loginPassword({uin,password}) / confirmQr() / submitSlider(ticket) / submitSms(code) / logout()
+ *   loginQr() / loginPassword({uin,password}) / confirmQr() / submitSlider(ticket) / submitSms(code)
+ *   / sendSms() / verifyDone() / logout()
  * 状态机：stopped → starting → awaiting-scan | awaiting-slider | awaiting-sms → running（或 error）。
  * 登录/掉线等变化经 deps.onQqEvent(payload) 上报，供主进程广播到渲染层实时刷新二维码与状态灯。
  *
@@ -25,6 +26,7 @@ const { loadEngine, createEngineClient } = require('./engine');
 
 const DEFAULT_PLATFORM = 'apad';     // U8-5 默认平板协议：官方允许「手机 + 平板」同时在线互不挤踢，登录不挤掉用户本体手机 QQ
 const LOGIN_MIN_INTERVAL = 3000;      // 同一会话两次「发起登录」的最小间隔（频控，避免连点）
+const SMS_MIN_INTERVAL = 60000;       // 登录保护短信：两次「下发短信」的最小间隔（服务端本身按 ~60s 频控）
 const BACKOFF_BASE = 8000;            // 首次失败冷却 8s
 const BACKOFF_MAX = 5 * 60 * 1000;    // 冷却上限 5min
 const RECONNECT_BASE = 3000;          // 断线自动重连：首次等待 3s
@@ -130,6 +132,7 @@ const QQ_ERR_RULES = [
   { cat: 'banned', code: /^(6|10|16|17|38|103|104|235|1501)$/, msg: /冻结|封禁|被锁|锁定/, hint: '该账号疑似被冻结 / 封禁（频繁登录或设备异常会触发）。请用手机 QQ 官方渠道申诉解封，或换独立小号；短时间内反复重试会加重风控。' },
   { cat: 'password', code: /^(1|2|9|33|34)$/, msg: /密码错误|密码不正确|账号或密码/, hint: '账号或密码不正确（或输错次数过多）。请核对 QQ 账号与密码后重试；连续输错会触发更严风控，建议稍作间隔。' },
   { cat: 'device', code: /^(21|120)$/, msg: /设备锁|新设备|设备验证/, hint: '新设备登录需要验证（设备锁 / 新设备确认）。请优先改用「扫码登录」在手机 QQ 上确认；或先在风控治理中配置签名服务并固定设备指纹。' },
+  { cat: 'sms', code: /^(162|163)$/, msg: /短信|验证码/, hint: '短信验证码未通过（发送太频繁 / 验证码错误）。验证输入框保持可用：稍后点「发送验证码」重新获取，或打开验证 URL 在手机上完成登录保护后点「已验证，继续」，无需重新发起登录。' },
   { cat: 'version', code: /^(5|24|51|64)$/, msg: /版本过低|版本不兼容|需要更新/, hint: '协议版本过低 / 引擎不兼容。请在「风控治理」中填写更高的协议版本 ver（如 8.9.63），或核对签名服务与引擎版本是否匹配。' },
   { cat: 'risk', code: /^(35|36|37|50|52|155)$/, msg: /频繁|过快|风控|失败次数过多|需要验证码/, hint: '登录过于频繁触发风控。请按提示冷却后再试（连续失败会延长冷却）；建议配置签名服务并保持设备指纹固定，或改用独立小号。' },
   { cat: 'network', code: /^(262|100)$/, msg: /网络|超时|无法连接|服务器错误/, hint: '网络异常导致登录失败。请检查网络连通性、签名服务地址是否可达，稍后重试。' },
@@ -170,7 +173,9 @@ function createQqDirectAdapter(deps) {
   let attemptSeq = 0;                                         // 登录尝试序号（同一次尝试只计一次失败）
   const me = { uin: null, nickname: '' };
   const qr = { image: '', tip: '', at: 0 };
-  let pending = null;                                         // { kind:'slider'|'device', url, phone }
+  let pending = null;                                         // { kind:'slider'|'device', url, phone, smsSent, smsAt }
+  let lastDevice = null;                                      // 最近一次登录保护验证上下文 {url, phone}（验证码错误后原地重试用）
+  let lastSmsAt = 0;                                          // 最近一次「下发短信」时刻（自动 + 手动共用频控）
 
   // U1-17/U1-19：登录诊断与退避频控状态
   const diag = { kicks: [], events: [], loginAttempts: 0, lastLoginAt: 0, cooldownUntil: 0, lastKick: null, notedSeq: -1 };
@@ -251,7 +256,11 @@ function createQqDirectAdapter(deps) {
       need: pending ? pending.kind : null,
       pendingUrl: pending ? pending.url : '',
       phone: pending ? pending.phone : '',
+      smsSent: !!(pending && pending.smsSent),                 // 界面据此区分「点发送」与「已发送，等短信」
       reconnects, lastError,
+      errCategory: errInfo ? errInfo.category : null,          // 事件载荷自带动态错误分类，避免面板刷新丢字段
+      errHint: errInfo ? errInfo.hint : '',
+      diagnostics: buildDiagnostics(),                          // 同上：事件推送也带登录诊断，不等轮询回填
     }, extra || {});
     try { onEvent(payload); } catch (_) { /* 广播失败不影响登录 */ }
   }
@@ -319,6 +328,36 @@ function createQqDirectAdapter(deps) {
     if (fakeCheckTimer) { clearInterval(fakeCheckTimer); fakeCheckTimer = null; }
   }
 
+  /* 登录保护（device）短信下发：icqq 明确要求「先 sendSmsCode() 再 submitSmsCode(code)」，
+   * 只收发 submit 时用户根本收不到短信（旧 bug：触发安全提示后再无下文）。
+   * 60s 频控内不重复自动请求——icqq 收到带验证数据的响应会再次 emit system.login.device，
+   * 无节制自动请求会形成 sendSmsCode ⇄ device 事件风暴。 */
+  function requestSms(c) {
+    if (!c || typeof c.sendSmsCode !== 'function') {
+      logDiag('sms-request', '引擎不支持短信下发（sendSmsCode），请改用验证 URL 完成登录保护');
+      return Promise.resolve(false);
+    }
+    if (lastSmsAt && Date.now() - lastSmsAt < SMS_MIN_INTERVAL) {
+      logDiag('sms-request', '距上次短信下发不足 60s，跳过重复请求');
+      return Promise.resolve(false);
+    }
+    return Promise.resolve()
+      .then(() => c.sendSmsCode())
+      .then(() => {
+        lastSmsAt = Date.now();
+        if (pending && pending.kind === 'device') { pending.smsSent = true; pending.smsAt = lastSmsAt; }
+        logDiag('sms', '已请求下发短信验证码');
+        emit('sms-sent', { phone: pending ? pending.phone : '' });
+        return true;
+      })
+      .catch((e) => {
+        const m = (e && e.message) || String(e);
+        logDiag('sms-fail', '短信下发失败：' + m);
+        emit('sms-fail', { error: m });
+        return false;
+      });
+  }
+
   function wire(c) {
     c.on('system.login.qrcode', (e) => {
       qr.image = toDataUrl(e && e.image);
@@ -336,11 +375,18 @@ function createQqDirectAdapter(deps) {
       setState('awaiting-slider', 'slider');
     });
     c.on('system.login.device', (e) => {
-      pending = { kind: 'device', url: (e && e.url) || '', phone: (e && e.phone) || '' };
+      /* icqq 可能在短信请求响应后再次 emit 本事件：60s 内已下发过则继承 smsSent，
+       * 避免界面把「已发送」倒退回「请发送」误导用户重复点。 */
+      const recent = !!(lastSmsAt && Date.now() - lastSmsAt < SMS_MIN_INTERVAL);
+      pending = { kind: 'device', url: (e && e.url) || '', phone: (e && e.phone) || '', smsSent: recent, smsAt: recent ? lastSmsAt : 0 };
+      lastDevice = { url: pending.url, phone: pending.phone };   // 保留验证上下文：验证码输错后可原地重试
       stopQrPoll();
-      logDiag('device', `需要短信验证${pending.phone ? ' → ' + pending.phone : ''}`);
+      logDiag('device', `需要登录保护验证${pending.phone ? ' → ' + pending.phone : ''}`);
       setState('awaiting-sms', 'device');
-      emit('device', { phone: pending.phone });
+      emit('device', { phone: pending.phone, pendingUrl: pending.url });
+      /* 立即请求下发短信：icqq 的登录保护必须先 sendSmsCode() 用户才收得到验证码，
+       * 旧实现只切状态等用户输入，用户永远等不到短信（「触发安全提示后再无下文」）。 */
+      requestSms(c);
     });
     c.on('system.login.error', (e) => {
       const code = (e && e.code) || '';
@@ -348,8 +394,18 @@ function createQqDirectAdapter(deps) {
       const cls = classifyQqError(code, message);               // P1-7：错误分类 + 可操作建议
       errInfo = cls;
       lastError = `登录失败 ${code}：${message}`.trim();
-      noteLoginFailure();
       stopQrPoll();
+      /* 短信验证未通过（162 发送太频繁 / 163 验证码错误）：属可原地重试的验证环节，
+       * 恢复 device 验证上下文并停留在 awaiting-sms——不进 error 态、不计登录退避，
+       * 否则用户得整轮重新登录才能再收一条短信（旧 bug：验证失败后再无下文）。 */
+      if (/^(162|163)$/.test(String(code)) && lastDevice) {
+        pending = Object.assign({ kind: 'device', smsSent: true, smsAt: lastSmsAt }, lastDevice);
+        logDiag('login-error', `短信验证未通过（${code}：${message}），可重新输入或稍后重发`);
+        setState('awaiting-sms', 'login-error');
+        emit('login-error', { errCode: code, errCategory: cls.category, errHint: cls.hint });
+        return;
+      }
+      noteLoginFailure();
       logDiag('login-error', lastError);
       setState('error', 'login-error');
       emit('login-error', { errCode: code, errCategory: cls.category, errHint: cls.hint });
@@ -497,10 +553,18 @@ function createQqDirectAdapter(deps) {
     },
 
     async loginQr(uin) {
+      /* Tim 协议 apk.device_type === -1，icqq 只 logger.error 不抛事件，
+       * 界面会永远停在「登录中…」毫无反应——这里前置拦截并给出可操作指引。 */
+      if (normalizePlatform(cfg.platform) === PLATFORM_ENUM.tim) {
+        throw new Error('Tim 协议不支持扫码登录：请把「登录平台」留空（默认平板 aPad）或填 android/iPad，也可改用账号密码登录');
+      }
       const id = Number(uin || cfg.uin || 0) || 0;
       sessionUin = id;
       loginGuard();
       const c = ensureClient();
+      /* icqq login() 分支读实例上的 password_md5：账密登录失败后残留时，
+       * 无参扫码登录会被静默降级成「再次账密登录」（表现为点扫码没反应/又弹验证）。显式清掉。 */
+      try { c.password_md5 = undefined; } catch (_) { /* 引擎未暴露该字段则忽略 */ }
       logDiag('login-qr', id ? `uin=${id}` : '未指定账号（扫码后由引擎回填）');
       return doLogin(() => (id ? c.login(id) : c.login()));
     },
@@ -516,11 +580,28 @@ function createQqDirectAdapter(deps) {
       return doLogin(() => c.login(id, String(password)));
     },
 
-    /* 扫码完成后手动确认（自动轮询已能完成，此处作为兜底） */
+    /* 扫码完成后手动确认（自动轮询已能完成，此处作为兜底）。
+     * 修复：必须走 qrcodeLogin()（icqq：queryQrcodeResult retcode=0 后调用）；
+     * 旧实现调无参 login()，一旦实例上残留 password_md5 就会被劫持去走账密分支，
+     * 扫码流程因此「无法使用」。 */
     async confirmQr() {
       if (state !== 'awaiting-scan' || !client) return false;
+      const c = client;
+      if (typeof c.qrcodeLogin !== 'function') {
+        throw new Error('当前协议引擎不支持扫码确认（qrcodeLogin），请改用账号密码登录或更换引擎');
+      }
       stopQrPoll();
-      await doLogin(() => client.login());
+      /* 未扫码确认时 qrcodeLogin 会拿到非 0 retcode 甚至触发网络错误重登，
+       * 故先查一次结果：没扫就恢复轮询继续等，避免误触引擎重登逻辑。 */
+      if (typeof c.queryQrcodeResult === 'function') {
+        let scanned = false;
+        try {
+          const r = await c.queryQrcodeResult();
+          scanned = !!(r && r.retcode === 0);
+        } catch (_) { scanned = false; }
+        if (!scanned) { startQrPoll(c); return false; }
+      }
+      await doLogin(() => c.qrcodeLogin());
       return true;
     },
 
@@ -535,8 +616,36 @@ function createQqDirectAdapter(deps) {
     async submitSms(code) {
       if (!client) throw new Error('登录会话不存在，请重新发起登录');
       if (!code) throw new Error('请填写短信验证码');
+      if (pending && pending.kind === 'device') lastDevice = { url: pending.url, phone: pending.phone };
       pending = null;
       await doLogin(() => client.submitSmsCode(String(code)));
+      return true;
+    },
+
+    /* 登录保护·短信路径：重新下发验证码（device 事件到达时已自动请求一次，这里供「发送验证码/重发」）。
+     * 不走 doLogin：那会清掉验证上下文并把状态推进 starting，而本操作只是补一条短信。 */
+    async sendSms() {
+      if (!client) throw new Error('登录会话不存在，请重新发起登录');
+      if (!pending || pending.kind !== 'device') throw new Error('当前不在短信验证阶段，无需发送验证码');
+      const now = Date.now();
+      if (lastSmsAt && now - lastSmsAt < SMS_MIN_INTERVAL) {
+        const left = Math.ceil((SMS_MIN_INTERVAL - (now - lastSmsAt)) / 1000);
+        throw new Error(`短信发送过于频繁：请 ${left} 秒后再试（服务端按约 60 秒一条频控）`);
+      }
+      const before = lastSmsAt;
+      const ok = await requestSms(client);
+      if (!ok && lastSmsAt === before) throw new Error('短信下发失败，请检查登录会话或改用验证 URL 完成登录保护');
+      return true;
+    },
+
+    /* 登录保护·URL 路径：手机/浏览器打开验证页完成验证后，按 icqq 语义「访问URL完成验证后调用
+     * login() 可直接登录」重新拉起登录（旧界面只有短信框，URL 验证完没有任何后续动作）。 */
+    async verifyDone() {
+      if (!client) throw new Error('登录会话不存在，请重新发起登录');
+      if (!pending || pending.kind !== 'device') throw new Error('当前没有待完成的登录保护验证');
+      const c = client;
+      logDiag('device-verify', '验证页已完成，重新发起登录');
+      await doLogin(() => (c.uin ? c.login(c.uin) : c.login()));
       return true;
     },
 
@@ -548,6 +657,7 @@ function createQqDirectAdapter(deps) {
       client = null;
       started = false;
       pending = null;
+      lastDevice = null;                                        // 登出即清验证上下文（lastSmsAt 保留：服务端频控与会话无关）
       qr.image = ''; qr.tip = ''; qr.at = 0;
       me.uin = null; me.nickname = '';
       lastError = null;
@@ -589,6 +699,8 @@ function createQqDirectAdapter(deps) {
         need: pending ? pending.kind : null,
         pendingUrl: pending ? pending.url : '',
         phone: pending ? pending.phone : '',
+        smsSent: !!(pending && pending.smsSent),
+        smsAt: (pending && pending.smsAt) || 0,
         reconnects,
         lastError,
         errCategory: errInfo ? errInfo.category : null,          // P1-7：错误分类（界面给出可操作建议）

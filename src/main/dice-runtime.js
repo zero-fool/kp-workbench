@@ -154,6 +154,8 @@ function createDiceRuntime(deps) {
   async function qqConfirmQr() { const a = qqAdapter(); return a ? a.confirmQr() : false; }
   async function qqSubmitSlider(ticket) { const a = qqAdapter(); if (!a) throw new Error('QQ 直连通道未装配'); await a.submitSlider(ticket); return a.status(); }
   async function qqSubmitSms(code) { const a = qqAdapter(); if (!a) throw new Error('QQ 直连通道未装配'); await a.submitSms(code); return a.status(); }
+  async function qqSendSms() { const a = qqAdapter(); if (!a) throw new Error('QQ 直连通道未装配'); await a.sendSms(); return a.status(); }
+  async function qqVerifyDone() { const a = qqAdapter(); if (!a) throw new Error('QQ 直连通道未装配'); await a.verifyDone(); return a.status(); }
   async function qqLogout() { const a = qqAdapter(); return a ? a.logout() : { state: 'stopped' }; }
   function qqStatus() { const a = qqAdapter(); return a ? a.status() : { state: 'stopped' }; }
   async function qqSignCheck() { const a = qqAdapter(); return a ? a.signCheck() : { ok: false, reason: 'QQ 直连通道未装配' }; }
@@ -285,7 +287,7 @@ function createDiceRuntime(deps) {
   return {
     hub, adapters, stateBox,
     netStart, netStop, status, netList, simSend,
-    qqLogin, qqConfirmQr, qqSubmitSlider, qqSubmitSms, qqLogout, qqStatus, qqSignCheck,
+    qqLogin, qqConfirmQr, qqSubmitSlider, qqSubmitSms, qqSendSms, qqVerifyDone, qqLogout, qqStatus, qqSignCheck,
     sessionList, sessionSet, sessionDelete, sessionSend,   // U8-4/U8-6 会话目录与手动发送
     sendGateMetrics,                                       // U8-8 发送观测
     logQuery, logExport, replyLoad, replySave, replyImport, dispose,

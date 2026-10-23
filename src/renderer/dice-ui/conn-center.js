@@ -98,6 +98,34 @@
       </div>`;
   }
 
+  /* OneBot 11 卡片：显式暴露「反连/正连」两种接入方案（旧版只有监听/端口，想正连协议端无从填起）。
+   * 反连（server，默认）＝本应用监听端口，协议端（NapCat / go-cqhttp）把 WS 指过来；
+   * 正连（client）＝协议端已开 WS 服务，本应用填地址主动连过去。mode/url 随卡片输入实时写回配置。 */
+  function onebotCard(ob) {
+    const m = ob.mode === 'client' ? 'client' : 'server';
+    const modeLabel = m === 'client' ? '客户端（正连）' : '服务端（反连）';
+    return `
+        <div class="dice-channel-card" data-channel="onebot11">
+          <h4>OneBot 11 <span data-ob-mode>${modeLabel}</span></h4>
+          <div class="qqd-hint">二选一：<b>反连</b>＝本机监听端口，协议端配置里把「正向 WS 地址」指向 <code>ws://监听地址:端口</code>；<b>正连</b>＝协议端已开 WS 服务，这里填它的地址主动连过去。NapCat / Lagrange / go-cqhttp 均适用。</div>
+          <label>连接模式
+            <select data-field="mode">
+              <option value="server"${m === 'server' ? ' selected' : ''}>服务端（反连）：本机监听，等协议端连进来</option>
+              <option value="client"${m === 'client' ? ' selected' : ''}>客户端（正连）：主动连接协议端 WS 服务</option>
+            </select>
+          </label>
+          <div data-mode-when="server"${m === 'client' ? ' hidden' : ''}>
+            <label>监听地址 <input data-field="host" value="${esc(ob.host || '127.0.0.1')}"></label>
+            <label>监听端口 <input data-field="port" value="${esc(ob.port ?? 6700)}"></label>
+          </div>
+          <div data-mode-when="client"${m === 'server' ? ' hidden' : ''}>
+            <label>协议端 WS 地址 <input data-field="url" placeholder="如 ws://127.0.0.1:3001" value="${esc(ob.url || '')}"></label>
+          </div>
+          <label>access_token <input data-field="accessToken" value="${esc(ob.accessToken || '')}"></label>
+          <button data-act="start">启动</button><button data-act="stop">停止</button>
+        </div>`;
+  }
+
   function renderChannelWizard(cfg) {
     const qq = (cfg && cfg.qqofficial) || {};
     const ob = (cfg && cfg.onebot11) || {};
@@ -106,13 +134,7 @@
       ${qqDirectCard(cfg)}
       <details class="qqd-adv">
         <summary>高级（可选）：OneBot 11 中转 / QQ 官方机器人</summary>
-        <div class="dice-channel-card" data-channel="onebot11">
-          <h4>OneBot 11 服务端</h4>
-          <label>监听 <input data-field="host" value="${esc(ob.host || '127.0.0.1')}"></label>
-          <label>端口 <input data-field="port" value="${esc(ob.port ?? 6700)}"></label>
-          <label>access_token <input data-field="accessToken" value="${esc(ob.accessToken || '')}"></label>
-          <button data-act="start">启动</button><button data-act="stop">停止</button>
-        </div>
+        ${onebotCard(ob)}
         <div class="dice-channel-card" data-channel="qqofficial">
           <h4>QQ 官方机器人</h4>
           <label>appId <input data-field="appId" value="${esc(qq.appId || '')}"></label>
@@ -154,9 +176,20 @@
         <div class="qqd-inline"><input id="qqdSlider" placeholder="滑动验证 ticket"><button data-qact="qq-slider">提交</button></div>
       </div>`;
     } else if (s.need === 'device') {
+      /* 登录保护双路径：短信（适配器已自动下发一次，可重发）＋ 验证 URL（手机完成验证后重登）。
+       * 旧界面只有短信框且从不触发下发，用户「触发安全提示后再无下文」。 */
+      const sent = !!s.smsSent;
+      const url = s.pendingUrl || '';
       body = `<div class="qqd-verify">
-        <div class="hint">需要短信验证${s.phone ? `：已发送至 ${esc(s.phone)}` : ''}，请填写收到的验证码</div>
-        <div class="qqd-inline"><input id="qqdSms" placeholder="短信验证码"><button data-qact="qq-sms">提交</button></div>
+        <div class="hint">需要完成登录保护验证${s.phone ? `（密保手机 ${esc(s.phone)}）` : ''}：
+          ${sent ? '验证码短信已发送，请填写收到的 6 位验证码' : '点「发送验证码」获取短信'}
+          ${url ? `；或 <a href="${esc(url)}" target="_blank" rel="noreferrer">打开验证页</a> 在手机上完成验证后点「已验证，继续」` : ''}
+        </div>
+        <div class="qqd-inline"><input id="qqdSms" placeholder="短信验证码" inputmode="numeric" maxlength="6">
+          <button data-qact="qq-sms">提交验证码</button>
+          <button class="ghost" data-qact="qq-sms-send">${sent ? '重新发送' : '发送验证码'}</button>
+          ${url ? '<button class="ghost" data-qact="qq-verified">已验证，继续</button>' : ''}
+        </div>
       </div>`;
     } else if (s.state === 'running') {
       body = `<div class="hint">已在线：骰娘现在可以收发群聊 / 私聊指令。掉线会自动重连。</div>`;

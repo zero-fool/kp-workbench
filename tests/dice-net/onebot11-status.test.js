@@ -56,7 +56,8 @@ test('心跳：活跃连接被持续 ping/pong 保活（不被误清理）', asy
 test('status：暴露 state / connections / lastError / reconnects', async () => {
   const { createOnebot11Adapter } = require('../../src/dice-net/onebot11');
   const ad = createOnebot11Adapter({ cfg: { onebot11: { port: 0 } } });
-  assert.deepStrictEqual(Object.keys(ad.status()).sort(), ['connections', 'lastError', 'reconnects', 'state']);
+  assert.deepStrictEqual(Object.keys(ad.status()).sort(), ['connections', 'lastError', 'mode', 'reconnects', 'state']);
+  assert.strictEqual(ad.status().mode, 'server'); // 双模式（server 反连 / client 正连）随 status 暴露供连接中心展示
   assert.strictEqual(ad.status().state, 'stopped');
   const port = await ad.start();
   assert.strictEqual(ad.status().state, 'running');
