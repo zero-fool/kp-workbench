@@ -1472,7 +1472,27 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     const st2 = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'store.js'), 'utf8');
     return /fs\.existsSync\(path\.join\(this\.maps, fname\)\)/.test(st2) ? true : '底图仍每轮保存同步重写';
   });
-
+  check('P6-D2e 原文预览长度分级防抖（超长文本连打不与整篇 layout 抢主线程）', () => {
+    if (!/const _rw = _rn >= 150000 \? 900 : \(_rn >= 80000 \? 500 : 200\)/.test(src)) return '缺少长度分级防抖';
+    if (!/rawRedrawOut\(\); \}, _rw\)/.test(src)) return '重绘仍用固定 200ms 防抖';
+    return true;
+  });
+  check('P6-D2f 连接中心状态灯按 state 分支（真机实测：stopped 带 lastError 不得显示成「重连中」）', () => {
+    const CC = require(path.join(RENDERER_DIR, 'dice-ui', 'conn-center.js'));
+    if (!/已停止</.test(CC.renderStatusLight({ state: 'stopped', lastError: 'upstream error', reconnects: 0 }))) return 'stopped+lastError 残留仍误导为非已停止';
+    if (!/连接异常/.test(CC.renderStatusLight({ state: 'error', lastError: 'login-error' }))) return 'error 态未显示连接异常';
+    if (!/重连中/.test(CC.renderStatusLight({ state: 'running', lastError: 'upstream closed', reconnects: 1 }))) return 'running 重连窗口未显示重连中';
+    return /运行中/.test(CC.renderStatusLight({ state: 'running', lastError: null, reconnects: 0 })) ? true : 'running 正常态未显示运行中';
+  });
+  check('P6-D2g onebot11 主动 stop 清 lastError/reconnects（停止后诊断不残留错误）', () => {
+    const ob = fs.readFileSync(path.join(__dirname, '..', 'src', 'dice-net', 'onebot11', 'index.js'), 'utf8');
+    const m = /async stop\(\) \{[\s\S]*?\n    \}/.exec(ob);
+    if (!m) return 'stop 方法未找到';
+    if (!(/lastError = null;/.test(m[0]) && /reconnects = 0;/.test(m[0]))) return 'stop 未清 lastError/reconnects（状态灯残留 upstream error）';
+    /* 真机实测：stop 里 close() 是异步的，随后触发的 onerror 会迟到覆盖刚清掉的 lastError——
+     * onerror 必须有 stopped 守卫（onclose 本来就有），否则 status 停止后仍返回 upstream error。 */
+    return /sock\.onerror = \(\) => \{ if \(stopped\) return;/.test(ob) ? true : 'onerror 缺 stopped 守卫（迟到错误覆盖 stop 清理）';
+  });
   console.log('\n[P6-D3] 超大列表窗口化渲染：首屏分帧 + 滚动增量加载，避免一次性挂载数千节点');
   check('P6 渲染层 renderDataView 窗口化渲染（CHUNK/WINDOW 分帧 + rstep）', () => {
     if (!/const CHUNK = /.test(src) || !/const WINDOW = /.test(src)) return '缺少 CHUNK/WINDOW 常量';

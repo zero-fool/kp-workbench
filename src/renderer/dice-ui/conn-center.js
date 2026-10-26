@@ -17,12 +17,19 @@
   function renderStatusLight(st) {
     if (!st || !st.state) return '<span class="dice-light off">状态未知</span>';
     let out;
-    if (st.lastError || st.reconnects > 0) {
-      out = `<span class="dice-light recon">重连中（${st.reconnects}）${st.lastError ? '：' + st.lastError : ''}</span>`;
+    if (st.state === 'running') {
+      /* 运行中且带重连计数/最近错误 = 断线自动重连窗口（正连断线时 state 仍为 running） */
+      out = (st.lastError || st.reconnects > 0)
+        ? `<span class="dice-light recon">重连中（${st.reconnects}）${st.lastError ? '：' + st.lastError : ''}</span>`
+        : '<span class="dice-light on">运行中</span>';
+    } else if (st.state === 'error') {
+      out = `<span class="dice-light recon">连接异常：${st.lastError || '未知错误'}</span>`;
+    } else if (st.state === 'starting') {
+      out = '<span class="dice-light recon">启动中</span>';
     } else {
-      out = st.state === 'running'
-        ? '<span class="dice-light on">运行中</span>'
-        : '<span class="dice-light off">已停止</span>';
+      /* stopped：主动停止/正常下线。历史 lastError（如 upstream error）是诊断残留，
+       * 真机实测点停止后状态灯曾显示成「重连中（0）：upstream error」误导用户以为没停掉。 */
+      out = '<span class="dice-light off">已停止</span>';
     }
     return out + renderOfficialAuth(st);
   }

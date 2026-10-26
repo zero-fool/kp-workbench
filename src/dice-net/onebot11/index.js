@@ -45,7 +45,7 @@ function createOnebot11Adapter(deps) {
       lastError = 'upstream closed';
       clientTimer = setTimeout(connectClient, cfg.reconnectMs || 5000); // 断线自动重连
     };
-    sock.onerror = () => { lastError = 'upstream error'; };
+    sock.onerror = () => { if (stopped) return; lastError = 'upstream error'; };
   }
 
   return {
@@ -118,6 +118,9 @@ function createOnebot11Adapter(deps) {
       conns.clear();
       server = null;
       state = 'stopped';
+      /* 主动停止是正常路径：残留 upstream error/重连计数会让状态灯与诊断显示成异常/重连中 */
+      lastError = null;
+      reconnects = 0;
     },
     onInbound(fn) { cb = fn; },
     async send(sessionId, reply) {

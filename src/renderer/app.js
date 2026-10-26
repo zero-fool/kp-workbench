@@ -22,7 +22,9 @@
       '实测报错修复：退出/切换登录配置时出现「主进程未处理的 Promise 拒绝 RangeError: ERR_BUFFER_OUT_OF_BOUNDS」——从未登录成功时 sig.d2key 为空，旧实现无条件调 icqq logout → register(true) → buildLoginPacket → tea.encrypt 拿空密钥 readUInt32BE 越界；且 icqq register 用 new Promise(async) 反模式，内部异常既不能 reject 外层、re_register 裸调用的 rejection 也无人接，外层 await 永久挂起表现为退出卡住。',
       '新增 safeQuit 安全退出收口：无有效 d2key（从未登录成功）只 terminate 断连、不发注销包（注销包必须用登录服务端下发的 16 字节密钥）；已登录走 logout(false) 但加 5 秒超时兜底，超时补断连，迟到的 rejection 统一吞掉不再外泄为主进程未处理拒绝；适配器 logout 与「配置变更重建客户端」两条路径全部改经 safeQuit。',
       '验证：单元测试 577 项全绿（新增「未登录 logout 只断连不触发注销包越界」「登出后广播 logout 且可重新登录」2 例），回归清单 391 项 GREEN · 0 RED，npm run verify 四项审计通过。',
-      '输入卡顿治理第二轮（大字段差量）：持久化载荷对原文/分幕建议按字符串值判等、剧本分幕按引用判等、地图按内容签名（结构字段全量序列化 + 底图 base64 长度采样指纹），未变更轮次不再把数 MB 字符串/base64 重复克隆过 IPC——此前每 300ms 一轮全量携带正是输入卡顿主因；发送前剔除地图运行时 Image 缓存（_imgNative 走结构化克隆会抛 DataCloneError 连带整次保存失败）；分幕 sceneDir/sceneFiles 改整体再赋值以配合引用判等；主进程每轮保存不再重复同步重写已落盘底图文件（内容指纹 + existsSync 去重）；骰娘状态读写改走内存权威文档 _doc，每条投骰/指令不再整档读盘（_meta.json + 8 实体分片全量 parse）。验证：577 单测全绿 + 394 回归 GREEN · 0 RED。',
+      '输入卡顿治理第二轮（大字段差量）：持久化载荷对原文/分幕建议按字符串值判等、剧本分幕按引用判等、地图按内容签名（结构字段全量序列化 + 底图 base64 长度采样指纹），未变更轮次不再把数 MB 字符串/base64 重复克隆过 IPC——此前每 300ms 一轮全量携带正是输入卡顿主因；发送前剔除地图运行时 Image 缓存（_imgNative 走结构化克隆会抛 DataCloneError 连带整次保存失败）；分幕 sceneDir/sceneFiles 改整体再赋值以配合引用判等；主进程每轮保存不再重复同步重写已落盘底图文件（内容指纹 + existsSync 去重）；骰娘状态读写改走内存权威文档 _doc，每条投骰/指令不再整档读盘（_meta.json + 8 实体分片全量 parse）。验证：577 单测全绿 + 397 回归 GREEN · 0 RED。',
+      '原文预览分级防抖（真机归因后补充）：20 万字下 esc+innerHTML 仅 ~2ms，真正瓶颈是整篇 layout ~200ms/次、固定 200ms 防抖会与连打逐键抢主线程（实测 40 键 79 次长任务）；现按长度分级延后重绘（8 万字 500ms / 15 万字 900ms，短文本维持 200ms 手感不变），连打期间零整篇排版、停顿后自动补绘。真机端到端实测（Electron 31.7.7 headless + CDP 驱动）：QQ 建客户端后登出原崩溃点 2ms 安全返回、主进程全程零未处理拒绝；50k 字连打零长任务；保存差量实测 214KB→9KB（原文不再随每轮设置变更重复过 IPC）。10 万字以上分档归因（oninput 开/关对照）确认剩余卡顿为 Chromium 内核对 textarea 全量排版的固有成本——开关 oninput 长任务 80≈81 次不变、连打 40 键全程仅 1 次尾沿重绘，应用层已无责任（50k 档 longCount 2、帧间隔中位 26ms；200k 档帧间隔中位 101ms 为内核排版，进一步优化需虚拟化编辑器属架构级改造）。',
+      '连接中心状态灯词义修复（OneBot 双模式真机联调发现）：正连点「停止」后 lastError 残留 upstream error，旧逻辑只看 lastError/reconnects 会把已停止的通道显示成「重连中（0）：upstream error」（error 态同样误显示为重连中）——现按 state 分支渲染（stopped 恒「已停止」、error 显示「连接异常：原因」、starting 显示「启动中」，running 才保留断线重连窗口语义），onebot11 主动 stop 同步清空 lastError/reconnects 从根因消除残留；服务端（反连）/客户端（正连）双模式经假协议端↔真应用↔真骰娘引擎联调，.r1d100/.jrrp 双指令回发、停止断连、状态回执全通，控制台 0 错误。',
     ]},
     { version: '3.4.3', date: '2026-10-26', type: '补丁版·QQ 骰娘连接维修与输入卡顿治理', items: [
       'QQ 账密登录「安全提示后无下文」修复：登录保护（device）事件到达即自动下发短信验证码（60s 频控防事件风暴），面板补「重发短信」与「已在手机完成 URL 验证→继续登录」双路径；短信验证码填错（162/163）原地重试，不再落入 error 死态。',
@@ -7959,9 +7961,14 @@
     S.rawShow = 'text';
     /* 输入卡顿修复：200ms 防抖后重绘输出区。旧实现逐键对全文 cleanText + rawBodyHtml 整段
      * esc + #rawOut 全量 innerHTML——几万字时每按一键都重建整篇 DOM，页面直接发死。
-     * S.rawText 已即时更新（供保存/建议按钮读取），只推迟视觉重绘。 */
+     * S.rawText 已即时更新（供保存/建议按钮读取），只推迟视觉重绘。
+     * 实测归因：esc+innerHTML 仅 ~2ms，瓶颈是 20 万字整篇 layout（~200ms/次）。
+     * 超长文本按长度分级延后（8 万字 500ms / 15 万字 900ms）：连打期间不与整篇排版抢主线程，
+     * 停顿后自动补绘；几万字内维持 200ms，手感不变。 */
     if (_rawRedrawT) clearTimeout(_rawRedrawT);
-    _rawRedrawT = setTimeout(() => { _rawRedrawT = null; rawRedrawOut(); }, 200);
+    const _rn = S.rawText.length;
+    const _rw = _rn >= 150000 ? 900 : (_rn >= 80000 ? 500 : 200);
+    _rawRedrawT = setTimeout(() => { _rawRedrawT = null; rawRedrawOut(); }, _rw);
     const btn = q('rawSuggestBtn'); if (btn) btn.disabled = !S.rawText;
   }
   function rawRedrawOut() {
