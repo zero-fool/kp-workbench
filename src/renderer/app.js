@@ -16,8 +16,14 @@
   const KINDS = ['pcs', 'npcs', 'regions', 'logs', 'mobs', 'rules', 'lore'];
   const TPL_KINDS = ['pcs', 'npcs', 'mobs']; // 仅「卡片类」实体支持切换模板（模板改变显示字段集）
   const THEMES = [['ember', '残火纪·暗黑'], ['parchment', '现代卷宗'], ['lite', '极简浅色'], ['neon', '赛博霓虹'], ['dusk', '暮光护眼']];
-  const APP_VERSION = '3.4.3';
+  const APP_VERSION = '3.4.4';
   const CHANGELOG = [
+    { version: '3.4.4', date: '2026-10-26', type: '补丁版·实测修复：QQ 注销越界与退出卡死', items: [
+      '实测报错修复：退出/切换登录配置时出现「主进程未处理的 Promise 拒绝 RangeError: ERR_BUFFER_OUT_OF_BOUNDS」——从未登录成功时 sig.d2key 为空，旧实现无条件调 icqq logout → register(true) → buildLoginPacket → tea.encrypt 拿空密钥 readUInt32BE 越界；且 icqq register 用 new Promise(async) 反模式，内部异常既不能 reject 外层、re_register 裸调用的 rejection 也无人接，外层 await 永久挂起表现为退出卡住。',
+      '新增 safeQuit 安全退出收口：无有效 d2key（从未登录成功）只 terminate 断连、不发注销包（注销包必须用登录服务端下发的 16 字节密钥）；已登录走 logout(false) 但加 5 秒超时兜底，超时补断连，迟到的 rejection 统一吞掉不再外泄为主进程未处理拒绝；适配器 logout 与「配置变更重建客户端」两条路径全部改经 safeQuit。',
+      '验证：单元测试 577 项全绿（新增「未登录 logout 只断连不触发注销包越界」「登出后广播 logout 且可重新登录」2 例），回归清单 391 项 GREEN · 0 RED，npm run verify 四项审计通过。',
+      '输入卡顿治理第二轮（大字段差量）：持久化载荷对原文/分幕建议按字符串值判等、剧本分幕按引用判等、地图按内容签名（结构字段全量序列化 + 底图 base64 长度采样指纹），未变更轮次不再把数 MB 字符串/base64 重复克隆过 IPC——此前每 300ms 一轮全量携带正是输入卡顿主因；发送前剔除地图运行时 Image 缓存（_imgNative 走结构化克隆会抛 DataCloneError 连带整次保存失败）；分幕 sceneDir/sceneFiles 改整体再赋值以配合引用判等；主进程每轮保存不再重复同步重写已落盘底图文件（内容指纹 + existsSync 去重）；骰娘状态读写改走内存权威文档 _doc，每条投骰/指令不再整档读盘（_meta.json + 8 实体分片全量 parse）。验证：577 单测全绿 + 394 回归 GREEN · 0 RED。',
+    ]},
     { version: '3.4.3', date: '2026-10-26', type: '补丁版·QQ 骰娘连接维修与输入卡顿治理', items: [
       'QQ 账密登录「安全提示后无下文」修复：登录保护（device）事件到达即自动下发短信验证码（60s 频控防事件风暴），面板补「重发短信」与「已在手机完成 URL 验证→继续登录」双路径；短信验证码填错（162/163）原地重试，不再落入 error 死态。',
       'QQ 扫码登录修复：确认扫码改走 qrcodeLogin 并先校验扫码状态（旧实现调无参 login，被账密失败残留的 password_md5 劫持成再次账密登录，表现为点扫码没反应）；发起扫码前显式清除账密残留；Tim 协议下 icqq 只打日志不抛事件导致界面永远停在「登录中…」，现前置拦截并给出可操作指引。',
@@ -1247,8 +1253,9 @@
    * 差量传输：每次保存仅携带「哈希发生变化的实体分片 + 关系网 + 高频小字段」，
    * 未变动的实体类型不再整段序列化/传输，大档案在 IPC 与 JSON 序列化上显著省时。 */
   let _saveTimer = null, _pendSave = false, _saveAge = 0, _saveWaiters = [];
-  /* 上个已送达校验和：实体按类型、关系网按整体。空档表示首次/换档案后需全量。 */
-  const _lastSent = { ent: {}, rel: null };
+  /* 上个已送达校验和：实体按类型、关系网按整体；大字段（原文/建议/分幕/地图）按内容或引用判等。
+   * 空档表示首次/换档案后需全量。 */
+  const _lastSent = { ent: {}, rel: null, rawText: null, rawSuggested: null, rawScript: null, mapsSig: null };
   let wsListen = null; // 大列表窗口化增量加载的滚动回调引用，重复进出视图时先解绑再绑定
   function docHash(o) {
     // 轻量内容哈希（djb2），用于判断分片是否变化
@@ -1256,6 +1263,37 @@
     let h = 5381;
     for (let i = 0; i < s.length; i++) { h = ((h << 5) + h) + s.charCodeAt(i); h &= 0x7fffffff; }
     return String(h);
+  }
+  /* 长串指纹：长度 + 64 点均匀采样。底图 base64 动辄数 MB，每轮持久化都整串哈希本身就是
+   * 打字卡顿源；采样代价 O(64) 与串长无关。漏检仅限「长度相同且 64 个采样点字符全同」的
+   * 构造性碰撞——真实底图内容差异必然命中采样点（头部/中部/尾部均匀覆盖）。 */
+  function strSig(s) {
+    const n = s.length;
+    if (!n) return '0';
+    let h = 5381;
+    for (let i = 0; i < 64; i++) { h = ((h << 5) + h + s.charCodeAt(Math.min(n - 1, (i * n / 64) | 0))) & 0x7fffffff; }
+    return n + '_' + h.toString(36);
+  }
+  /* 地图内容签名：标记/区域/迷雾/网格等结构字段全量序列化（画板里是原地编辑，必须按内容
+   * 判等才能检出增删改），唯独 img 换成长度+采样指纹（跳过数 MB base64 的整串序列化），
+   * 并剔除运行时缓存键 _imgNative/_imgLoaded/_imgLoading（Image 解码缓存，不算地图变更）。
+   * 理论不可达的循环引用等异常返回随机签名——宁可每轮重发也不误跳过，走安全侧。 */
+  function mapsSig(maps) {
+    try {
+      return JSON.stringify(maps || [], (k, v) =>
+        (k === '_imgNative' || k === '_imgLoaded' || k === '_imgLoading') ? undefined
+          : (k === 'img' && typeof v === 'string' && v) ? '@' + strSig(v) : v);
+    } catch (_) { return 'x' + Date.now() + '_' + Math.random(); }
+  }
+  /* 发送前剔除运行时缓存：_imgNative 是 DOM Image 对象，IPC 结构化克隆会抛 DataCloneError
+   * 导致整次保存失败；_imgLoaded/_imgLoading 是本会话解码状态，不应落盘。 */
+  function stripMaps(maps) {
+    return (maps || []).map((m) => {
+      if (!m || typeof m !== 'object') return m;
+      const c = {};
+      for (const k in m) { if (k === '_imgNative' || k === '_imgLoaded' || k === '_imgLoading') continue; c[k] = m[k]; }
+      return c;
+    });
   }
   function makeSavePayload() {
     const d = makeDoc();
@@ -1278,9 +1316,29 @@
       entities: anyEnt ? entities : null,
       relations: relChanged ? d.relations : null,
       fields: d.fields, profiles: d.profiles, settings: d.settings, audit: d.audit,
-      rawText: d.rawText, rawSuggested: d.rawSuggested, rawScript: d.rawScript, scriptProg: d.scriptProg,
-      maps: d.maps
+      scriptProg: d.scriptProg
     };
+    /* 大字段差量（v3.4.4 输入卡顿治理第二轮）：
+     * rawText/rawSuggested 是原始字符串，JS 字符串按值判等——任何改动必产生新值，
+     * === 即可零成本精确判等（未变时通常是同一引用，命中指针比较快路径）；
+     * rawScript 全仓唯一原地改点 scriptApplyScenes 已改为整体再赋值，引用判等安全；
+     * maps 按 mapsSig 内容签名，画板原地增删标记/迷雾/网格都能检出。
+     * 主进程 store:save 对这些键是 !== undefined 判定——省略键即跳过合并、沿用主进程现值，
+     * 因此未变更轮次不再把数 MB 字符串/base64 重复克隆过 IPC（此前每 300ms 一轮全量携带，
+     * 正是「输入极其卡顿」的主因之一）。 */
+    const rawChanged = d.rawText !== _lastSent.rawText;
+    const sugChanged = d.rawSuggested !== _lastSent.rawSuggested;
+    const scriptChanged = d.rawScript !== _lastSent.rawScript;
+    const msig = mapsSig(d.maps);
+    const mapsChanged = msig !== _lastSent.mapsSig;
+    _lastSent.rawText = d.rawText;
+    _lastSent.rawSuggested = d.rawSuggested;
+    _lastSent.rawScript = d.rawScript;
+    _lastSent.mapsSig = msig;
+    if (rawChanged) out.rawText = d.rawText;
+    if (sugChanged) out.rawSuggested = d.rawSuggested;
+    if (scriptChanged) out.rawScript = d.rawScript;
+    if (mapsChanged) out.maps = stripMaps(d.maps);
     return out;
   }
   /* 写盘失败提示：同一错误只弹一次，恢复正常后重置，避免自动保存反复刷屏。
@@ -7986,7 +8044,13 @@
     if (window.api && window.api.saveSceneFiles) {
       try {
         const sv = await window.api.saveSceneFiles(scenes);
-        if (sv && sv.ok) { S.rawScript.sceneDir = sv.dir; S.rawScript.sceneFiles = sv.files; }
+        /* 整体再赋值（勿原地挂属性）：makeSavePayload 对 rawScript 按引用判等，
+         * 若 await 期间已有保存轮次记下旧引用，之后的原地修改会永远漏发。
+         * scenes 同一性校验：await 期间原文被清空或被新一轮分幕替换时，
+         * 不把过期的目录信息挂到新对象上（旧实现会误挂或对 null 抛错被静默吞掉）。 */
+        if (sv && sv.ok && S.rawScript && S.rawScript.scenes === scenes) {
+          S.rawScript = Object.assign({}, S.rawScript, { sceneDir: sv.dir, sceneFiles: sv.files });
+        }
       } catch (_) {}
     }
     persist();

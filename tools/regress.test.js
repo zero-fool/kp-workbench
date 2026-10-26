@@ -236,7 +236,7 @@ check('开团向导：可折叠（toggleWizard 持久化 layout.wizardHidden）�
   (/function\s+toggleWizard/.test(src) && /wizardHidden/.test(src) && /wizardHTML\(\)/.test(src) && /🚀\s*开团向导/.test(src)) ? true : '向导折叠/渲染缺失');
 check('版本与变更日志：最新条目与 APP_VERSION 同步、含本次改动，且旧版本条目仍在', () => {
   const i = src.indexOf('const CHANGELOG');
-  const cl = src.slice(i, i + 45000); /* 3.4.3 起条目累计已超 40KB，旧 26000 窗口会把新增条目挤掉尾部关键词 */
+  const cl = src.slice(i, i + 55000); /* 3.4.4 起 CHANGELOG 已 41KB，窗口须覆盖最新条目到最旧关键词全跨度（每次发版约 +1.4KB） */
   const vm = /version:\s*'([0-9]+\.[0-9]+\.[0-9]+)'/.exec(cl);
   const verOk = vm && new RegExp('APP_VERSION\\s*=\\s*\'' + vm[1].replace(/\./g, '\\.') + '\'').test(src);
   return (verOk && /运行记录/.test(cl)
@@ -254,7 +254,8 @@ check('版本与变更日志：最新条目与 APP_VERSION 同步、含本次改
     && /一键整理/.test(cl) && /AI 处理中/.test(cl)
     && /开团向导/.test(cl) && /批量操作/.test(cl) && /前进\/后退导航/.test(cl)
     && /分片存储/.test(cl)
-    && /自动下发短信/.test(cl) && /qrcodeLogin/.test(cl) && /服务端（反连/.test(cl) && /尾沿防抖/.test(cl)) ? true : '版本/变更日志未更新';
+    && /自动下发短信/.test(cl) && /qrcodeLogin/.test(cl) && /服务端（反连/.test(cl) && /尾沿防抖/.test(cl)
+    && /safeQuit/.test(cl) && /d2key/.test(cl) && /ERR_BUFFER_OUT_OF_BOUNDS/.test(cl)) ? true : '版本/变更日志未更新';
 });
 
 console.log('\n[T10] 关系网一键整理（分组打包）：分组各自排布须两两不重叠、结果可复现');
@@ -1455,6 +1456,22 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     if (!/d\.__patch/.test(m)) return '主进程未识别 __patch';
     return /for \(const k in p\.entities\)/.test(m) && /else if \(d && d\.entities\)/.test(m) ? true : '补丁合并/全量回退缺失';
   });
+  check('P6-D2b 大字段差量：原文/建议按值、分幕按引用、地图签名，运行时缓存不落盘', () => {
+    if (!/const rawChanged = d\.rawText !== _lastSent\.rawText/.test(src)) return '原文未按值差量';
+    if (!/const scriptChanged = d\.rawScript !== _lastSent\.rawScript/.test(src)) return '分幕未按引用差量';
+    if (!/function mapsSig\(/.test(src) || !/function stripMaps\(/.test(src)) return '缺少地图签名/发送剔除';
+    if (!/if \(mapsChanged\) out\.maps = stripMaps\(/.test(src)) return '地图未按签名差量';
+    if (!/S\.rawScript = Object\.assign\(\{\}, S\.rawScript, \{ sceneDir:/.test(src)) return 'sceneDir 仍原地挂属性（引用判等会漏发）';
+    return true;
+  });
+  check('P6-D2c 骰娘状态免整档读盘（StorePort 走 _doc 内存文档）', () => {
+    const dp = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'dice-state-store.js'), 'utf8');
+    return /dataStore\._doc \|\| dataStore\.load\(\)/.test(dp) ? true : 'StorePort 仍每条指令整档读盘';
+  });
+  check('P6-D2d 主进程底图落盘按内容指纹去重（existsSync 跳过已落盘文件）', () => {
+    const st2 = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'store.js'), 'utf8');
+    return /fs\.existsSync\(path\.join\(this\.maps, fname\)\)/.test(st2) ? true : '底图仍每轮保存同步重写';
+  });
 
   console.log('\n[P6-D3] 超大列表窗口化渲染：首屏分帧 + 滚动增量加载，避免一次性挂载数千节点');
   check('P6 渲染层 renderDataView 窗口化渲染（CHUNK/WINDOW 分帧 + rstep）', () => {
@@ -2281,7 +2298,7 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
 
   console.log('\n[M3] 自研骰娘内核：退役清零 + 新接口收口 + 版本 3.0.0');
   const M3pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
-  const M3cl = src.slice(src.indexOf('const CHANGELOG'), src.indexOf('const CHANGELOG') + 20000);
+  const M3cl = src.slice(src.indexOf('const CHANGELOG'), src.indexOf('const CHANGELOG') + 30000); /* 3.4.4 起 v3.0.0 条目已偏移至 20250，旧 20000 窗口会漏掉它 */
   const M3pre = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'preload.js'), 'utf8');
   const M3main = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.js'), 'utf8');
   check('M3 版本号：package.json / CHANGELOG 最新条目 / 界面 APP_VERSION 三处一致', () => {

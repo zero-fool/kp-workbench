@@ -118,6 +118,8 @@ function fakeEngine() {
     c.config = config;
     c.uin = null;
     c.nickname = '';
+    c.sig = { d2key: Buffer.alloc(16) };   // 默认「已登录」：safeQuit 据 d2key 决定走 logout 还是直接断连
+    c.terminate = () => { log.push(['terminate']); };
     c.login = (uin, password) => { log.push(['login', uin || null, password || null]); return Promise.resolve(); };
     c.logout = (keep) => { log.push(['logout', keep]); return Promise.resolve(); };
     c.submitSlider = (t) => { log.push(['slider', t]); return Promise.resolve(); };
@@ -331,6 +333,29 @@ test('适配器：logout 复位状态并调用引擎登出', async () => {
   assert.strictEqual(st.state, 'stopped');
   assert.strictEqual(st.uin, null);
   assert.ok(fe.log.some((r) => r[0] === 'logout'));
+});
+
+test('适配器：未登录客户端 logout 只断连，不触发 icqq 注销包越界', async () => {
+  // 实测 3.4.3：sig.d2key 为空时 icqq logout → buildLoginPacket → tea.encrypt
+  // readUInt32BE 越界，且 register 的 Promise 永久挂起（未处理拒绝 + 退出卡死）。
+  const { adapter, fe } = makeAdapter();
+  await adapter.start();
+  const c = fe.clients[0];
+  c.sig = {};                                     // 模拟从未登录成功：d2key 缺失
+  const st = await adapter.logout();
+  assert.strictEqual(st.state, 'stopped');
+  assert.ok(fe.log.some((r) => r[0] === 'terminate'), '应直接 terminate 断连');
+  assert.ok(!fe.log.some((r) => r[0] === 'logout'), '不应调用 icqq logout（注销包会用空 key 越界）');
+});
+
+test('适配器：logout 后 emit logout 事件且可重新登录', async () => {
+  const { adapter, fe, events } = makeAdapter();
+  await adapter.start();
+  await adapter.logout();
+  assert.ok(events.some((e) => e && e.type === 'logout'), '登出完成应广播 logout 事件');
+  await adapter.loginPassword({ uin: 12345, password: 'x' });
+  assert.ok(fe.log.some((r) => r[0] === 'login'), '登出后应可重新发起登录');
+  await adapter.logout();
 });
 
 test('适配器：引擎缺失时给出可读原因并进入 error', async () => {

@@ -400,7 +400,9 @@ class DataStore {
         const m = d.maps[i];
         if (m && typeof m.img === 'string' && m.img.startsWith('data:')) {
           const fname = quickHash(m.img) + '.img';
-          try { fs.writeFileSync(path.join(this.maps, fname), m.img); } catch (_) {}
+          /* 文件名即内容指纹：同内容底图已落盘则跳过重写。旧实现每轮保存都把全部 base64
+           * 底图同步重写一遍（数 MB × 每张），保存路径白白阻塞主进程并放大磁盘写入。 */
+          try { if (!fs.existsSync(path.join(this.maps, fname))) fs.writeFileSync(path.join(this.maps, fname), m.img); } catch (_) {}
           _saved.push({ i, img: m.img });
           m.img = '$IMG_FILE:' + fname;
         }

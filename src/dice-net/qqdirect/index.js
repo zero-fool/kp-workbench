@@ -483,10 +483,30 @@ function createQqDirectAdapter(deps) {
   function confKey() {
     return [sessionDir(), normalizePlatform(cfg.platform) || '', cfg.ver || '', signOn() ? signAddr() : '', cfg.enginePath || '', cfg.reconnInterval || ''].join('|');
   }
+  /* 安全退出客户端（v3.4.4 实测修复）：
+   * 未登录成功时 sig.d2key 为空，icqq logout → register(true) → buildLoginPacket 会拿空 key
+   * 调 tea.encrypt → readUInt32BE 越界（ERR_BUFFER_OUT_OF_BOUNDS）；且 icqq register 用了
+   * new Promise(async ...) 反模式——内部异常既不能 reject 外层，re_register 裸调用的
+   * rejection 也无人接，外层 await 永久挂起（主进程记录「未处理的 Promise 拒绝」且退出卡住）。
+   * 故：无有效 d2key（从未登录成功）只断连不发注销包；已登录也加 5s 超时兜底，迟到 rejection 不外泄。 */
+  function safeQuit(c) {
+    if (!c) return Promise.resolve();
+    const term = () => { try { if (typeof c.terminate === 'function') c.terminate(); } catch (_) {} };
+    const d2 = c.sig && c.sig.d2key;
+    if (!(Buffer.isBuffer(d2) && d2.length >= 16) || typeof c.logout !== 'function') { term(); return Promise.resolve(); }
+    let timer = null, timedOut = false;
+    const p = Promise.resolve().then(() => c.logout(false));
+    p.catch(() => {});                                        // 超时后迟到的 rejection 不得变成 unhandled
+    const t = new Promise((resolve) => { timer = setTimeout(() => { timedOut = true; resolve(); }, 5000); });
+    return Promise.race([p, t]).then(
+      () => { clearTimeout(timer); if (timedOut) term(); },
+      () => { clearTimeout(timer); term(); }
+    );
+  }
   function ensureClient() {
     const key = confKey();
     if (client && clientKey !== key) {                    // 配置已变（如刚填签名服务地址）→ 重建客户端
-      try { if (typeof client.logout === 'function') client.logout(false); } catch (_) {}
+      safeQuit(client);                                   // 内部自带超时与 rejection 兜底，此处 fire-and-forget 安全
       client = null; clientKey = '';
     }
     if (client) return client;
@@ -664,7 +684,7 @@ function createQqDirectAdapter(deps) {
       reconnects = 0;
       lastMsgAt = 0;
       diag.lastLoginAt = 0; // 主动登出后允许立即重新登录（失败退避 cooldownUntil 仍保留）
-      if (c && typeof c.logout === 'function') { try { await c.logout(false); } catch (_) {} }
+      await safeQuit(c);                                   // 未登录走断连、已登录带超时（见 safeQuit 注释）
       state = 'stopped';
       emit('logout');
       return this.status();
