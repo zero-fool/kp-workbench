@@ -236,7 +236,7 @@ check('开团向导：可折叠（toggleWizard 持久化 layout.wizardHidden）�
   (/function\s+toggleWizard/.test(src) && /wizardHidden/.test(src) && /wizardHTML\(\)/.test(src) && /🚀\s*开团向导/.test(src)) ? true : '向导折叠/渲染缺失');
 check('版本与变更日志：最新条目与 APP_VERSION 同步、含本次改动，且旧版本条目仍在', () => {
   const i = src.indexOf('const CHANGELOG');
-  const cl = src.slice(i, i + 26000);
+  const cl = src.slice(i, i + 45000); /* 3.4.3 起条目累计已超 40KB，旧 26000 窗口会把新增条目挤掉尾部关键词 */
   const vm = /version:\s*'([0-9]+\.[0-9]+\.[0-9]+)'/.exec(cl);
   const verOk = vm && new RegExp('APP_VERSION\\s*=\\s*\'' + vm[1].replace(/\./g, '\\.') + '\'').test(src);
   return (verOk && /运行记录/.test(cl)
@@ -253,7 +253,8 @@ check('版本与变更日志：最新条目与 APP_VERSION 同步、含本次改
     && /剧本进度状态机/.test(cl) && /伏笔兑现勾选/.test(cl) && /一键生成开团清单/.test(cl) && /现场备注/.test(cl)
     && /一键整理/.test(cl) && /AI 处理中/.test(cl)
     && /开团向导/.test(cl) && /批量操作/.test(cl) && /前进\/后退导航/.test(cl)
-    && /分片存储/.test(cl)) ? true : '版本/变更日志未更新';
+    && /分片存储/.test(cl)
+    && /自动下发短信/.test(cl) && /qrcodeLogin/.test(cl) && /服务端（反连/.test(cl) && /尾沿防抖/.test(cl)) ? true : '版本/变更日志未更新';
 });
 
 console.log('\n[T10] 关系网一键整理（分组打包）：分组各自排布须两两不重叠、结果可复现');
