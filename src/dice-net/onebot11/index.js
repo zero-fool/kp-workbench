@@ -22,13 +22,21 @@ function createOnebot11Adapter(deps) {
   let stopped = false;
 
   function connectClient() {
-    if (stopped || !cfg.url) return;
+    /* mode 守卫：stop() 后切到服务端模式时，旧 socket 迟到的 onclose 会排一个重连定时器；
+     * 定时器触发时 cfg.url 仍在，不拦就会在服务端模式下偷偷拉起一条 client 连接（僵尸连接双开）。
+     * stopped 守卫拦不住它——start() 切模式时会把 stopped 重置回 false。 */
+    if (stopped || mode() !== 'client' || !cfg.url) return;
     lastError = null;
+    state = 'connecting'; // 握手未完成前不许显示 running：旧版 start 即「运行中」，用户以为已联通
     const url = `${cfg.url}${cfg.url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(cfg.accessToken || '')}`;
     let sock;
     try { sock = new WebSocket(url); } catch (err) { lastError = String(err); return; }
     clientSock = sock;
+    /* reconnects 刻意不清零：它是累计重连计数（诊断/单测都依赖它证明发生过重连），
+     * 「重连中」提示的恢复改由 state+lastError 口径控制（见 conn-center renderStatusLight）。 */
+    sock.onopen = () => { if (stopped || clientSock !== sock) return; state = 'running'; lastError = null; };
     sock.onmessage = (e) => {
+      if (clientSock !== sock) return; // stop()/模式切换后旧 socket 的迟到消息不得再进引擎
       let obj = null;
       try { obj = JSON.parse(e.data); } catch { return; }
       if (obj && obj.echo && pending.has(obj.echo)) {
@@ -40,12 +48,16 @@ function createOnebot11Adapter(deps) {
       if (msg && cb) cb(msg);
     };
     sock.onclose = () => {
-      if (stopped) return;
+      /* 身份守卫双保险：stop() 把 clientSock 置空、start() 又把 stopped 重置为 false，
+       * 只查 stopped 挡不住模式切换时旧 socket 的迟到 onclose——它会把新状态机污染成
+       * connecting/重连计数并排下僵尸重连（真机 E2E 实测：切反连后灯卡「重连中（1）：upstream error」）。 */
+      if (stopped || clientSock !== sock) return;
       reconnects += 1;
       lastError = 'upstream closed';
+      state = 'connecting'; // 断开即离线：状态灯立刻走「重连中（N）」，不再停留「运行中」假在线
       clientTimer = setTimeout(connectClient, cfg.reconnectMs || 5000); // 断线自动重连
     };
-    sock.onerror = () => { if (stopped) return; lastError = 'upstream error'; };
+    sock.onerror = () => { if (stopped || clientSock !== sock) return; lastError = 'upstream error'; };
   }
 
   return {
@@ -59,7 +71,7 @@ function createOnebot11Adapter(deps) {
           throw new Error('正连（客户端）模式需要填写协议端 WS 地址，如 ws://127.0.0.1:3001；或改回服务端（反连）模式监听端口');
         }
         stopped = false;
-        state = 'running';
+        state = 'connecting'; // 与 connectClient 口径一致：onopen 才转 running
         connectClient();
         return null;
       }
@@ -112,7 +124,10 @@ function createOnebot11Adapter(deps) {
     async stop() {
       stopped = true;
       if (clientTimer) { clearTimeout(clientTimer); clientTimer = null; }
-      if (clientSock && clientSock.readyState === WebSocket.OPEN) clientSock.close();
+      /* 不论 CONNECTING/OPEN 都要 close：旧版只关 OPEN，正连握手途中切换模式会漏出一条活
+       * socket（clientSock 已置空但连接继续跑，onmessage 仍把消息灌进引擎）。CONNECTING 时
+       * close 按规范中止握手，不会抛错；随后到达的 onerror/onclose 由 clientSock 身份守卫拦截。 */
+      if (clientSock) { try { clientSock.close(); } catch (_) {} }
       clientSock = null;
       if (server) await server.close();
       conns.clear();
@@ -129,8 +144,14 @@ function createOnebot11Adapter(deps) {
         const echo = `m2-${++seq}`;
         const frame = JSON.stringify({ action: call.action, params: call.params, echo });
         if (mode() === 'client') {
-          if (clientSock && clientSock.readyState === WebSocket.OPEN) clientSock.send(frame);
+          /* 未连上就发＝静默丢消息（界面/玩家等不到回音却毫无提示，发送观测还记成假 sent）。
+           * 显式抛错让 send-gate 记录 error：连接中心「发送观测」与状态灯可见，退避机制一并生效。 */
+          if (!clientSock || clientSock.readyState !== WebSocket.OPEN) {
+            throw new Error(`OneBot 正连未就绪：协议端 WS 尚未连接（${lastError || `状态 ${state}`}）`);
+          }
+          clientSock.send(frame);
         } else {
+          if (!conns.size) throw new Error('OneBot 服务端无连接：尚无协议端连入监听端口，回复无处可发');
           for (const c of conns) c.send(frame);
         }
       }
@@ -142,7 +163,11 @@ function createOnebot11Adapter(deps) {
       });
     },
     status() {
-      return { state, mode: mode(), connections: conns.size, reconnects, lastError };
+      /* 正连的连接数＝上游 WS 是否已打开（server 的 conns 在正连模式恒 0，直接报会永远「等待连接」） */
+      const connections = mode() === 'client'
+        ? (clientSock && clientSock.readyState === WebSocket.OPEN ? 1 : 0)
+        : conns.size;
+      return { state, mode: mode(), connections, reconnects, lastError };
     },
   };
 }

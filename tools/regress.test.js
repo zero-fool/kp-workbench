@@ -1490,8 +1490,79 @@ check('C5 复制对象隔离：新卡与原卡互不影响（深拷贝 + 新 id 
     if (!m) return 'stop 方法未找到';
     if (!(/lastError = null;/.test(m[0]) && /reconnects = 0;/.test(m[0]))) return 'stop 未清 lastError/reconnects（状态灯残留 upstream error）';
     /* 真机实测：stop 里 close() 是异步的，随后触发的 onerror 会迟到覆盖刚清掉的 lastError——
-     * onerror 必须有 stopped 守卫（onclose 本来就有），否则 status 停止后仍返回 upstream error。 */
-    return /sock\.onerror = \(\) => \{ if \(stopped\) return;/.test(ob) ? true : 'onerror 缺 stopped 守卫（迟到错误覆盖 stop 清理）';
+     * onerror 必须有 stopped 守卫（onclose 本来就有），否则 status 停止后仍返回 upstream error。
+     * 后续 E2E 又实测到模式切换污染：守卫升级为 stopped || clientSock !== sock（身份检查），此处放宽匹配两者。 */
+    return /sock\.onerror = \(\) => \{ if \(stopped[^)]*\) return;/.test(ob) ? true : 'onerror 缺 stopped 守卫（迟到错误覆盖 stop 清理）';
+  });
+  console.log('\n[P6-D2h] 「基本没回馈」修复组：面板按钮委托 / 状态灯轮询 / busy 反馈 / details 保留');
+  check('P6-D2h1 QQ 面板按钮容器级委托（paintQqDirect 换节点后按钮不得失灵）', () => {
+    if (!/if \(!el\.dataset\.qactDel\)/.test(src)) return '缺少容器级 qact 委托（重绘后按钮全是死的）';
+    if (!/closest\('\[data-qact\]'\)/.test(src)) return '委托未按 closest 向上找按钮';
+    /* 旧实现逐个 onclick 绑在重绘之前，重绘换节点即失效——一旦复现即回归 */
+    if (/querySelectorAll\('\[data-qact\]'\)\.forEach/.test(src)) return '仍存在逐个 onclick 绑定（重绘后失效）';
+    return true;
+  });
+  check('P6-D2h2 状态灯槽位外科刷新并接入 5s 轮询（进视图后状态变化必须可见）', () => {
+    if (!/dlight-slot/.test(src)) return '状态灯未包槽位（无法外科替换）';
+    if (!/function refreshStatusLights\(/.test(src)) return '缺少 refreshStatusLights';
+    if (!/refreshStatusLights\(\); +\/\/ 通道状态灯/.test(src)) return 'startDwPolling 未接入状态灯轮询';
+    if (!/refreshStatusLights\(\); +\/\/ 只换状态灯槽/.test(src)) return '按钮收尾未走外科刷新（整卡重绘会折叠 details）';
+    return true;
+  });
+  check('P6-D2h3 按钮点击即反馈（busy：禁用 + …中…文案 + 防重复点击 + 收尾复原）', () => {
+    if (!/btn\.dataset\.busy/.test(src)) return 'data-act 按钮无 busy 守卫';
+    if (!/启动中…/.test(src)) return '缺少启动中即时文案';
+    if (!/if \(btn && btn\.dataset\.busy\) return;/.test(src)) return 'QQ 直连按钮无防重复点击';
+    if (!/btnLabel/.test(src)) return 'QQ 直连按钮无 busy 复原';
+    return true;
+  });
+  check('P6-D2h4 details 展开态跨重绘保留（刷新不得折叠「高级」「风控治理」）', () => {
+    if (!/advOpen/.test(src) || !/riskOpen/.test(src)) return '未记录 details 展开态';
+    return /advEl1 && advOpen\) advEl1\.open = true/.test(src) && /riskEl1 && riskOpen\) riskEl1\.open = true/.test(src)
+      ? true : '重绘后未恢复 open（点完按钮面板突收像没反应）';
+  });
+  check('P6-D2h5 指令日志接入轮询自动上屏（真实通道指令不再等手动刷新）', () => {
+    if (!/refreshCmdLog\(\); +\/\/ 真实通道进来的指令自动上屏/.test(src)) return 'startDwPolling 未接入指令日志';
+    return /_dw\.logSig/.test(src) ? true : '缺少日志变化签名（轮询会每 5s 重建 DOM 打断阅读）';
+  });
+  check('P6-D2h6 OneBot 正连诚实状态机（connecting → onopen 才 running）', () => {
+    const ob = fs.readFileSync(path.join(__dirname, '..', 'src', 'dice-net', 'onebot11', 'index.js'), 'utf8');
+    if (!/state = 'connecting'/.test(ob)) return 'start/connectClient 缺 connecting 中间态（start 即谎报运行中）';
+    if (!/sock\.onopen = \(\) => \{[^}]*state = 'running'/.test(ob)) return 'onopen 未转 running';
+    return true;
+  });
+  check('P6-D2h7 OneBot 发送未连接显式抛错（不得静默丢消息记假 sent）', () => {
+    const ob = fs.readFileSync(path.join(__dirname, '..', 'src', 'dice-net', 'onebot11', 'index.js'), 'utf8');
+    if (!/OneBot 正连未就绪/.test(ob)) return '正连未连上仍静默丢回复';
+    if (!/OneBot 服务端无连接/.test(ob)) return '反连零连接仍静默丢回复';
+    return /readyState === WebSocket\.OPEN \? 1 : 0/.test(ob) ? true : '正连 connections 未按 WS 打开状态上报';
+  });
+  check('P6-D2h8 状态灯 connecting / 连接数 / 重连恢复语义（renderStatusLight 实函数）', () => {
+    const CC = require(path.join(RENDERER_DIR, 'dice-ui', 'conn-center.js'));
+    if (!/连接中/.test(CC.renderStatusLight({ state: 'connecting' }))) return 'connecting 未显示「连接中…」';
+    if (!/等待连接/.test(CC.renderStatusLight({ state: 'running', connections: 0, reconnects: 0 }))) return 'running 0 连接未提示等待连接';
+    if (!/运行中（2 连接）/.test(CC.renderStatusLight({ state: 'running', connections: 2, reconnects: 0 }))) return '有连接未显示连接数';
+    if (!/运行中</.test(CC.renderStatusLight({ state: 'running', reconnects: 0 }))) return '无 connections 字段应回归纯「运行中」';
+    /* 重连成功恢复：reconnects 为累计计数（单测依赖），running+已清 lastError 不得卡「重连中」 */
+    const rec = CC.renderStatusLight({ state: 'running', lastError: null, reconnects: 3, connections: 1 });
+    if (/重连中/.test(rec)) return '重连成功后灯卡死在重连中（累计计数被误当故障态）';
+    return /连接中|重连中/.test(CC.renderStatusLight({ state: 'connecting', lastError: 'upstream closed', reconnects: 1 })) ? true : 'connecting 断线窗口未显示重连中';
+  });
+  check('P6-D2h9 OneBot 模式切换僵尸回调防护（真机 E2E 实测：切反连后灯卡「重连中：upstream error」+ 僵尸正连双开）', () => {
+    const ob = fs.readFileSync(path.join(__dirname, '..', 'src', 'dice-net', 'onebot11', 'index.js'), 'utf8');
+    /* 只查 stopped 挡不住：stop() 置 clientSock=null、start() 又把 stopped 重置 false，
+     * 旧 socket 迟到的 onclose/onerror 必须按 clientSock 身份拦截，否则污染新状态机并排下僵尸重连。
+     * 出现次数须 ≥3：onopen + onclose + onerror 三个回调全部带身份守卫。 */
+    const guardN = (ob.match(/if \(stopped \|\| clientSock !== sock\) return;/g) || []).length;
+    if (guardN < 3) return `onopen/onclose/onerror 身份守卫不全（仅 ${guardN}/3），模式切换僵尸回调会污染状态`;
+    if (!/sock\.onerror = \(\) => \{ if \(stopped \|\| clientSock !== sock\) return;/.test(ob)) return 'onerror 未升级身份守卫';
+    if (!/if \(clientSock !== sock\) return; \/\/ stop\(\)/.test(ob)) return 'onmessage 缺身份守卫（旧 socket 消息仍可灌进引擎）';
+    /* stopped 守卫拦不住僵尸重连定时器：触发时 cfg.url 仍在、stopped 已被重置——必须按当前模式拦截 */
+    if (!/if \(stopped \|\| mode\(\) !== 'client' \|\| !cfg\.url\) return;/.test(ob)) return 'connectClient 缺 mode 守卫（服务端模式下被僵尸定时器拉起 client 连接）';
+    /* CONNECTING 不关就漏活 socket（旧版只关 OPEN） */
+    if (!/if \(clientSock\) \{ try \{ clientSock\.close\(\); \} catch \(_\) \{\} \}/.test(ob)) return 'stop 未无条件关闭 client socket（握手途中切换模式漏出活连接）';
+    if (/clientSock\.readyState === WebSocket\.OPEN\) clientSock\.close\(\)/.test(ob)) return '仍只关 OPEN 状态的 socket（CONNECTING 残留）';
+    return true;
   });
   console.log('\n[P6-D3] 超大列表窗口化渲染：首屏分帧 + 滚动增量加载，避免一次性挂载数千节点');
   check('P6 渲染层 renderDataView 窗口化渲染（CHUNK/WINDOW 分帧 + rstep）', () => {

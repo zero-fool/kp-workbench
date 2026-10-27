@@ -25,6 +25,9 @@
       '输入卡顿治理第二轮（大字段差量）：持久化载荷对原文/分幕建议按字符串值判等、剧本分幕按引用判等、地图按内容签名（结构字段全量序列化 + 底图 base64 长度采样指纹），未变更轮次不再把数 MB 字符串/base64 重复克隆过 IPC——此前每 300ms 一轮全量携带正是输入卡顿主因；发送前剔除地图运行时 Image 缓存（_imgNative 走结构化克隆会抛 DataCloneError 连带整次保存失败）；分幕 sceneDir/sceneFiles 改整体再赋值以配合引用判等；主进程每轮保存不再重复同步重写已落盘底图文件（内容指纹 + existsSync 去重）；骰娘状态读写改走内存权威文档 _doc，每条投骰/指令不再整档读盘（_meta.json + 8 实体分片全量 parse）。验证：577 单测全绿 + 397 回归 GREEN · 0 RED。',
       '原文预览分级防抖（真机归因后补充）：20 万字下 esc+innerHTML 仅 ~2ms，真正瓶颈是整篇 layout ~200ms/次、固定 200ms 防抖会与连打逐键抢主线程（实测 40 键 79 次长任务）；现按长度分级延后重绘（8 万字 500ms / 15 万字 900ms，短文本维持 200ms 手感不变），连打期间零整篇排版、停顿后自动补绘。真机端到端实测（Electron 31.7.7 headless + CDP 驱动）：QQ 建客户端后登出原崩溃点 2ms 安全返回、主进程全程零未处理拒绝；50k 字连打零长任务；保存差量实测 214KB→9KB（原文不再随每轮设置变更重复过 IPC）。10 万字以上分档归因（oninput 开/关对照）确认剩余卡顿为 Chromium 内核对 textarea 全量排版的固有成本——开关 oninput 长任务 80≈81 次不变、连打 40 键全程仅 1 次尾沿重绘，应用层已无责任（50k 档 longCount 2、帧间隔中位 26ms；200k 档帧间隔中位 101ms 为内核排版，进一步优化需虚拟化编辑器属架构级改造）。',
       '连接中心状态灯词义修复（OneBot 双模式真机联调发现）：正连点「停止」后 lastError 残留 upstream error，旧逻辑只看 lastError/reconnects 会把已停止的通道显示成「重连中（0）：upstream error」（error 态同样误显示为重连中）——现按 state 分支渲染（stopped 恒「已停止」、error 显示「连接异常：原因」、starting 显示「启动中」，running 才保留断线重连窗口语义），onebot11 主动 stop 同步清空 lastError/reconnects 从根因消除残留；服务端（反连）/客户端（正连）双模式经假协议端↔真应用↔真骰娘引擎联调，.r1d100/.jrrp 双指令回发、停止断连、状态回执全通，控制台 0 错误。',
+      '「基本没回馈」交互反馈修复组（用户实测反馈定位四条断链）：① QQ 面板动态按钮死绑定——#qqdPanel 内「已完成扫码/提交验证码/发送验证码/已验证继续/改用 OneBot 中转」每次状态重绘都会换新节点，旧实现逐个 onclick 绑定发生在 paintQqDirect 重绘之前，重绘后的按钮全是死的，点面板上任何按钮都毫无反应（直接根因）——改容器级事件委托挂 #dice-conn-center，重绘不丢；② 状态灯进视图后永不更新——新增 .dlight-slot 状态灯槽位外科刷新并接入 5s 轮询（只换灯、不整卡重绘），OneBot 连接中/重连/停止、反连等待连接、官方鉴权倒计时 5 秒内可见；③ 点启动/停止后整卡 innerHTML 重绘把「高级」「风控治理」details 原地折叠、输入框失焦，点完按钮面板突收像没反应——按钮操作改为只刷状态灯槽，全量重绘（手动刷新）前记录、重绘后恢复两处 details 展开态；④ 按钮 await 期间零反馈——data-act/data-qact 全部加 busy 态（点击即禁用 +「⏳ …中…」文案 + 防重复点击 + 成功失败均复原）。',
+      'OneBot 正连诚实状态机与发送可观测（配合反馈修复组）：start/connectClient 先置 connecting（握手完成前不再谎报「运行中」），onopen 才转 running，断开立即转「重连中（N）」；reconnects 为累计计数刻意不清零（单测依赖），灯面按 state+lastError 口径在重连成功后恢复「运行中」不卡死；status().connections 正连按 WS 打开状态上报（旧值恒 0 会永远「等待连接」）、反连 0 连接灯显「运行中 · 等待连接」；send 在正连未连上/反连零连接时显式抛错——旧实现静默丢回复且发送观测记成假 sent，现进 send-gate 记 error + 退避，连接中心「发送观测」可见；指令日志接入 5s 轮询自动上屏（带筛选+末条变化签名，内容不变不重建 DOM 不打断阅读）。验证：577 单测全绿 + 406 回归 GREEN · 0 RED。',
+      'OneBot 模式切换僵尸回调防护（真机 E2E 实测发现的真 bug）：stop() 置空 clientSock 后 start() 又把 stopped 重置回 false，旧 socket 迟到的 onclose/onerror 只查 stopped 拦不住——切反连后状态灯被污染卡「重连中（1）：upstream error」，僵尸重连定时器还在服务端模式下偷偷拉起一条正连连接（双开）；现 onopen/onclose/onerror 全部加 clientSock 身份守卫、onmessage 拒收旧 socket 消息、connectClient 入口加 mode 守卫、stop() 对 CONNECTING/OPEN 一律 close。真机 E2E 46 项断言全通过（切反连 1ms 即正确显示「运行中 · 等待连接」、全程 0 异常 0 console.error），回归清单 406 项 GREEN · 0 RED。',
     ]},
     { version: '3.4.3', date: '2026-10-26', type: '补丁版·QQ 骰娘连接维修与输入卡顿治理', items: [
       'QQ 账密登录「安全提示后无下文」修复：登录保护（device）事件到达即自动下发短信验证码（60s 频控防事件风暴），面板补「重发短信」与「已在手机完成 URL 验证→继续登录」双路径；短信验证码填错（162/163）原地重试，不再落入 error 死态。',
@@ -9901,9 +9904,13 @@
     const lab = card.querySelector('[data-ob-mode]');
     if (lab) lab.textContent = m === 'client' ? '客户端（正连）' : '服务端（反连）';
   }
-  async function qqDirectAct(act) {
+  async function qqDirectAct(act, btn) {
     const api = dwApi();
     if (!api || !api.diceQq) { toast('当前环境未暴露 QQ 直连接口', 'err'); return; }
+    /* 点击即刻反馈：按钮禁用并切「⏳ 处理中…」，操作收尾复原（btn 由容器委托传入，重绘换节点也不丢） */
+    if (btn && btn.dataset.busy) return;
+    const btnLabel = btn ? btn.textContent : '';
+    if (btn) { btn.dataset.busy = '1'; btn.disabled = true; btn.textContent = '⏳ 处理中…'; }
     const pwdEl = document.getElementById('qqdPassword');
     const cfg = qqDirectCfgFromCard();
     const uin = String(cfg.uin || '').trim();
@@ -9953,25 +9960,44 @@
         toast('已展开「高级」OneBot 中转：确认服务端地址后点「启动」即可接管骰娘连接', 'ok');
       }
     } catch (e) { toast('QQ 直连操作失败：' + ((e && e.message) || e), 'err'); }
+    finally {
+      if (btn) { btn.textContent = btnLabel; btn.disabled = false; delete btn.dataset.busy; }
+    }
     await refreshQqDirect();
   }
   async function refreshConnCenter() {
     const CC = window.DiceUIConnCenter || {};
     const cfg = dwNetCfg();
     const el = document.getElementById('dice-conn-center'); if (!el) return;
+    /* 重绘前保留 details 展开态：旧版重绘会把「高级」「风控治理」原地折叠，
+     * 用户刚点完按钮面板就收起，看起来像点了没反应。 */
+    const advEl0 = el.querySelector('.qqd-adv'), riskEl0 = el.querySelector('.qqd-risk');
+    const advOpen = !!(advEl0 && advEl0.open), riskOpen = !!(riskEl0 && riskEl0.open);
     el.innerHTML = (CC.renderChannelWizard || (() => ''))(cfg);
+    const advEl1 = el.querySelector('.qqd-adv'); if (advEl1 && advOpen) advEl1.open = true;
+    const riskEl1 = el.querySelector('.qqd-risk'); if (riskEl1 && riskOpen) riskEl1.open = true;
     if (dwApi()) {
       try {
         const list = await dwApi().diceNet.list();
         for (const item of list || []) {
           if (item.id === 'qqdirect') continue; // 直连状态由 #qqdPanel 专用区展示（含二维码/验证），不走通用状态灯
           const h = el.querySelector(`[data-channel="${item.id}"] h4`);
-          if (h) h.insertAdjacentHTML('beforeend', ' ' + ((CC.renderStatusLight || (() => ''))(item.status)));
+          /* 状态灯包进槽位：后续轮询/按钮操作只换槽内容（refreshStatusLights），不整卡重绘 */
+          if (h) h.insertAdjacentHTML('beforeend', ` <span class="dlight-slot" data-ch="${String(item.id || '').replace(/"/g, '')}">${(CC.renderStatusLight || (() => ''))(item.status)}</span>`);
         }
       } catch (_) {}
     }
-    // QQ 直连：绑定专属按钮 + 事件订阅 + 首次拉取状态
-    el.querySelectorAll('[data-qact]').forEach((btn) => { btn.onclick = () => qqDirectAct(btn.getAttribute('data-qact')); });
+    // QQ 直连按钮走事件委托（挂容器节点上，重绘不丢）：#qqdPanel 内的操作按钮（已完成扫码/提交验证码/
+    // 发送验证码/已验证继续/改用 OneBot 中转）每次状态重绘都会换新节点，旧实现逐个 onclick 绑定发生在
+    // paintQqDirect 重绘之前——重绘后的按钮全是死的，点面板上任何按钮都毫无反应（「基本没回馈」的直接根因）。
+    if (!el.dataset.qactDel) {
+      el.dataset.qactDel = '1';
+      el.addEventListener('click', (e) => {
+        const b = e.target && e.target.closest ? e.target.closest('[data-qact]') : null;
+        if (b && el.contains(b)) qqDirectAct(b.getAttribute('data-qact'), b);
+      });
+    }
+    // QQ 直连：事件订阅 + 首次拉取状态
     subscribeQqEvents();
     await refreshQqDirect();
     refreshSendMetrics(); // U8-8：连接中心渲染后即拉一次发送观测
@@ -9999,10 +10025,15 @@
     el.querySelectorAll('button[data-act]').forEach((btn) => {
       btn.onclick = async () => {
         const card = btn.closest('[data-channel]'); if (!card) return;
+        if (btn.dataset.busy) return; // 操作进行中禁重复点击
         const ch = card.getAttribute('data-channel');
         const act = btn.getAttribute('data-act');
         const api = dwApi();
         if (!api) { toast('当前环境未暴露骰娘接口', ''); return; }
+        /* 点击即刻有反馈：按钮立刻禁用并切「⏳ …中…」文案，await 期间不再毫无变化 */
+        const label = btn.textContent;
+        btn.dataset.busy = '1'; btn.disabled = true;
+        btn.textContent = act === 'start' ? '⏳ 启动中…' : '⏹ 停止中…';
         try {
           let patch;
           if (act === 'start' && cfg[ch]) {
@@ -10016,17 +10047,42 @@
           await (act === 'start' ? api.diceNet.start(ch, patch) : api.diceNet.stop(ch));
           toast((act === 'start' ? '已启动 ' : '已停止 ') + ch + ' 通道', 'ok');
         } catch (e) { toast('操作失败：' + ((e && e.message) || e), 'err'); }
-        refreshConnCenter();
+        finally {
+          btn.textContent = label; btn.disabled = false; delete btn.dataset.busy;
+          refreshStatusLights(); // 只换状态灯槽：整卡重绘会把「高级」区折叠掉、输入框失焦
+        }
       };
     });
+  }
+  /* 状态灯外科刷新：只替换 .dlight-slot 槽内容，不整卡重绘。
+   * 通道状态变化（OneBot 连接中/重连/停止、反连等待连接、官方鉴权倒计时）此前只在进视图和
+   * 点按钮时渲染一次，之后永不更新——状态灯停在那一刻，用户看不到任何变化（「没回馈」之一）。 */
+  async function refreshStatusLights() {
+    const CC = window.DiceUIConnCenter || {};
+    const el = document.getElementById('dice-conn-center');
+    if (!el || !dwApi()) return;
+    if (!el.querySelector('.dlight-slot[data-ch]')) return;
+    try {
+      const list = await dwApi().diceNet.list();
+      for (const item of list || []) {
+        if (item.id === 'qqdirect') continue;
+        const slot = el.querySelector(`.dlight-slot[data-ch="${String(item.id || '').replace(/"/g, '')}"]`);
+        if (slot) slot.innerHTML = (CC.renderStatusLight || (() => ''))(item.status);
+      }
+    } catch (_) {}
   }
   async function refreshCmdLog() {
     const api = dwApi(); if (!api) return;
     const CL = window.DiceUIConnLog || {};
     const root = document.getElementById('dice-cmd-log'); if (!root) return;
-    if (!_dw.logPanel) _dw.logPanel = (CL.createLogPanel || (() => ({ load() { }, append() { }, rows: () => [] })))({ root });
+    if (!_dw.logPanel) { _dw.logPanel = (CL.createLogPanel || (() => ({ load() { }, append() { }, rows: () => [] })))({ root }); _dw.logSig = ''; }
     try {
       const list = (await api.log.query({ sessionId: _dw.filter || '', limit: 200 })) || [];
+      /* 轮询高频调用：内容没变不重建 DOM（否则滚动/阅读位置每 5s 被打断）；筛选变化计入签名 */
+      const last = list[list.length - 1];
+      const sig = `${_dw.filter || ''}#${list.length}#${last ? last.time + '|' + (last.reply || '') : ''}`;
+      if (_dw.logSig === sig) return;
+      _dw.logSig = sig;
       _dw.logPanel.load(list);
       const sum = (CL.logSummary || ((l) => ({ total: l.length, sessions: 0 })))(list);
       const meta = document.getElementById('dwLogMeta'); if (meta) meta.textContent = `共 ${sum.total} 条 · ${sum.sessions} 个会话`;
@@ -10232,7 +10288,9 @@
       const alive = document.getElementById('qqdPanel') || document.getElementById('dice-session-list');
       if (!alive) { if (_dw.poll) { clearInterval(_dw.poll); _dw.poll = null; } return; }
       refreshQqDirect();                        // U8-3：登录诊断/连接状态自动刷新
+      refreshStatusLights();                    // 通道状态灯：连接中/重连/停止 5s 内反映（此前进视图后永不更新）
       refreshSendMetrics();                     // U8-8：发送观测
+      refreshCmdLog();                          // 真实通道进来的指令自动上屏（此前只有手动刷新/测试通道发送才更新）
       if (_dw.sessActive) refreshSessionChat(); // 内置骰娘 QQ 界面：新消息轮询
     }, 5000);
   }

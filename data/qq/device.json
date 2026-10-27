@@ -1,0 +1,18 @@
+{
+  "--begin--": "该设备为随机生成，丢失后不能得到原先配置",
+  "product": "ICQQ-1B7C1",
+  "device": "947D5",
+  "board": "F119C",
+  "brand": "8005",
+  "model": "ICQQ E197",
+  "wifi_ssid": "HUAWEI-09b961f",
+  "bootloader": "U-boot",
+  "display": "IC.0382205.0447",
+  "boot_id": "b399bab8-f2dc-0ab6-efb8-b8b309c3c2e9",
+  "proc_version": "Linux version 5.10.101-android10-a1b806bb",
+  "mac_address": "02:00:00:00:00:00",
+  "ip_address": "192.168.28.12",
+  "android_id": "98d87980e058906c",
+  "incremental": "5199909698",
+  "--end--": "修改后可能需要重新验证设备。"
+}

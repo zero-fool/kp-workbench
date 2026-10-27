@@ -1,0 +1,25 @@
+[16:05:47.391] [INFO] 应用启动 {{"v":"3.4.4","ua":"linux/x64","node":"20.18.0","dataDir":"/workspace/data","recovered":false}}
+[16:05:47.392] [INFO] 数据目录就绪 {{"dataDir":"/workspace/data","archived":0}}
+[16:05:47.394] [INFO] 主进程已注入 WebSocket 实现 {{"from":"内置零依赖客户端"}}
+[16:05:47.663] [INFO] 主窗口已创建 {{"id":1}}
+[16:05:47.700] [INFO] 系统托盘已创建
+[16:07:32.653] [INFO] 应用启动 {{"v":"3.4.4","ua":"linux/x64","node":"20.18.0","dataDir":"/workspace/data","recovered":false}}
+[16:07:32.654] [INFO] 数据目录就绪 {{"dataDir":"/workspace/data","archived":0}}
+[16:07:32.656] [INFO] 主进程已注入 WebSocket 实现 {{"from":"内置零依赖客户端"}}
+[16:07:32.933] [INFO] 主窗口已创建 {{"id":1}}
+[16:07:32.954] [INFO] 系统托盘已创建
+[16:07:33.652] [WARN] 检测到上次未正常退出，数据已保留 {{}}
+[16:07:34.310] [INFO] 进入界面：dicework
+[16:08:23.868] [INFO] 进入界面：dash
+[16:08:24.771] [INFO] 进入界面：dicework
+[16:08:33.759] [INFO] 检查更新完成 {{"latest":"3.4.3","hasUpdate":false,"source":"redirect","mode":"green"}}
+[16:13:05.673] [INFO] 应用启动 {{"v":"3.4.4","ua":"linux/x64","node":"20.18.0","dataDir":"/workspace/data","recovered":false}}
+[16:13:05.675] [INFO] 数据目录就绪 {{"dataDir":"/workspace/data","archived":0}}
+[16:13:05.677] [INFO] 主进程已注入 WebSocket 实现 {{"from":"内置零依赖客户端"}}
+[16:13:05.942] [INFO] 主窗口已创建 {{"id":1}}
+[16:13:05.957] [INFO] 系统托盘已创建
+[16:13:06.604] [WARN] 检测到上次未正常退出，数据已保留 {{}}
+[16:13:07.394] [INFO] 进入界面：dicework
+[16:13:57.193] [INFO] 进入界面：dash
+[16:13:58.098] [INFO] 进入界面：dicework
+[16:14:06.762] [INFO] 检查更新完成 {{"latest":"3.4.3","hasUpdate":false,"source":"redirect","mode":"green"}}

@@ -17,15 +17,28 @@
   function renderStatusLight(st) {
     if (!st || !st.state) return '<span class="dice-light off">状态未知</span>';
     let out;
-    if (st.state === 'running') {
-      /* 运行中且带重连计数/最近错误 = 断线自动重连窗口（正连断线时 state 仍为 running） */
-      out = (st.lastError || st.reconnects > 0)
-        ? `<span class="dice-light recon">重连中（${st.reconnects}）${st.lastError ? '：' + st.lastError : ''}</span>`
-        : '<span class="dice-light on">运行中</span>';
-    } else if (st.state === 'error') {
+    if (st.state === 'error') {
       out = `<span class="dice-light recon">连接异常：${st.lastError || '未知错误'}</span>`;
     } else if (st.state === 'starting') {
       out = '<span class="dice-light recon">启动中</span>';
+    } else if (st.state === 'running' || st.state === 'connecting') {
+      /* 重连窗口判定：有 lastError → 必在故障态；无错误时仅 connecting 带累计重连数算重连中。
+       * running + 纯累计 reconnects（重连成功：onopen 清 lastError、state 回 running，计数刻意保留）
+       * 必须显示正常——否则一次成功重连后灯永远卡在「重连中」。 */
+      if (st.lastError || (st.state === 'connecting' && st.reconnects > 0)) {
+        out = `<span class="dice-light recon">重连中（${st.reconnects || 0}）${st.lastError ? '：' + st.lastError : ''}</span>`;
+      } else if (st.state === 'connecting') {
+        /* 正连 start 后到 TCP/WS 握手完成前的真实中间态：旧版谎报「运行中」，用户以为已联通 */
+        out = '<span class="dice-light recon">连接中…</span>';
+      } else if (typeof st.connections === 'number') {
+        /* 反连监听中但无协议端连入：0 连接要显式说明「等待连接」，
+         * 否则「运行中」会被当成已联通，等不到回音却看不出哪里没接上。 */
+        out = st.connections > 0
+          ? `<span class="dice-light on">运行中（${st.connections} 连接）</span>`
+          : '<span class="dice-light on">运行中 · 等待连接</span>';
+      } else {
+        out = '<span class="dice-light on">运行中</span>';
+      }
     } else {
       /* stopped：主动停止/正常下线。历史 lastError（如 upstream error）是诊断残留，
        * 真机实测点停止后状态灯曾显示成「重连中（0）：upstream error」误导用户以为没停掉。 */
