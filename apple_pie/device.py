@@ -19,16 +19,20 @@ class Rect:
 
 
 class Emulator:
-    def __init__(self, serial: str = "127.0.0.1:5555", timeout: float = 8.0):
+    def __init__(self, serial: str = "127.0.0.1:5555", timeout: float = 8.0, adb: str | None = None):
         self.serial = serial
         self.timeout = timeout
+        self.adb = adb or "adb"
 
-    def _adb(self, *args: str, binary: bool = False) -> str | bytes:
-        cmd = ["adb", "-s", self.serial, *args]
+    def _raw(self, *args: str, binary: bool = False) -> str | bytes:
+        cmd = [self.adb, *args]
         try:
             proc = subprocess.run(cmd, capture_output=True, timeout=self.timeout)
         except FileNotFoundError as e:
-            raise DeviceError("找不到 adb，请安装 platform-tools 并加入 PATH") from e
+            raise DeviceError(
+                "找不到 adb.exe：请把它和 AdbWinApi.dll、AdbWinUsbApi.dll 放到 exe 同目录，"
+                "或安装 platform-tools 并加入 PATH"
+            ) from e
         except subprocess.TimeoutExpired as e:
             raise DeviceError(f"adb 超时: {' '.join(args)}") from e
         if proc.returncode != 0:
@@ -36,15 +40,14 @@ class Emulator:
             raise DeviceError(f"adb {' '.join(args)} 失败: {err}")
         return proc.stdout if binary else proc.stdout.decode(errors="replace")
 
+    def _adb(self, *args: str, binary: bool = False) -> str | bytes:
+        return self._raw("-s", self.serial, *args, binary=binary)
+
     def connect(self) -> tuple[int, int]:
         if ":" in self.serial:
-            subprocess.run(
-                ["adb", "connect", self.serial],
-                capture_output=True,
-                timeout=self.timeout,
-            )
+            self._raw("connect", self.serial)
         if self._adb("shell", "echo", "ok").strip() != "ok":
-            raise DeviceError(f"设备 {self.serial} 未连接")
+            raise DeviceError(f"设备 {self.serial} 未连接，请确认模拟器已开启且 ADB 调试端口可用")
         return self.resolution()
 
     def resolution(self) -> tuple[int, int]:

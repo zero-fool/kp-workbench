@@ -14,10 +14,11 @@ import json
 import sys
 
 from .device import DeviceError, Emulator, Rect
+from .paths import find_adb, records_root
 from .records import LearningStore
 from .pipeline import check_link, verify_tap
 
-DEFAULT_ROOT = "apple_pie/records"
+DEFAULT_ROOT = str(records_root())
 
 
 def _parse_roi(text: str) -> Rect:
@@ -28,13 +29,13 @@ def _parse_roi(text: str) -> Rect:
 
 
 def cmd_link(args: argparse.Namespace) -> int:
-    dev = Emulator(serial=args.serial)
+    dev = Emulator(serial=args.serial, adb=find_adb())
     print(json.dumps(check_link(dev), ensure_ascii=False, indent=2))
     return 0
 
 
 def cmd_tap(args: argparse.Namespace) -> int:
-    dev = Emulator(serial=args.serial)
+    dev = Emulator(serial=args.serial, adb=find_adb())
     dev.connect()
     print(json.dumps(verify_tap(dev, args.x, args.y, args.roi), ensure_ascii=False, indent=2))
     return 0
@@ -111,7 +112,15 @@ def build_parser() -> argparse.ArgumentParser:
     ps.set_defaults(fn=cmd_stats)
 
     sub.add_parser("overview", help="记录区总览").set_defaults(fn=cmd_overview)
+    sub.add_parser("gui", help="打开图形界面").set_defaults(fn=cmd_gui)
     return p
+
+
+def cmd_gui(args: argparse.Namespace) -> int:
+    from .gui import main as gui_main
+
+    gui_main()
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
