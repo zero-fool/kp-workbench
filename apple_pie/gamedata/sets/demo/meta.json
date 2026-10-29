@@ -1,6 +1,0 @@
-{
-  "set_id": "demo",
-  "display_name": "演示赛季（占位数据）",
-  "status": "placeholder",
-  "note": "数值/技能/羁绊效果均为占位，仅用于跑通流程；把真实赛季表放进 gamedata/sets/<版本>/ 即自动生效"
-}

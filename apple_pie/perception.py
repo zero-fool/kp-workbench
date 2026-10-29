@@ -64,10 +64,12 @@ def board_rects(cfg: dict) -> list[Rect]:
     b = cfg["board"]
     ox, oy = (int(v) for v in b["origin"])
     cw, ch = (int(v) for v in b["cell"])
+    shift = int(b.get("row_shift", 0))  # 六边形棋盘奇偶行水平错位（金铲铲=半格）
     out = []
     for row in range(int(b["rows"])):
+        dx = shift if row % 2 else 0
         for col in range(int(b["cols"])):
-            out.append(Rect(ox + col * cw, oy + row * ch, cw, ch))
+            out.append(Rect(ox + dx + col * cw, oy + row * ch, cw, ch))
     return out
 
 

@@ -1,0 +1,2070 @@
+{
+ "champions": [
+  {
+   "id": "s18_akali",
+   "key": "akali",
+   "name": "阿卡丽",
+   "name_en": "Akali",
+   "cost": 1,
+   "traits": [
+    "魔战士",
+    "狂战士",
+    "地狱火"
+   ],
+   "stats": {
+    "hp": 650,
+    "mana": [
+     0,
+     25
+    ],
+    "ad": 40,
+    "armor": 35,
+    "mr": 35,
+    "as": 0.75,
+    "range": 1
+   },
+   "skill": {
+    "name": "苦无打击",
+    "desc": "【魔战士】：对目标发射一连串苦无，造成155/235/405物理伤害。如果目标处于灼烧状态，则额外造成35/52/80伤害。 【魔战士】：若该技能完成击杀，则再次施放它。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "155/235/405"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_akali_ad.png",
+   "api": "DA_18_Akali_AD"
+  },
+  {
+   "id": "s18_camille",
+   "key": "camille",
+   "name": "卡蜜尔",
+   "name_en": "Camille",
+   "cost": 1,
+   "traits": [
+    "狂战士",
+    "魔女"
+   ],
+   "stats": {
+    "hp": 700,
+    "mana": [
+     0,
+     25
+    ],
+    "ad": 40,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.75,
+    "range": 1
+   },
+   "skill": {
+    "name": "防御横扫",
+    "desc": "切割目标，造成160/240/425物理伤害，并获得持续2秒的60护盾值。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "160/240/425"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_camille.png",
+   "api": "DA_18_Camille"
+  },
+  {
+   "id": "s18_cinderling",
+   "key": "cinderling",
+   "name": "绯红树怪",
+   "name_en": "Cinderling",
+   "cost": 1,
+   "traits": [
+    "猎人",
+    "峡谷野怪"
+   ],
+   "stats": {
+    "hp": 500,
+    "mana": [
+     0,
+     50
+    ],
+    "ad": 40,
+    "armor": 25,
+    "mr": 25,
+    "as": 0.7,
+    "range": 4
+   },
+   "skill": {
+    "name": "刃叶",
+    "desc": "召唤五片锋利如剃刀的叶子，朝当前目标聚拢，造成总计340/510/770物理伤害，并施加持续4秒的20%重伤效果和1%灼烧效果。 绯红霸符：【绯红树怪】每次技能施放获得22%物理加成。 重伤：降低受到的治疗效果。 灼烧：每秒造成目标一部分最大生命值的真实伤害。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "340/510/770"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_cinderling18.png",
+   "api": "DA_Cinderling18"
+  },
+  {
+   "id": "s18_karma",
+   "key": "karma",
+   "name": "卡尔玛",
+   "name_en": "Karma",
+   "cost": 1,
+   "traits": [
+    "法师",
+    "灵魂莲华"
+   ],
+   "stats": {
+    "hp": 500,
+    "mana": [
+     0,
+     40
+    ],
+    "ad": 25,
+    "armor": 25,
+    "mr": 25,
+    "as": 0.7,
+    "range": 4
+   },
+   "skill": {
+    "name": "宿业羁绊",
+    "desc": "系住当前目标，在1.5秒里持续造成280/420/630魔法伤害。随后在其周围释放一道能量爆裂，对半径1格内的所有敌人造成125/185/300魔法伤害，并施加持续2秒的30%的缓速效果。 缓速：降低攻击速度",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_karma18.png",
+   "api": "DA_Karma18"
+  },
+  {
+   "id": "s18_kobuko",
+   "key": "kobuko",
+   "name": "可酷伯",
+   "name_en": "Kobuko",
+   "cost": 1,
+   "traits": [
+    "斗士",
+    "约德尔人和朋友"
+   ],
+   "stats": {
+    "hp": 700,
+    "mana": [
+     30,
+     90
+    ],
+    "ad": 55,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.65,
+    "range": 1
+   },
+   "skill": {
+    "name": "生命之舞",
+    "desc": "在2秒内持续回复334/384/529生命值。下一次攻击被替换为猛击，造成140/175/220魔法伤害。",
+    "desc_lang": "zh",
+    "values": {
+     "治疗量": "334/384/529",
+     "伤害": "140/175/220"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_kobuko.png",
+   "api": "DA_18_Kobuko"
+  },
+  {
+   "id": "s18_leona",
+   "key": "leona",
+   "name": "蕾欧娜",
+   "name_en": "Leona",
+   "cost": 1,
+   "traits": [
+    "护卫",
+    "日蚀骑士"
+   ],
+   "stats": {
+    "hp": 750,
+    "mana": [
+     30,
+     90
+    ],
+    "ad": 50,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.65,
+    "range": 1
+   },
+   "skill": {
+    "name": "护盾猛击",
+    "desc": "被动：在战斗开始时获得60/80/100额外护甲和魔抗，在12秒内持续衰减。 主动：猛击当前目标，造成60/108/162魔法伤害和1.5秒晕眩。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "60/108/162"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_leona.png",
+   "api": "DA_18_Leona"
+  },
+  {
+   "id": "s18_ornn",
+   "key": "ornn",
+   "name": "奥恩",
+   "name_en": "Ornn",
+   "cost": 1,
+   "traits": [
+    "护卫",
+    "永恒之森"
+   ],
+   "stats": {
+    "hp": 700,
+    "mana": [
+     40,
+     100
+    ],
+    "ad": 40,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.6,
+    "range": 1
+   },
+   "skill": {
+    "name": "风箱炎息",
+    "desc": "Active: Gain 400/460/550 Shield for 4 seconds and deal 200/300/450 magic damage to enemies in a cone. Quest: Each player combat, Ornn stores damage blocked as Forge Power, increased by 85% at 3-star. Gain an Artifact Anvil each time he gains enough Forge Power. (Forge Power: 0 / ?)",
+    "desc_lang": "en"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_ornn.png",
+   "api": "DA_18_Ornn"
+  },
+  {
+   "id": "s18_pebbles",
+   "key": "pebbles",
+   "name": "苍蓝哨戒",
+   "name_en": "Pebbles",
+   "cost": 1,
+   "traits": [
+    "神谕",
+    "峡谷野怪"
+   ],
+   "stats": {
+    "hp": 500,
+    "mana": [
+     30,
+     70
+    ],
+    "ad": 35,
+    "armor": 25,
+    "mr": 25,
+    "as": 0.8,
+    "range": 4
+   },
+   "skill": {
+    "name": "蔚蓝激光",
+    "desc": "开始每秒消耗35%最大法力值，并对目标引导一道激光。引导期间，每秒对其造成160/240/360魔法伤害，并使其魔抗降低3。 青霸符：每引导4秒，就会获得2法力回复。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_sentry.png",
+   "api": "DA_18_Sentry"
+  },
+  {
+   "id": "s18_rakan",
+   "key": "rakan",
+   "name": "洛",
+   "name_en": "Rakan",
+   "cost": 1,
+   "traits": [
+    "主宰",
+    "重装战士",
+    "花仙子"
+   ],
+   "stats": {
+    "hp": 700,
+    "mana": [
+     35,
+     105
+    ],
+    "ad": 0,
+    "armor": 35,
+    "mr": 35,
+    "as": 0.6,
+    "range": 1
+   },
+   "skill": {
+    "name": "登场之舞",
+    "desc": "获得持续4秒的290/340/435护盾值。然后为本回合造成伤害最高的友军提供在4秒内持续衰减的90%/100%/130%攻击速度。",
+    "desc_lang": "zh",
+    "values": {
+     "攻击速度": "90%/100%/130%"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_rakan.png",
+   "api": "DA_18_Rakan"
+  },
+  {
+   "id": "s18_rek_sai",
+   "key": "rek-sai",
+   "name": "雷克塞",
+   "name_en": "Rek'Sai",
+   "cost": 1,
+   "traits": [
+    "斗士",
+    "黑荆棘"
+   ],
+   "stats": {
+    "hp": 700,
+    "mana": [
+     40,
+     100
+    ],
+    "ad": 50,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.55,
+    "range": 1
+   },
+   "skill": {
+    "name": "连根拔起",
+    "desc": "被动：每秒回复17/21/27生命值，施放技能后的3秒内该效果变为3倍。 主动：冲出地面，使邻格的敌人晕眩1秒并对其造成70/105/160魔法伤害。",
+    "desc_lang": "zh",
+    "values": {
+     "治疗量": "17/21/27"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_reksai.png",
+   "api": "DA_18_RekSai"
+  },
+  {
+   "id": "s18_varus",
+   "key": "varus",
+   "name": "韦鲁斯",
+   "name_en": "Varus",
+   "cost": 1,
+   "traits": [
+    "迅捷射手",
+    "地狱火"
+   ],
+   "stats": {
+    "hp": 500,
+    "mana": [
+     20,
+     110
+    ],
+    "ad": 40,
+    "armor": 25,
+    "mr": 25,
+    "as": 0.75,
+    "range": 4
+   },
+   "skill": {
+    "name": "穿刺之箭",
+    "desc": "蓄力，然后向目标所在且敌人最多的一条直线射出箭矢。它对命中的敌人造成445/670/1070物理伤害，每穿过一个敌人，该伤害降低40%(最低为40%)。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "445/670/1070"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_varus.png",
+   "api": "DA_18_Varus"
+  },
+  {
+   "id": "s18_veigar",
+   "key": "veigar",
+   "name": "维迦",
+   "name_en": "Veigar",
+   "cost": 1,
+   "traits": [
+    "法师",
+    "黑荆棘",
+    "约德尔人和朋友"
+   ],
+   "stats": {
+    "hp": 500,
+    "mana": [
+     0,
+     30
+    ],
+    "ad": 25,
+    "armor": 25,
+    "mr": 25,
+    "as": 0.7,
+    "range": 4
+   },
+   "skill": {
+    "name": "能量爆裂",
+    "desc": "向目标发射一记巨大震波，造成190/285/430魔法伤害，若其生命值低于30%最大生命值，则提升至285/430/640。 若目标阵亡，则永久获得2%法术加成。 当前加成：0%",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_veigar.png",
+   "api": "DA_18_Veigar"
+  },
+  {
+   "id": "s18_xayah",
+   "key": "xayah",
+   "name": "霞",
+   "name_en": "Xayah",
+   "cost": 1,
+   "traits": [
+    "迅捷射手",
+    "永恒之森",
+    "花仙子"
+   ],
+   "stats": {
+    "hp": 450,
+    "mana": [
+     0,
+     50
+    ],
+    "ad": 45,
+    "armor": 25,
+    "mr": 25,
+    "as": 0.7,
+    "range": 4
+   },
+   "skill": {
+    "name": "致死羽衣",
+    "desc": "下5次攻击获得50%攻击速度。这些攻击会被替换为羽刃，造成73/108/165物理伤害和2护甲削减。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_xayah.png",
+   "api": "DA_18_Xayah"
+  },
+  {
+   "id": "s18_yorick",
+   "key": "yorick",
+   "name": "约里克",
+   "name_en": "Yorick",
+   "cost": 1,
+   "traits": [
+    "主宰",
+    "召唤师",
+    "灵魂莲华"
+   ],
+   "stats": {
+    "hp": 650,
+    "mana": [
+     50,
+     110
+    ],
+    "ad": 50,
+    "armor": 35,
+    "mr": 35,
+    "as": 0.6,
+    "range": 1
+   },
+   "skill": {
+    "name": "临终仪式",
+    "desc": "被动：阵亡时，生成一个拥有330/530/880最大生命值的【夜幽游灵】，并且它会立即进行嘲讽从而迫使敌人们对其进行攻击。 主动：回复280/325/435生命值并打击目标，造成150/225/340物理伤害。",
+    "desc_lang": "zh",
+    "values": {
+     "【夜幽游灵】生命值": "330/530/880"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_yorick.png",
+   "api": "DA_18_Yorick"
+  },
+  {
+   "id": "s18_alistar",
+   "key": "alistar",
+   "name": "阿利斯塔",
+   "name_en": "Alistar",
+   "cost": 2,
+   "traits": [
+    "斗士",
+    "永恒之森"
+   ],
+   "stats": {
+    "hp": 950,
+    "mana": [
+     30,
+     90
+    ],
+    "ad": 50,
+    "armor": 45,
+    "mr": 45,
+    "as": 0.6,
+    "range": 1
+   },
+   "skill": {
+    "name": "凯旋怒吼",
+    "desc": "怒吼，回复306/376/476生命值，净化限制效果，并为生命值最低的两名友军回复80/105/130生命值。然后猛击当前目标，造成180/270/420魔法伤害和1.5秒晕眩。",
+    "desc_lang": "zh",
+    "values": {
+     "治疗量": "306/376/476"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_alistar.png",
+   "api": "DA_18_Alistar"
+  },
+  {
+   "id": "s18_caitlyn",
+   "key": "caitlyn",
+   "name": "凯特琳",
+   "name_en": "Caitlyn",
+   "cost": 2,
+   "traits": [
+    "猎人",
+    "魔女"
+   ],
+   "stats": {
+    "hp": 550,
+    "mana": [
+     0,
+     3
+    ],
+    "ad": 50,
+    "armor": 30,
+    "mr": 30,
+    "as": 0.7,
+    "range": 4
+   },
+   "skill": {
+    "name": "爆头",
+    "desc": "被动：每第三次攻击会被替换为一次爆头，造成220/330/535物理伤害。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "220/330/535"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_caitlyn.png",
+   "api": "DA_18_Caitlyn"
+  },
+  {
+   "id": "s18_elise",
+   "key": "elise",
+   "name": "伊莉丝",
+   "name_en": "Elise",
+   "cost": 2,
+   "traits": [
+    "重装战士",
+    "魔女"
+   ],
+   "stats": {
+    "hp": 900,
+    "mana": [
+     20,
+     70
+    ],
+    "ad": 20,
+    "armor": 45,
+    "mr": 45,
+    "as": 0.65,
+    "range": 1
+   },
+   "skill": {
+    "name": "蜘蛛女皇",
+    "desc": "变身为蜘蛛，并获得375最大生命值。处于蜘蛛形态时的攻击造成35/50/80额外魔法伤害，并治疗自身55/90/170生命值。后续施放提供在4秒内持续衰减的175%攻击速度。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_elise.png",
+   "api": "DA_18_Elise"
+  },
+  {
+   "id": "s18_gromp",
+   "key": "gromp",
+   "name": "魔沼蛙",
+   "name_en": "Gromp",
+   "cost": 2,
+   "traits": [
+    "魔战士",
+    "峡谷野怪"
+   ],
+   "stats": {
+    "hp": 550,
+    "mana": [
+     0,
+     70
+    ],
+    "ad": 50,
+    "armor": 30,
+    "mr": 30,
+    "as": 0.75,
+    "range": 4
+   },
+   "skill": {
+    "name": "打嗝泡泡",
+    "desc": "【魔战士】：向当前目标吐出一大团泡泡，在命中第一名敌人时爆炸，造成335/505/795物理伤害和持续3秒的30%缓速。半径1格内的敌人受到100/150/240物理伤害。 【魔战士】：使命中的敌人中毒，造成持续伤害。 紫霸符： 每5秒，【魔沼蛙】获得30%物理加成。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "335/505/795"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_gromp18_ap.png",
+   "api": "DA_Gromp18_AD"
+  },
+  {
+   "id": "s18_kayle",
+   "key": "kayle",
+   "name": "凯尔",
+   "name_en": "Kayle",
+   "cost": 2,
+   "traits": [
+    "迅捷射手",
+    "日蚀骑士"
+   ],
+   "stats": {
+    "hp": 550,
+    "mana": [
+     0,
+     0
+    ],
+    "ad": 10,
+    "armor": 30,
+    "mr": 30,
+    "as": 0.75,
+    "range": 4
+   },
+   "skill": {
+    "name": "太阳裁决",
+    "desc": "被动：【凯尔】基于其星级获得飞升，并获得可叠加的增益。 第1次飞升： 普攻造成65/97/110额外魔法伤害。 第2次飞升： 普攻对命中的敌人施加持续2秒的20%魔抗击碎。 第3次飞升： 普攻发射冲击波，对命中的所有其他弈子造成35魔法伤害。 第4次飞升： 获得无限距离。每飞升3次，焰浪变得更大。 魔抗击碎：降低魔法抗性",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_kayle.png",
+   "api": "DA_18_Kayle"
+  },
+  {
+   "id": "s18_leblanc",
+   "key": "leblanc",
+   "name": "乐芙兰",
+   "name_en": "LeBlanc",
+   "cost": 2,
+   "traits": [
+    "法师",
+    "永恒之森"
+   ],
+   "stats": {
+    "hp": 550,
+    "mana": [
+     0,
+     40
+    ],
+    "ad": 30,
+    "armor": 30,
+    "mr": 30,
+    "as": 0.7,
+    "range": 4
+   },
+   "skill": {
+    "name": "镜花水月",
+    "desc": "被动：在玩家对战结束后，你最强的那个【乐芙兰】有10%的几率生成你场上一个友军的1星复制品，每次参与击杀后提升4%。 主动：向当前目标发射一个镜像，从而造成260/390/615魔法伤害，并对邻格的敌人们造成100/150/230魔法伤害。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_leblanc.png",
+   "api": "DA_18_LeBlanc"
+  },
+  {
+   "id": "s18_murkwolf",
+   "key": "murkwolf",
+   "name": "暗影狼",
+   "name_en": "Murkwolf",
+   "cost": 2,
+   "traits": [
+    "狂战士",
+    "峡谷野怪"
+   ],
+   "stats": {
+    "hp": 700,
+    "mana": [
+     0,
+     40
+    ],
+    "ad": 50,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.75,
+    "range": 1
+   },
+   "skill": {
+    "name": "撕裂之爪",
+    "desc": "跃向3格内生命值最低的敌人，造成500/1050/2250物理伤害。接下来的2次攻击获得175%攻击速度并造成65/100/160额外物理伤害。 灰霸符：获得【技能暴击】和25%暴击几率，基于已损失生命值至多提升至75%。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "500/1050/2250"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_murkwolf18.png",
+   "api": "DA_Murkwolf18"
+  },
+  {
+   "id": "s18_scuttlecrab",
+   "key": "scuttlecrab",
+   "name": "峡谷迅捷蟹",
+   "name_en": "Scuttlecrab",
+   "cost": 2,
+   "traits": [
+    "主宰",
+    "峡谷野怪"
+   ],
+   "stats": {
+    "hp": 950,
+    "mana": [
+     40,
+     100
+    ],
+    "ad": 50,
+    "armor": 45,
+    "mr": 45,
+    "as": 0.65,
+    "range": 1
+   },
+   "skill": {
+    "name": "这种快乐你懂吗？",
+    "desc": "被动：攻击被替换为一次舞蹈，对邻格的所有敌人造成50/75/112.5物理伤害。 主动：钻入地下，获得15%伤害减免，持续3秒，并在此期间持续回复325/400/675生命值。 绿霸符：当友军跌下50%生命值时，其回复15%最大生命值。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_scuttlecrab18.png",
+   "api": "DA_Scuttlecrab18"
+  },
+  {
+   "id": "s18_sejuani",
+   "key": "sejuani",
+   "name": "瑟庄妮",
+   "name_en": "Sejuani",
+   "cost": 2,
+   "traits": [
+    "主宰",
+    "日蚀骑士"
+   ],
+   "stats": {
+    "hp": 900,
+    "mana": [
+     40,
+     100
+    ],
+    "ad": 50,
+    "armor": 45,
+    "mr": 45,
+    "as": 0.6,
+    "range": 1
+   },
+   "skill": {
+    "name": "烈阳之怒",
+    "desc": "获得持续4秒的315/340/365护盾值。然后在一个锥形范围内进行顺劈以造成90/135/205魔法伤害，并沿直线进行打击，对被命中的敌人们造成120/180/270魔法伤害。",
+    "desc_lang": "zh",
+    "values": {
+     "护盾值": "315/340/365"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_sejuani.png",
+   "api": "DA_18_Sejuani"
+  },
+  {
+   "id": "s18_shen",
+   "key": "shen",
+   "name": "慎",
+   "name_en": "Shen",
+   "cost": 2,
+   "traits": [
+    "护卫",
+    "地狱火"
+   ],
+   "stats": {
+    "hp": 900,
+    "mana": [
+     30,
+     90
+    ],
+    "ad": 50,
+    "armor": 45,
+    "mr": 45,
+    "as": 0.65,
+    "range": 1
+   },
+   "skill": {
+    "name": "忍法！气合盾",
+    "desc": "为【慎】提供375/450/575护盾值，以及为其附近1个受到伤害的友军提供225/300/400护盾值，均持续4秒。两者接下来的3次攻击获得40%攻击速度并造成35/55/80额外魔法伤害。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_shen.png",
+   "api": "DA_18_Shen"
+  },
+  {
+   "id": "s18_teemo",
+   "key": "teemo",
+   "name": "提莫",
+   "name_en": "Teemo",
+   "cost": 2,
+   "traits": [
+    "神谕",
+    "约德尔人和朋友"
+   ],
+   "stats": {
+    "hp": 550,
+    "mana": [
+     0,
+     50
+    ],
+    "ad": 35,
+    "armor": 30,
+    "mr": 30,
+    "as": 0.75,
+    "range": 4
+   },
+   "skill": {
+    "name": "内有真菌",
+    "desc": "Throw 2 clusters of mushrooms that deal 55/82/155 magic damage to the 3 nearest enemies. Then hurl a giant mushroom that deals 135/200/310 magic damage to the target. Each cast has a 10% chance to forage an extra mushroom that can be collected for bonus effects. Red: 1 Reroll (Reds Foraged: 0) Green: 1 Tactician Health (Greens Foraged: ?) Yellow: 2 XP (Yellows Foraged: ?)",
+    "desc_lang": "en"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_teemo.png",
+   "api": "DA_18_Teemo"
+  },
+  {
+   "id": "s18_warwick",
+   "key": "warwick",
+   "name": "沃里克",
+   "name_en": "Warwick",
+   "cost": 2,
+   "traits": [
+    "狂战士",
+    "黑荆棘"
+   ],
+   "stats": {
+    "hp": 750,
+    "mana": [
+     0,
+     40
+    ],
+    "ad": 45,
+    "armor": 45,
+    "mr": 45,
+    "as": 0.75,
+    "range": 1
+   },
+   "skill": {
+    "name": "野兽之口",
+    "desc": "撕咬当前目标，造成230/345/535物理伤害，并治疗自身25%造成伤害的生命值。获得持续到战斗结束的20%攻击速度。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_warwick.png",
+   "api": "DA_18_Warwick"
+  },
+  {
+   "id": "s18_yunara",
+   "key": "yunara",
+   "name": "芸阿娜",
+   "name_en": "Yunara",
+   "cost": 2,
+   "traits": [
+    "裁决使",
+    "灵魂莲华"
+   ],
+   "stats": {
+    "hp": 550,
+    "mana": [
+     0,
+     35
+    ],
+    "ad": 42,
+    "armor": 30,
+    "mr": 30,
+    "as": 0.75,
+    "range": 4
+   },
+   "skill": {
+    "name": "灵蕴拳",
+    "desc": "冲刺并向当前目标发射一颗法球，造成170/255/395物理伤害并分裂，对附近的2名敌人造成59.5/89.25/138.25物理伤害。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "170/255/395",
+     "次要伤害": "59.5/89.25/138.25"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_yunara.png",
+   "api": "DA_18_Yunara"
+  },
+  {
+   "id": "s18_azir",
+   "key": "azir",
+   "name": "阿兹尔",
+   "name_en": "Azir",
+   "cost": 3,
+   "traits": [
+    "裁决使",
+    "召唤师",
+    "黑荆棘"
+   ],
+   "stats": {
+    "hp": 650,
+    "mana": [
+     0,
+     35
+    ],
+    "ad": 30,
+    "armor": 35,
+    "mr": 35,
+    "as": 0.75,
+    "range": 4
+   },
+   "skill": {
+    "name": "沙兵现身",
+    "desc": "接下来的6次攻击获得150%攻击速度并召唤2个士兵。这些攻击会被替换为指令，来命令每个士兵进行攻击，每次攻击造成43/65/105魔法伤害。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_azir.png",
+   "api": "DA_18_Azir"
+  },
+  {
+   "id": "s18_cassiopeia",
+   "key": "cassiopeia",
+   "name": "卡西奥佩娅",
+   "name_en": "Cassiopeia",
+   "cost": 3,
+   "traits": [
+    "法师",
+    "魔女"
+   ],
+   "stats": {
+    "hp": 650,
+    "mana": [
+     0,
+     30
+    ],
+    "ad": 30,
+    "armor": 35,
+    "mr": 35,
+    "as": 0.75,
+    "range": 4
+   },
+   "skill": {
+    "name": "瘟毒爆炸",
+    "desc": "向目标和相距最近的未中毒敌人投毒，从而在15秒内持续造成420/630/1020魔法伤害。中毒可以叠加。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_cassiopeia.png",
+   "api": "DA_18_Cassiopeia"
+  },
+  {
+   "id": "s18_diana",
+   "key": "diana",
+   "name": "黛安娜",
+   "name_en": "Diana",
+   "cost": 3,
+   "traits": [
+    "狂战士",
+    "重装战士",
+    "月蚀骑士"
+   ],
+   "stats": {
+    "hp": 850,
+    "mana": [
+     0,
+     40
+    ],
+    "ad": 30,
+    "armor": 50,
+    "mr": 50,
+    "as": 0.8,
+    "range": 1
+   },
+   "skill": {
+    "name": "苍白屏障",
+    "desc": "获得持续2秒的150/275/500护盾值，并放出6颗月光法球，由2格内的所有敌人分摊，每颗造成75/115/180魔法伤害。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_diana.png",
+   "api": "DA_18_Diana"
+  },
+  {
+   "id": "s18_fiddlesticks",
+   "key": "fiddlesticks",
+   "name": "费德提克",
+   "name_en": "Fiddlesticks",
+   "cost": 3,
+   "traits": [
+    "护卫",
+    "法师",
+    "绝命花妖"
+   ],
+   "stats": {
+    "hp": 0,
+    "mana": [
+     30,
+     90
+    ],
+    "ad": 50,
+    "armor": 55,
+    "mr": 55,
+    "as": 0.65,
+    "range": 1
+   },
+   "skill": {
+    "name": "收获",
+    "desc": "使3个相距最近的敌人的魔抗降低10。然后在2秒里持续从它们身上汲取生命力，从而治疗自身410/485/850生命值并在此期间持续对每个敌人造成共70/105/170魔法伤害。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_fiddlesticks18.png",
+   "api": "DA_Fiddlesticks18"
+  },
+  {
+   "id": "s18_hecarim",
+   "key": "hecarim",
+   "name": "赫卡里姆",
+   "name_en": "Hecarim",
+   "cost": 3,
+   "traits": [
+    "重装战士",
+    "永恒之森"
+   ],
+   "stats": {
+    "hp": 1100,
+    "mana": [
+     50,
+     110
+    ],
+    "ad": 50,
+    "armor": 50,
+    "mr": 50,
+    "as": 0.65,
+    "range": 1
+   },
+   "skill": {
+    "name": "恐惧之灵",
+    "desc": "获得持续3秒的50护甲与魔抗，并在此期间持续回复375/475/685生命值。向相距最近的3名敌人派出幽魂骑兵，从而对其造成80/120/195魔法伤害和1.5秒晕眩。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_hecarim.png",
+   "api": "DA_18_Hecarim"
+  },
+  {
+   "id": "s18_kha_zix",
+   "key": "kha-zix",
+   "name": "卡兹克",
+   "name_en": "Kha'Zix",
+   "cost": 3,
+   "traits": [
+    "宿敌"
+   ],
+   "stats": {
+    "hp": 950,
+    "mana": [
+     0,
+     25
+    ],
+    "ad": 40,
+    "armor": 55,
+    "mr": 55,
+    "as": 0.85,
+    "range": 1
+   },
+   "skill": {
+    "name": "品尝恐惧",
+    "desc": "跃向3格内相距最远的敌人，对其造成230/310/450魔法伤害。如果其邻格没有其友军，则转而造成250/350/530魔法伤害并获得10法力值。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_khazix.png",
+   "api": "DA_18_KhaZix"
+  },
+  {
+   "id": "s18_kog_maw",
+   "key": "kog-maw",
+   "name": "克格莫",
+   "name_en": "Kog'Maw",
+   "cost": 3,
+   "traits": [
+    "魔战士",
+    "神谕",
+    "帝王斑蝶"
+   ],
+   "stats": {
+    "hp": 650,
+    "mana": [
+     15,
+     55
+    ],
+    "ad": 40,
+    "armor": 35,
+    "mr": 35,
+    "as": 0.8,
+    "range": 4
+   },
+   "skill": {
+    "name": "天降重炮",
+    "desc": "【魔战士】：向目标和相距最近的一个其他敌人喷射酸液，造成165/250/425物理伤害。低于50%最大生命值的敌人转而受到231/350/595物理伤害。 【魔战士】：对敌人持续造成伤害。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "165/250/425",
+     "最低生命值伤害": "231/350/595"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_kogmaw18_ad.png",
+   "api": "DA_KogMaw18_AD"
+  },
+  {
+   "id": "s18_krug",
+   "key": "krug",
+   "name": "远古石甲虫",
+   "name_en": "Krug",
+   "cost": 3,
+   "traits": [
+    "斗士",
+    "峡谷野怪"
+   ],
+   "stats": {
+    "hp": 1100,
+    "mana": [
+     80,
+     135
+    ],
+    "ad": 55,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.6,
+    "range": 1
+   },
+   "skill": {
+    "name": "岩之摇滚",
+    "desc": "被动：阵亡时，分裂成两个【小型石甲虫】，每个拥有182/232/312生命值，并且它们会立即进行嘲讽从而迫使敌人们对其进行攻击。 主动：获得175/225/325最大生命值，然后滚向目标，从而造成223/288/423伤害。 蓝灰霸符：阵亡时，【远古石甲虫】和【小型石甲虫】为友军提供8%最大生命值护盾。",
+    "desc_lang": "zh",
+    "values": {
+     "【小型石甲虫】生命值": "182/232/312",
+     "伤害": "223/288/423"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_krug18.png",
+   "api": "DA_Krug18"
+  },
+  {
+   "id": "s18_mama_beak",
+   "key": "mama-beak",
+   "name": "深红锋喙鸟",
+   "name_en": "Mama Beak",
+   "cost": 3,
+   "traits": [
+    "召唤师",
+    "迅捷射手",
+    "峡谷野怪"
+   ],
+   "stats": {
+    "hp": 650,
+    "mana": [
+     20,
+     60
+    ],
+    "ad": 60,
+    "armor": 35,
+    "mr": 35,
+    "as": 0.75,
+    "range": 4
+   },
+   "skill": {
+    "name": "鸟群之家",
+    "desc": "在附近召唤4只不可被选取的【小锋喙鸟】，持续5.0秒。每次【深红锋喙鸟】攻击时，【小锋喙鸟】也会攻击同一敌人，造成20/30/50物理伤害。 橙霸符：造成物理伤害时会使敌人的护甲降低2。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_crimsonraptor18.png",
+   "api": "DA_CrimsonRaptor18"
+  },
+  {
+   "id": "s18_master_yi",
+   "key": "master-yi",
+   "name": "易",
+   "name_en": "Master Yi",
+   "cost": 3,
+   "traits": [
+    "魔战士",
+    "灵魂莲华"
+   ],
+   "stats": {
+    "hp": 850,
+    "mana": [
+     0,
+     3
+    ],
+    "ad": 63,
+    "armor": 55,
+    "mr": 55,
+    "as": 0.8,
+    "range": 1
+   },
+   "skill": {
+    "name": "无极剑道",
+    "desc": "被动：每第3次攻击为双重打击。参与击杀时，获得爆发性的移动速度。 【魔战士】：双重打击提供15%可叠加的攻击速度。 【魔战士】：双重打击会造成额外伤害并提供治疗。",
+    "desc_lang": "zh",
+    "values": {
+     "攻击速度": "15%"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_masteryi_ad.png",
+   "api": "DA_18_MasterYi_AD"
+  },
+  {
+   "id": "s18_rammus",
+   "key": "rammus",
+   "name": "拉莫斯",
+   "name_en": "Rammus",
+   "cost": 3,
+   "traits": [
+    "护卫",
+    "约德尔人和朋友"
+   ],
+   "stats": {
+    "hp": 1100,
+    "mana": [
+     30,
+     80
+    ],
+    "ad": 50,
+    "armor": 50,
+    "mr": 50,
+    "as": 0.6,
+    "range": 1
+   },
+   "skill": {
+    "name": "尖刺防御",
+    "desc": "嘲讽，从而强迫附近的敌人们攻击该弈子。获得持续4秒的400/550/700护盾值和60护甲与魔抗。 护盾被打破时，对2格内的敌人造成50/75/120物理伤害。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "50/75/120"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_rammus.png",
+   "api": "DA_18_Rammus"
+  },
+  {
+   "id": "s18_rengar",
+   "key": "rengar",
+   "name": "雷恩加尔",
+   "name_en": "Rengar",
+   "cost": 3,
+   "traits": [
+    "宿敌"
+   ],
+   "stats": {
+    "hp": 900,
+    "mana": [
+     10,
+     50
+    ],
+    "ad": 60,
+    "armor": 55,
+    "mr": 55,
+    "as": 0.75,
+    "range": 1
+   },
+   "skill": {
+    "name": "无情",
+    "desc": "跳向3格内生命值百分比最低的那个敌人并刺击，从而造成255/385/650物理伤害。然后治疗60/90/150生命值，治疗量基于已损失的生命值至多到120/180/300。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_rengar.png",
+   "api": "DA_18_Rengar"
+  },
+  {
+   "id": "s18_tristana",
+   "key": "tristana",
+   "name": "崔丝塔娜",
+   "name_en": "Tristana",
+   "cost": 3,
+   "traits": [
+    "猎人",
+    "花仙子",
+    "约德尔人和朋友"
+   ],
+   "stats": {
+    "hp": 650,
+    "mana": [
+     0,
+     50
+    ],
+    "ad": 55,
+    "armor": 35,
+    "mr": 35,
+    "as": 0.75,
+    "range": 4
+   },
+   "skill": {
+    "name": "爆炸火花",
+    "desc": "将一个爆炸火花吸附到目标上，持续4秒。生效期间，获得无限射程和60%攻击速度。持续时间结束后，爆炸火花会爆炸并造成由2格内的所有敌人间分摊的伤害，伤害值为175/265/420物理伤害+施放期间每次攻击提供额外12/18/28物理伤害。 如果携带爆炸火花的敌人阵亡，那么爆炸火花会吸附至【崔丝塔娜】的新目标。",
+    "desc_lang": "zh",
+    "values": {
+     "攻击速度": "60%"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_tristana.png",
+   "api": "DA_18_Tristana"
+  },
+  {
+   "id": "s18_vi",
+   "key": "vi",
+   "name": "蔚",
+   "name_en": "Vi",
+   "cost": 3,
+   "traits": [
+    "主宰",
+    "野兽之灵"
+   ],
+   "stats": {
+    "hp": 1100,
+    "mana": [
+     0,
+     60
+    ],
+    "ad": 45,
+    "armor": 50,
+    "mr": 50,
+    "as": 0.75,
+    "range": 1
+   },
+   "skill": {
+    "name": "狂怒之拳",
+    "desc": "被动：攻击时，回复22生命值。 主动：发出一声原始怒吼，从而回复200/265/360生命值。然后获得85%攻击速度、15%伤害减免和不可阻挡效果，持续3秒。",
+    "desc_lang": "zh",
+    "values": {
+     "被动治疗量": "22"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_vi18.png",
+   "api": "DA_Vi18"
+  },
+  {
+   "id": "s18_ahri",
+   "key": "ahri",
+   "name": "阿狸",
+   "name_en": "Ahri",
+   "cost": 4,
+   "traits": [
+    "法师",
+    "灵魂莲华"
+   ],
+   "stats": {
+    "hp": 850,
+    "mana": [
+     20,
+     100
+    ],
+    "ad": 40,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.8,
+    "range": 4
+   },
+   "skill": {
+    "name": "灵魄炸弹",
+    "desc": "对4格内被最多敌人环绕的那个区域发射一颗灵魄炸弹。它对半径3格内的敌人造成455/685/3500魔法伤害，与中心的距离每增加1格，该伤害就会衰减21%。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_ahri.png",
+   "api": "DA_18_Ahri"
+  },
+  {
+   "id": "s18_amumu",
+   "key": "amumu",
+   "name": "阿木木",
+   "name_en": "Amumu",
+   "cost": 4,
+   "traits": [
+    "主宰",
+    "地狱火"
+   ],
+   "stats": {
+    "hp": 1300,
+    "mana": [
+     30,
+     125
+    ],
+    "ad": 70,
+    "armor": 60,
+    "mr": 60,
+    "as": 0.7,
+    "range": 1
+   },
+   "skill": {
+    "name": "阿木木的愤怒",
+    "desc": "被动：每秒回复33/33.13/56生命值并对1格内的敌人们造成12/18/150魔法伤害。 主动：对2格内的敌人造成100/150/2000魔法伤害和1秒晕眩，如果目标处于灼烧状态则延长至1.5/1.5/9.0秒。 灼烧：每秒造成目标一部分最大生命值的真实伤害。",
+    "desc_lang": "zh",
+    "values": {
+     "治疗量": "33/33.13/56"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_amumu18.png",
+   "api": "DA_Amumu18"
+  },
+  {
+   "id": "s18_aphelios",
+   "key": "aphelios",
+   "name": "厄斐琉斯",
+   "name_en": "Aphelios",
+   "cost": 4,
+   "traits": [
+    "迅捷射手",
+    "月蚀骑士"
+   ],
+   "stats": {
+    "hp": 850,
+    "mana": [
+     20,
+     70
+    ],
+    "ad": 60,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.8,
+    "range": 4
+   },
+   "skill": {
+    "name": "月光对影",
+    "desc": "装备断魄，并在2秒内对目标连续挥击5次，每次造成70/105/850物理伤害。 攻势结束后，发射一道月光，造成490/735/5225物理伤害，由半径2格内的所有敌人分摊。",
+    "desc_lang": "zh",
+    "values": {
+     "挥击": "5",
+     "月光爆炸伤害": "490/735/5225"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_aphelios.png",
+   "api": "DA_18_Aphelios"
+  },
+  {
+   "id": "s18_brambleback",
+   "key": "brambleback",
+   "name": "绯红印记树怪",
+   "name_en": "Brambleback",
+   "cost": 4,
+   "traits": [
+    "狂战士",
+    "峡谷野怪"
+   ],
+   "stats": {
+    "hp": 1100,
+    "mana": [
+     0,
+     40
+    ],
+    "ad": 120,
+    "armor": 65,
+    "mr": 65,
+    "as": 0.55,
+    "range": 1
+   },
+   "skill": {
+    "name": "猩红之怒",
+    "desc": "被动：当目标阵亡时，跃至下个目标，从而造成135/205/1000物理伤害。 主动：获得持续8秒的100%物理加成。在此期间，无视40%/40%/100%护甲。 红霸符：攻击1%灼烧敌人并治疗【绯红印记树怪】4%最大生命值。",
+    "desc_lang": "zh",
+    "values": {
+     "无视护甲": "40%/40%/100%"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_brambleback18.png",
+   "api": "DA_Brambleback18"
+  },
+  {
+   "id": "s18_ezreal",
+   "key": "ezreal",
+   "name": "伊泽瑞尔",
+   "name_en": "Ezreal",
+   "cost": 4,
+   "traits": [
+    "裁决使",
+    "永恒之森"
+   ],
+   "stats": {
+    "hp": 850,
+    "mana": [
+     0,
+     30
+    ],
+    "ad": 45,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.75,
+    "range": 4
+   },
+   "skill": {
+    "name": "森林疾风",
+    "desc": "闪烁远离当前目标，对其造成270/405/1200物理伤害，并获得30%/30%/100%攻击速度。 每第四次施放时，会消耗来自【森林疾风】的攻击速度，并释放一道贯穿最大敌群的震波，造成385/580/2500物理伤害，每穿过一个敌人降低25%伤害(最低为50%)。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_ezreal.png",
+   "api": "DA_18_Ezreal"
+  },
+  {
+   "id": "s18_lillia",
+   "key": "lillia",
+   "name": "莉莉娅",
+   "name_en": "Lillia",
+   "cost": 4,
+   "traits": [
+    "护卫",
+    "花仙子"
+   ],
+   "stats": {
+    "hp": 1300,
+    "mana": [
+     40,
+     140
+    ],
+    "ad": 40,
+    "armor": 60,
+    "mr": 60,
+    "as": 0.65,
+    "range": 1
+   },
+   "skill": {
+    "name": "夜阑谣",
+    "desc": "回复350/525/800生命值，并向附近的敌人们放出4只蝴蝶。在命中敌人时造成90/135/2000魔法伤害并施加1.5秒昏睡。如果目标受到的伤害达到1000，则会醒来并额外受到10%最大生命值魔法伤害。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_lillia.png",
+   "api": "DA_18_Lillia"
+  },
+  {
+   "id": "s18_malphite",
+   "key": "malphite",
+   "name": "墨菲特",
+   "name_en": "Malphite",
+   "cost": 4,
+   "traits": [
+    "黑荆棘",
+    "魔岩巨兽"
+   ],
+   "stats": {
+    "hp": 1300,
+    "mana": [
+     30,
+     80
+    ],
+    "ad": 70,
+    "armor": 70,
+    "mr": 70,
+    "as": 0.55,
+    "range": 1
+   },
+   "skill": {
+    "name": "石化树皮",
+    "desc": "获得持续4秒的735/885/2000护盾值，并进入石化状态。护盾被打破时，释放一道黑暗能量波，对2格内的敌人们造成82/123/3398.6魔法伤害。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "82/123/3398.6"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_malphite.png",
+   "api": "DA_18_Malphite"
+  },
+  {
+   "id": "s18_morgana",
+   "key": "morgana",
+   "name": "莫甘娜",
+   "name_en": "Morgana",
+   "cost": 4,
+   "traits": [
+    "神谕",
+    "魔女"
+   ],
+   "stats": {
+    "hp": 1100,
+    "mana": [
+     0,
+     65
+    ],
+    "ad": 45,
+    "armor": 60,
+    "mr": 60,
+    "as": 0.75,
+    "range": 2
+   },
+   "skill": {
+    "name": "枯萎诅咒",
+    "desc": "被动：获得25%全能吸血。 主动：向附近3个敌人发射一道黑暗震波，造成70/105/500魔法伤害并诅咒他们4秒。然后，生成一个半径2格的枯萎地带，持续相同时长并且每秒造成33/50/500魔法伤害。被诅咒的敌人们受到25/38/240×诅咒数的额外伤害。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_morgana.png",
+   "api": "DA_18_Morgana"
+  },
+  {
+   "id": "s18_nidalee",
+   "key": "nidalee",
+   "name": "奈德丽",
+   "name_en": "Nidalee",
+   "cost": 4,
+   "traits": [
+    "魔战士",
+    "野兽之灵"
+   ],
+   "stats": {
+    "hp": 850,
+    "mana": [
+     0,
+     45
+    ],
+    "ad": 35,
+    "armor": 30,
+    "mr": 30,
+    "as": 0.8,
+    "range": 1
+   },
+   "skill": {
+    "name": "标枪投掷",
+    "desc": "【魔战士】：下3次攻击获得150%攻击速度。这些攻击被替换为标枪，造成185/275/2000魔法伤害。第3次攻击转而瞄准相距最远且携带最少装备的那个敌人，并造成330/500/3000魔法伤害。 【魔战士】：变形为一只近战美洲狮刺客来挥击敌人们。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_nidalee18_ap.png",
+   "api": "DA_Nidalee18_AP"
+  },
+  {
+   "id": "s18_sentinel",
+   "key": "sentinel",
+   "name": "苍蓝雕纹魔像",
+   "name_en": "Sentinel",
+   "cost": 4,
+   "traits": [
+    "重装战士",
+    "神谕",
+    "峡谷野怪"
+   ],
+   "stats": {
+    "hp": 1300,
+    "mana": [
+     60,
+     150
+    ],
+    "ad": 75,
+    "armor": 60,
+    "mr": 60,
+    "as": 0.6,
+    "range": 1
+   },
+   "skill": {
+    "name": "蔚蓝冲击波",
+    "desc": "获得持续4秒的505/605/2130护盾值。猛击地面，向敌人最密集的方向发出一道裂隙。被命中的敌人会被短暂击飞，受到100/150/3500魔法伤害和10破法。 蓝霸符：【苍蓝雕纹魔像】每次施放技能时，友军们就会获得2法力回复。 破法：提升下一次技能施放的法力消耗。",
+    "desc_lang": "zh",
+    "values": {
+     "护盾值": "505/605/2130"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_sentinel18.png",
+   "api": "DA_Sentinel18"
+  },
+  {
+   "id": "s18_sett",
+   "key": "sett",
+   "name": "瑟提",
+   "name_en": "Sett",
+   "cost": 4,
+   "traits": [
+    "斗士",
+    "灵魂莲华"
+   ],
+   "stats": {
+    "hp": 1200,
+    "mana": [
+     60,
+     135
+    ],
+    "ad": 80,
+    "armor": 60,
+    "mr": 60,
+    "as": 0.65,
+    "range": 1
+   },
+   "skill": {
+    "name": "蓄意轰拳",
+    "desc": "被动：每场战斗中首次跌至40%最大生命值以下时，获得100法力值。 主动：蓄力打出一记重拳，从而快速回复394/444/2144生命值，随后在一个大型锥形范围内造成222/297/5072物理伤害。",
+    "desc_lang": "zh",
+    "values": {
+     "治疗量": "394/444/2144",
+     "伤害": "222/297/5072"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_sett.png",
+   "api": "DA_18_Sett"
+  },
+  {
+   "id": "s18_sivir",
+   "key": "sivir",
+   "name": "希维尔",
+   "name_en": "Sivir",
+   "cost": 4,
+   "traits": [
+    "猎人",
+    "野兽之灵"
+   ],
+   "stats": {
+    "hp": 850,
+    "mana": [
+     0,
+     40
+    ],
+    "ad": 50,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.8,
+    "range": 4
+   },
+   "skill": {
+    "name": "回旋之刃",
+    "desc": "投掷一把巨大的十字刃，它会对当前敌人造成235/350/1150物理伤害，并在附近敌人之间弹跳8次，每次弹跳造成42.3/63/460物理伤害。当这个技能击杀了一个敌人，它会额外弹跳3次。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "235/350/1150",
+     "弹射伤害": "42.3/63/460"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_sivir.png",
+   "api": "DA_18_Sivir"
+  },
+  {
+   "id": "s18_soraka",
+   "key": "soraka",
+   "name": "索拉卡",
+   "name_en": "Soraka",
+   "cost": 4,
+   "traits": [
+    "裁决使",
+    "绝命花妖"
+   ],
+   "stats": {
+    "hp": 850,
+    "mana": [
+     0,
+     30
+    ],
+    "ad": 30,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.75,
+    "range": 4
+   },
+   "skill": {
+    "name": "唤星",
+    "desc": "召唤一颗星星落在当前目标身上，从而造成235/355/1000魔法伤害。如果此前曾有一颗星星落至其上，则额外召唤3颗星星，每颗造成110/165/1000魔法伤害。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_soraka.png",
+   "api": "DA_18_Soraka"
+  },
+  {
+   "id": "s18_zyra",
+   "key": "zyra",
+   "name": "婕拉",
+   "name_en": "Zyra",
+   "cost": 4,
+   "traits": [
+    "召唤师",
+    "荆棘之兴"
+   ],
+   "stats": {
+    "hp": 850,
+    "mana": [
+     0,
+     45
+    ],
+    "ad": 40,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.75,
+    "range": 4
+   },
+   "skill": {
+    "name": "狂野生长",
+    "desc": "在战场周围生成2株植物，它们会攻击相距最近的敌人10次。每次攻击造成35/53/225魔法伤害。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_zyra.png",
+   "api": "DA_18_Zyra"
+  },
+  {
+   "id": "s18_alune",
+   "key": "alune",
+   "name": "拉露恩",
+   "name_en": "Alune",
+   "cost": 5,
+   "traits": [
+    "法师",
+    "月华神女",
+    "月蚀骑士"
+   ],
+   "stats": {
+    "hp": 900,
+    "mana": [
+     0,
+     35
+    ],
+    "ad": 40,
+    "armor": 45,
+    "mr": 45,
+    "as": 0.85,
+    "range": 4
+   },
+   "skill": {
+    "name": "月华倾落",
+    "desc": "向3个最近的敌人降下9枚月光碎片，每枚造成58/88/500魔法伤害。 满月时，月曜降临，造成由所有敌人分摊的2350/3600/7500魔法伤害。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_alune.png",
+   "api": "DA_18_Alune"
+  },
+  {
+   "id": "s18_ashe",
+   "key": "ashe",
+   "name": "艾希",
+   "name_en": "Ashe",
+   "cost": 5,
+   "traits": [
+    "猎人",
+    "灵魂莲华"
+   ],
+   "stats": {
+    "hp": 900,
+    "mana": [
+     0,
+     80
+    ],
+    "ad": 75,
+    "armor": 45,
+    "mr": 45,
+    "as": 0.8,
+    "range": 5
+   },
+   "skill": {
+    "name": "灵魂裂隙",
+    "desc": "沿敌人最多的那条直线发射一支箭矢，造成465/700/1000物理伤害，这个伤害每命中一个敌人就会衰减80%(最低为20%)。如果没有命中任何敌人，则返还70%的法力值花费。 这支箭矢会留下一道持续3秒的痕迹，对其中的敌人每秒造成13/19/220+1.5%最大生命值物理伤害，并施加20%缓速效果。 缓速：降低攻击速度",
+    "desc_lang": "zh",
+    "values": {
+     "裂隙伤害": "13/19/220"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_ashe.png",
+   "api": "DA_18_Ashe"
+  },
+  {
+   "id": "s18_draven",
+   "key": "draven",
+   "name": "德莱文",
+   "name_en": "Draven",
+   "cost": 5,
+   "traits": [
+    "赏金猎人"
+   ],
+   "stats": {
+    "hp": 900,
+    "mana": [
+     0,
+     110
+    ],
+    "ad": 48,
+    "armor": 45,
+    "mr": 45,
+    "as": 0.85,
+    "range": 5
+   },
+   "skill": {
+    "name": "冷血追命",
+    "desc": "被动：对距离内的随机敌人进行攻击并对其施加一层流血效果，在12秒里持续造成共150/225/3000物理伤害。每次攻击还有12%几率造成50%额外物理伤害并转而施加2层流血效果。 主动：朝流血层数最多的敌人投掷两把巨斧。对被命中的敌人造成100/150/400物理伤害并消耗其流血效果，即刻造成剩余伤害。巨斧随后返回，对命中的敌人造成30/45/100物理伤害。如果没有命中任何敌人，则返还50%的法力值花费。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_draven18.png",
+   "api": "DA_Draven18"
+  },
+  {
+   "id": "s18_elder_dragon",
+   "key": "elder-dragon",
+   "name": "远古巨龙",
+   "name_en": "Elder Dragon",
+   "cost": 5,
+   "traits": [
+    "顶级掠食者",
+    "峡谷野怪"
+   ],
+   "stats": {
+    "hp": 1800,
+    "mana": [
+     20,
+     60
+    ],
+    "ad": 125,
+    "armor": 75,
+    "mr": 75,
+    "as": 0.5,
+    "range": 2
+   },
+   "skill": {
+    "name": "绝伦火热",
+    "desc": "被动：普攻对目标邻格的敌人们造成75%伤害。 主动：变成免疫伤害状态并飞到空中。在返程时，对所有敌人造成1.25秒晕眩，获得15%全能吸血，并对他们施加持续3秒的【引燃】。被【引燃】的敌人每秒受到2%最大生命值的物理伤害。将该技能替换为【烈焰吐息】并立刻施放它。 烈焰吐息：对贯穿目标的一条敌人最多的直线喷吐火焰，从而造成305/465/7200物理伤害，每经过1名敌人该伤害衰减20%(最低至20%)。对那些敌人施加持续3秒的【引燃】。 远古巨龙霸符： 对低于12%生命值的敌人造成伤害时会将其处决。",
+    "desc_lang": "zh",
+    "values": {
+     "伤害": "305/465/7200"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_elderdragon.png",
+   "api": "DA_18_ElderDragon"
+  },
+  {
+   "id": "s18_gnar",
+   "key": "gnar",
+   "name": "纳尔",
+   "name_en": "Gnar",
+   "cost": 5,
+   "traits": [
+    "斗士",
+    "永恒之森",
+    "约德尔人和朋友"
+   ],
+   "stats": {
+    "hp": 900,
+    "mana": [
+     0,
+     70
+    ],
+    "ad": 1,
+    "armor": 55,
+    "mr": 55,
+    "as": 0.9,
+    "range": 2
+   },
+   "skill": {
+    "name": "狂怒基因",
+    "desc": "被动：每秒获得5怒气并且每次攻击提供5怒气。 主动：变形为【巨型纳尔】并跃至3格内最大的敌群。然后，对2格内的敌人们造成100/150/2000物理伤害，将其护甲和魔抗降低15/20/250，并令其晕眩1秒。【巨型纳尔】获得400/600/15000生命值，并将其技能替换为“抓投”。 抓投：抓住目标并将其投向相距最远的那个敌人，对主要目标造成380/570/9000物理伤害，并对途经的敌人造成135/205/4500物理伤害。如果目标是最后存活的1名敌人，则转而将其抛出战场。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_gnarsmall.png",
+   "api": "DA_18_GnarSmall"
+  },
+  {
+   "id": "s18_ivern",
+   "key": "ivern",
+   "name": "艾翁",
+   "name_en": "Ivern",
+   "cost": 5,
+   "traits": [
+    "翠神"
+   ],
+   "stats": {
+    "hp": 0,
+    "mana": [
+     50,
+     80
+    ],
+    "ad": 60,
+    "armor": 55,
+    "mr": 55,
+    "as": 0.8,
+    "range": 3
+   },
+   "skill": {
+    "name": "种豆得瓜",
+    "desc": "被动：来自这个技能的护盾值可以通过技能暴击来产生暴击。 主动：为2名友军提供185/350/3000护盾和10%伤害增幅，持续6秒。随后对其邻格的敌人造成155/235/2000魔法伤害。施放6次后，该技能还会为目标提供100%可叠加的攻击速度。",
+    "desc_lang": "zh",
+    "values": {
+     "护盾值": "185/350/3000"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_ivern.png",
+   "api": "DA_18_Ivern"
+  },
+  {
+   "id": "s18_kennen",
+   "key": "kennen",
+   "name": "凯南",
+   "name_en": "Kennen",
+   "cost": 5,
+   "traits": [
+    "裁决使",
+    "地狱火"
+   ],
+   "stats": {
+    "hp": 1200,
+    "mana": [
+     0,
+     40
+    ],
+    "ad": 50,
+    "armor": 60,
+    "mr": 60,
+    "as": 0.85,
+    "range": 2
+   },
+   "skill": {
+    "name": "火焰风暴",
+    "desc": "蓄力，每有一名被灼烧的敌人便获得15%法术加成。随后，获得持续2.5秒的230/300/3000护盾值，然后冲刺穿过附近的一群敌人，对每个敌人造成80/120/1500魔法伤害。 冲刺后，释放一场半径2格的火焰风暴，在2秒内持续造成共计475/715/5000魔法伤害，由所有被命中的敌人均摊。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_kennen.png",
+   "api": "DA_18_Kennen"
+  },
+  {
+   "id": "s18_lux",
+   "key": "lux",
+   "name": "拉克丝",
+   "name_en": "Lux",
+   "cost": 5,
+   "traits": [
+    "自然之力！大元素使"
+   ],
+   "stats": {
+    "hp": 900,
+    "mana": [
+     20,
+     70
+    ],
+    "ad": 40,
+    "armor": 40,
+    "mr": 40,
+    "as": 0.8,
+    "range": 5
+   },
+   "skill": {
+    "name": "终极闪光",
+    "desc": "被动：施放时，所有与【拉克丝】拥有同一羁绊的己方弈子获得3/3/100法力值。 主动：向最大的敌群发射一道激光，造成375/565/6500魔法伤害，每命中一个敌人，该伤害衰减25%。",
+    "desc_lang": "zh"
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_lux18_base.png",
+   "api": "DA_Lux18_Base"
+  },
+  {
+   "id": "s18_maokai",
+   "key": "maokai",
+   "name": "茂凯",
+   "name_en": "Maokai",
+   "cost": 5,
+   "traits": [
+    "主宰",
+    "远古树精"
+   ],
+   "stats": {
+    "hp": 1150,
+    "mana": [
+     30,
+     100
+    ],
+    "ad": 80,
+    "armor": 60,
+    "mr": 60,
+    "as": 0.65,
+    "range": 1
+   },
+   "skill": {
+    "name": "播种",
+    "desc": "被动：每格挡650伤害后，一株树苗会跳向附近的一名敌人并造成80.5/80.5/862.5魔法伤害。阵亡时，3株树苗会跳出。 主动：对目标造成69/69/1150魔法伤害并回复330/400/2000+10%已损失生命值。",
+    "desc_lang": "zh",
+    "values": {
+     "树苗伤害": "80.5/80.5/862.5",
+     "主动伤害": "69/69/1150"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_18_maokai.png",
+   "api": "DA_18_Maokai"
+  },
+  {
+   "id": "s18_taric",
+   "key": "taric",
+   "name": "塔里克",
+   "name_en": "Taric",
+   "cost": 5,
+   "traits": [
+    "重装战士",
+    "宝石骑士"
+   ],
+   "stats": {
+    "hp": 1300,
+    "mana": [
+     0,
+     65
+    ],
+    "ad": 55,
+    "armor": 70,
+    "mr": 70,
+    "as": 0.75,
+    "range": 1
+   },
+   "skill": {
+    "name": "翡翠辉耀",
+    "desc": "被动：【塔里克】或其绑定的友军首次跌到50%生命值以下时，两人身上会释放翡翠能量，为3格内的友军提供持续3秒的270/345/11300护盾值。 主动：回复275/450/3000生命值。【塔里克】和其绑定的友军的下2次攻击造成130/200/1000额外魔法伤害。",
+    "desc_lang": "zh",
+    "values": {
+     "护盾值": "270/345/11300"
+    }
+   },
+   "icon": "https://tftraits.com/assets/set18/champions/da_taric18.png",
+   "api": "DA_Taric18"
+  }
+ ]
+}

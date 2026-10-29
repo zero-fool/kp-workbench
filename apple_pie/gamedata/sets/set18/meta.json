@@ -1,0 +1,13 @@
+{
+ "set_id": "set18",
+ "display_name": "S18 自然之力（Enchanted Wilds）",
+ "patch": "18.5",
+ "status": "ok",
+ "note": "全量简中数据取自 blitz.gg 简中站 set18 内嵌 JSON：棋子技能/数值/羁绊/装备/合成配方；棋子清单与英文名对照 tftraits.com/set18（读正式服文件 18.5）；合成配方经 noxutft.com 100 条有向配方交叉校验（=55 唯一组合，与 buildsFrom 完全吻合）。",
+ "sources": [
+  "blitz.gg/zh-CN/tft set18 内嵌 JSON",
+  "tftraits.com/set18",
+  "noxutft.com/tft-items"
+ ],
+ "generated": "2026-10-30"
+}
