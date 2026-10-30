@@ -1,4 +1,4 @@
-"""简易图形界面：连接自检 / P0 点击校验 / 记录区统计（tkinter，零第三方依赖）。"""
+"""图形界面：识别→决策核心闭环 / 版本知识库查询 / 连接自检 / 记录区统计（tkinter，零第三方依赖）。"""
 from __future__ import annotations
 
 import queue
@@ -8,7 +8,9 @@ import tkinter as tk
 from tkinter import ttk
 
 from .device import DeviceError, Emulator, Rect
+from .knowledge import GameKnowledge, KnowledgeError
 from .paths import find_adb, records_root
+from .perception import PerceptionError, identify, load_config, load_templates
 from .pipeline import check_link, verify_tap
 from .records import LearningStore
 
@@ -25,8 +27,8 @@ def _parse_roi(text: str) -> Rect:
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("苹果派助手 · 金铲铲自动对战 P0")
-        self.minsize(740, 560)
+        self.title("苹果派助手 · 金铲铲自动对战 AI")
+        self.minsize(780, 620)
         self.q: queue.Queue = queue.Queue()
         self._busy = False
         self._build()
@@ -64,6 +66,24 @@ class App(tk.Tk):
         ttk.Button(rec, text="阵容吃分统计", command=lambda: self._run("阵容统计", self._task_stats)).pack(side="left", padx=(0, 6))
         ttk.Button(rec, text="写演示记录", command=lambda: self._run("演示记录", self._task_demo)).pack(side="left")
 
+        core = ttk.LabelFrame(top, text="AI 对局助手（版本数据内置：识别 → 决策）", padding=8)
+        core.pack(fill="x", pady=(0, 8))
+        row1 = ttk.Frame(core)
+        row1.pack(fill="x", pady=(0, 6))
+        ttk.Label(row1, text="棋子").pack(side="left")
+        self.var_query = tk.StringVar()
+        ttk.Entry(row1, textvariable=self.var_query, width=26).pack(side="left", padx=(4, 8))
+        ttk.Button(row1, text="查棋子", command=lambda: self._run("查棋子", self._task_champ)).pack(side="left")
+        ttk.Button(row1, text="算羁绊（多子逗号分隔）",
+                   command=lambda: self._run("算羁绊", self._task_synergy)).pack(side="left", padx=(6, 0))
+        ttk.Label(row1, text="例：阿卡丽  或  阿卡丽,卡蜜尔,绯红树怪", foreground="#888").pack(side="left", padx=(10, 0))
+        row2 = ttk.Frame(core)
+        row2.pack(fill="x")
+        ttk.Button(row2, text="选图识别+决策", command=self._pick_image).pack(side="left")
+        ttk.Button(row2, text="模拟器截图+决策",
+                   command=lambda: self._run("截图+决策", self._task_live)).pack(side="left", padx=(6, 0))
+        ttk.Label(row2, text="识别 商店/棋盘/备战 → 抓牌建议与羁绊状态", foreground="#888").pack(side="left", padx=(10, 0))
+
         logf = ttk.Frame(self, padding=(10, 0, 10, 0))
         logf.pack(fill="both", expand=True)
         ttk.Label(logf, text="日志").pack(anchor="w")
@@ -77,8 +97,13 @@ class App(tk.Tk):
 
         bar = ttk.Frame(self, padding=(10, 6, 10, 10))
         bar.pack(fill="x")
+        try:
+            k = GameKnowledge()
+            ver = f"版本: {k.set_id}（{k.meta.get('patch', '?')}）{len(k.champions)}棋子/{len(k.traits)}羁绊"
+        except Exception:  # noqa: BLE001 - 版本信息仅展示用
+            ver = "版本: 未加载"
         self.var_paths = tk.StringVar(
-            value=f"记录区: {records_root()}   |   adb: {find_adb() or '未找到（放入 exe 同目录或 PATH）'}"
+            value=f"{ver}   |   记录区: {records_root()}   |   adb: {find_adb() or '未找到（放入 exe 同目录或 PATH）'}"
         )
         ttk.Label(bar, textvariable=self.var_paths, foreground="#666").pack(anchor="w")
         self.var_status = tk.StringVar(value="就绪")
@@ -106,6 +131,8 @@ class App(tk.Tk):
                     self.q.put(("log", line))
             except DeviceError as e:
                 self.q.put(("log", f"[设备错误] {e}"))
+            except (KnowledgeError, PerceptionError) as e:
+                self.q.put(("log", f"[错误] {e}"))
             except Exception as e:  # noqa: BLE001 - 界面兜底展示一切错误
                 self.q.put(("log", f"[错误] {type(e).__name__}: {e}"))
             finally:
@@ -157,6 +184,99 @@ class App(tk.Tk):
             return [f"已点击 ({x},{y})，但缺 Pillow 无法做 ROI 校验"]
         state = "画面有变化 ✓" if info["changed"] else "ROI 无变化（点的可能是静态区域，或点错了）"
         return [f"点击 ({x},{y})  roi_diff={info['diff']} → {state}"]
+
+    # ---------- 知识库查询 ----------
+    def _task_champ(self) -> list[str]:
+        raw = self.var_query.get().strip()
+        if "," in raw or "，" in raw:
+            raise KnowledgeError("查棋子只填一个名字；要算羁绊请点「算羁绊」")
+        k = GameKnowledge()
+        c = k.champion(raw)
+        st = c.get("stats", {})
+        sk = c.get("skill", {})
+        lines = [
+            f"{c['name']} · {c['cost']}费 · {'/'.join(c['traits'])}",
+            f"技能【{sk.get('name', '')}】{sk.get('desc', '')}",
+            f"生命{st.get('hp')} / 法力{st.get('mana')} / 攻{st.get('ad')} / "
+            f"护甲{st.get('armor')} 魔抗{st.get('mr')} / 攻速{st.get('as')} / 射程{st.get('range')}",
+        ]
+        rec = k.recommend_items(c["name"])
+        if rec:
+            lines.append("适合装备: " + "/".join(rec))
+        return lines
+
+    def _task_synergy(self) -> list[str]:
+        raw = self.var_query.get().replace("，", ",")
+        units = [u.strip() for u in raw.split(",") if u.strip()]
+        if not units:
+            raise KnowledgeError("先输入场上棋子，逗号分隔（例：阿卡丽,卡蜜尔）")
+        k = GameKnowledge()
+        _, unknown = k.trait_counts(units)
+        lines: list[str] = []
+        if unknown:
+            lines.append("未收录: " + "/".join(unknown))
+        for r in k.active_effects(units):
+            lines.append(f"已激活 {r['trait']} {r['count']}人 [{r['tier']}] {r['effect']}")
+        for r in k.next_upgrades(units):
+            lines.append(f"差{r['gap']}人开下一层 → {r['trait']} {r['count']}→{r['next_min']}：{r['effect']}")
+        if not lines:
+            lines.append("没有可激活/可推进的羁绊")
+        return lines
+
+    # ---------- 识别 → 决策 ----------
+    def _pick_image(self) -> None:
+        from tkinter import filedialog
+
+        path = filedialog.askopenfilename(
+            title="选择游戏截图",
+            filetypes=[("PNG 图片", "*.png"), ("所有文件", "*.*")],
+        )
+        if path:
+            self._run("识别+决策（本地图）", lambda: self._decide_from_file(path))
+
+    def _decide_from_file(self, path: str) -> list[str]:
+        from pathlib import Path
+
+        p = Path(path)
+        if not p.is_file():
+            raise PerceptionError(f"图片不存在: {p}")
+        png = p.read_bytes()
+        if not png.startswith(b"\x89PNG"):
+            raise PerceptionError("只支持 PNG 截图（模拟器截图即为 PNG）")
+        return self._decide_lines(png)
+
+    def _task_live(self) -> list[str]:
+        dev = self._device()
+        dev.connect()
+        return self._decide_lines(dev.screenshot())
+
+    def _decide_lines(self, png: bytes) -> list[str]:
+        k = GameKnowledge()
+        cfg = load_config()
+        tpls = load_templates(k.set_id)
+        lines = [f"版本 {k.set_id}（patch {k.meta.get('patch', '?')}） · 内置模板 {len(tpls)} 个"]
+        if cfg.get("_warn"):
+            lines.append(f"[提醒] {cfg['_warn']}")
+        rows = {kind: identify(png, kind, cfg, tpls) for kind in ("shop", "board", "bench")}
+        shop_names = [r["name"] for r in rows["shop"] if r["name"]]
+        units = [r["name"] for r in rows["board"] + rows["bench"] if r["name"]]
+        lines.append("商店: " + ("、".join(shop_names) if shop_names else "（无命中）"))
+        lines.append("棋盘+备战: " + ("、".join(units) if units else "（无命中——棋盘是立绘，真机重采模板后更准）"))
+        for r in k.active_effects(units):
+            lines.append(f"羁绊 {r['trait']} {r['count']}人 [{r['tier']}] {r['effect']}")
+        for r in k.next_upgrades(units):
+            lines.append(f"差{r['gap']}人 → {r['trait']} {r['count']}→{r['next_min']}")
+        buys = k.suggest_buys(shop_names, units)
+        if buys:
+            lines.append(
+                "抓牌建议: "
+                + "；".join(f"{b['name']}({b['cost'] if b['cost'] is not None else '?'}费){b['advice']}"
+                            for b in buys)
+            )
+        total = sum(len(rs) for rs in rows.values())
+        miss = sum(1 for rs in rows.values() for r in rs if not r["name"])
+        lines.append(f"识别命中 {total - miss}/{total}")
+        return lines
 
     def _task_overview(self) -> list[str]:
         store = LearningStore(records_root())
